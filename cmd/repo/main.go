@@ -30,7 +30,7 @@ var commands = []command{
 	{"apply", "regenerate shell artifacts from the registry", cmdApply},
 	{"clone", "clone a repo into its configured location", notImplemented},
 	{"scan", "discover on-disk repos", cmdScan},
-	{"sync", "reconcile repos toward the registry", notImplemented},
+	{"sync", "reconcile repos toward the registry", cmdSync},
 	{"prune", "prune stale local branches", notImplemented},
 	{"home", "print the home path of a repo", notImplemented},
 	{"path", "print a path relative to a repo's home", notImplemented},

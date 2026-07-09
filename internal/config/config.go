@@ -221,22 +221,27 @@ func (reg *Registry) effective(e RepoEntry) (model.Repo, error) {
 	return r, nil
 }
 
-// Physical resolves a repo's clone URL for this machine (DESIGN §3.7): an
-// explicit override wins, else the `via` fold when apply_to matches, else the
-// repo's own host. The resulting host key must exist in [hosts.*].
+// Physical resolves a repo's clone URL for this machine (DESIGN §3.7).
 func (reg *Registry) Physical(r model.Repo) (string, error) {
-	host, path := r.ID.Host, r.ID.OwnerRepo()
+	return reg.PhysicalID(r.ID, r.Tags)
+}
+
+// PhysicalID resolves an identity's clone URL: an explicit override wins, else
+// the `via` fold when apply_to matches the tags, else the identity's own host.
+// The resulting host key must exist in [hosts.*].
+func (reg *Registry) PhysicalID(id ident.ID, tags []string) (string, error) {
+	host, path := id.Host, id.OwnerRepo()
 	if reg.Resolve != nil {
-		if ov, ok := reg.Resolve.Overrides[r.ID.String()]; ok {
+		if ov, ok := reg.Resolve.Overrides[id.String()]; ok {
 			host, path = splitHostPath(ov)
-		} else if reg.Resolve.applies(r.Tags) {
+		} else if reg.Resolve.applies(tags) {
 			vh, vprefix := splitHostPath(reg.Resolve.Via)
-			host, path = vh, vprefix+r.ID.OwnerRepo()
+			host, path = vh, vprefix+id.OwnerRepo()
 		}
 	}
 	h, ok := reg.Hosts[host]
 	if !ok {
-		return "", fmt.Errorf("%s: unknown host %q (define [hosts.%s])", r.ID, host, host)
+		return "", fmt.Errorf("%s: unknown host %q (define [hosts.%s])", id, host, host)
 	}
 	return h.Base + path, nil
 }
