@@ -1,0 +1,11 @@
+# Per-machine overlay: fold everything through a private host.
+
+[hosts.gogsprod]
+base = "git@gogsprod.example.com:"
+
+[resolve]
+via      = "gogsprod:mirrors/"
+apply_to = "*"
+
+[resolve.overrides]
+"ghe:cban-ops/pt-helm" = "gogsprod:team/pt-helm"

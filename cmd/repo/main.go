@@ -24,8 +24,8 @@ type command struct {
 // them in (see docs/PLAN.md).
 var commands = []command{
 	{"version", "print version information", cmdVersion},
-	{"list", "enumerate known repos (for completion)", notImplemented},
-	{"resolve", "resolve a repo id to its physical URL (debug)", notImplemented},
+	{"list", "enumerate known repos (for completion)", cmdList},
+	{"resolve", "resolve a repo id to its physical URL (debug)", cmdResolve},
 	{"status", "report drift across repos (read-only)", notImplemented},
 	{"apply", "regenerate shell artifacts from the registry", notImplemented},
 	{"clone", "clone a repo into its configured location", notImplemented},

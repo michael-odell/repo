@@ -1,0 +1,44 @@
+# Public base fragment (mirrors DESIGN §3.8).
+
+[defaults]
+home_root  = "~/src"
+path       = "flat"
+worktrees  = false
+branches   = ["main"]
+on_rewrite = "stop"
+prune      = "auto"
+
+[hosts.github]
+base = "git@github.com:"
+[hosts.ghe]
+base = "git@ghe.example.com:"
+
+[tag.work]
+home_root = "~/wd"
+path      = "owner"
+host      = "ghe"
+worktrees = true
+
+[tag.zsh-plugin]
+home_root = "~/.zsh/plugins"
+path      = "flat"
+
+[[repo]]
+id       = "github:romkatv/powerlevel10k"
+fork     = "github:michael-odell/powerlevel10k"
+tags     = ["zsh-plugin"]
+workflow = "supply-chain-mirror"
+branches = ["master"]
+
+[[repo]]
+id       = "github:michael-odell/zsh-history"
+tags     = ["zsh-plugin"]
+workflow = "upstream-push"
+
+[[repo]]
+id       = "ghe:cban-ops/pt-helm"
+fork     = "ghe:michael-odell/pt-helm"
+tags     = ["work"]
+workflow = "fork-pr"
+branches = ["main", "release"]
+hooks    = [ { after = "fetch", run = "helm dep update ." } ]
