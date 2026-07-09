@@ -39,33 +39,33 @@ internal/
 
 ## Stages
 
-### Stage 0 — skeleton  *(in progress)*
+### Stage 0 — skeleton  ✅ done
 Module, layout, `flag` dispatch with stubbed subcommands, `repo version`, CI
 (vet/build/test) + release workflow (goreleaser).
 **Proof:** `repo --help` / `repo version` build and run.
 
-### Stage 1 — config core (pure, no git)
+### Stage 1 — config core (pure, no git)  ✅ done
 `ident` parsing; TOML types; fragment composition over `REPO_REGISTRY_PATH`;
 `defaults -> tag -> repo` inheritance; `[hosts.*]`; resolution overlay. Heavy unit
 tests (pure logic).
 **Proof:** `repo list` and a debug `repo resolve <id>` load the DESIGN §3.8 example
 and print resolved URLs, including the constrained-box `via` fold.
 
-### Stage 2 — git layer + discovery + `status` (read-only)
+### Stage 2 — git layer + discovery + `status` (read-only)  ✅ done
 `gitx` wrapper; `discover` over `REPO_ROOTS`; union model; live drift (`rev-list`
 ahead/behind, dirty). Sweep isolation (errgroup + per-repo capture + summary) lands
 here — `status` is the safe place to prove one failure never aborts the sweep (the
 `wd-repos-update` fix).
 **Proof:** `repo status` over real `~/src`/`~/wd`, mutates nothing, reports drift.
 
-### Stage 3 — artifacts + shell contract (still no repo mutation)
+### Stage 3 — artifacts (`repo apply`)  ✅ done · shell wiring pending review
 `repo apply` generates `prjpath.zsh`/`homes.zsh`/`plugins.zsh` into `~/.local/repos`
 with the staleness hash; wire `.zshenv`/`.zshrc` to source-with-fallback; teach
 `cs`/`_cs` to prefer `REPO_HOME`. Fully reversible.
 **Proof:** new shells source generated artifacts; `cs pt-<TAB>` completes from the
 map; plugin list is generated — while `sync` still doesn't exist.
 
-### Stage 4 — `sync` engine, scoped to plugins (first mutation)
+### Stage 4 — `sync` engine, scoped to plugins (first mutation)  ⏭ next
 provision (clone/remotes), fetch, `upstream-push` + `supply-chain-mirror` updates,
 `on_rewrite`, drift, prune tiers, `--if-due` cadence, `-n` dry-run, report; scope to
 `--tag zsh-plugin`. Then flip `plugins-update` to delegate.
