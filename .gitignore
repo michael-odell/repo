@@ -1,0 +1,6 @@
+# built binary
+/repo
+# goreleaser output
+/dist/
+# test binaries
+*.test

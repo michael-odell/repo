@@ -1,0 +1,20 @@
+# Release builds only. Local development uses a plain `go build`.
+version: 2
+
+builds:
+  - main: ./cmd/repo
+    binary: repo
+    env:
+      - CGO_ENABLED=0        # static, portable across old glibc (jump hosts)
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "repo_{{ .Os }}_{{ .Arch }}"
+
+# Checksums let the bootstrap shim verify downloads.
+checksum:
+  name_template: "checksums.txt"
