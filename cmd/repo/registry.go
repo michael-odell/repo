@@ -12,22 +12,31 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
-// registryPaths returns the REPO_REGISTRY_PATH fragment list, defaulting to
-// ~/.config/repos when unset (DESIGN §3.7).
-func registryPaths() []string {
+// registryPaths returns the REPO_REGISTRY_PATH fragment list and whether it was
+// set explicitly. When unset it defaults to ~/.config/repos (DESIGN §3.7).
+func registryPaths() (paths []string, explicit bool) {
 	if v := os.Getenv("REPO_REGISTRY_PATH"); v != "" {
-		return filepath.SplitList(v)
+		return filepath.SplitList(v), true
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return []string{filepath.Join(home, ".config", "repos")}
+		return []string{filepath.Join(home, ".config", "repos")}, false
 	}
-	return nil
+	return nil, false
 }
 
+// loadRegistry loads the merged registry. A missing *explicit* path is an error;
+// a missing default path yields an empty registry, so discovery-only commands
+// work on a machine before any registry exists.
 func loadRegistry() (*config.Registry, error) {
-	paths := registryPaths()
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("no registry configured (set REPO_REGISTRY_PATH)")
+	paths, explicit := registryPaths()
+	if !explicit {
+		var existing []string
+		for _, p := range paths {
+			if _, err := os.Stat(p); err == nil {
+				existing = append(existing, p)
+			}
+		}
+		paths = existing
 	}
 	return config.Load(paths)
 }

@@ -50,13 +50,20 @@ type RepoEntry struct {
 	Settings
 }
 
+// Root is a [[root]] discovery location (DESIGN §3.2).
+type Root struct {
+	Path string `toml:"path"`
+	Tag  string `toml:"tag"`
+}
+
 // file is one decoded TOML fragment.
 type file struct {
-	Defaults Settings             `toml:"defaults"`
-	Hosts    map[string]Host      `toml:"hosts"`
-	Tags     map[string]Settings  `toml:"tag"`
-	Repos    []RepoEntry          `toml:"repo"`
-	Resolve  *Resolve             `toml:"resolve"`
+	Defaults Settings            `toml:"defaults"`
+	Hosts    map[string]Host     `toml:"hosts"`
+	Tags     map[string]Settings `toml:"tag"`
+	Repos    []RepoEntry         `toml:"repo"`
+	Roots    []Root              `toml:"root"`
+	Resolve  *Resolve            `toml:"resolve"`
 }
 
 // Registry is the merged, ready-to-use configuration.
@@ -66,6 +73,7 @@ type Registry struct {
 	defaults Settings
 	tags     map[string]Settings
 	entries  []RepoEntry
+	roots    []Root
 }
 
 // builtinDefaults apply when a field is set nowhere.
@@ -133,6 +141,7 @@ func (reg *Registry) merge(f file) {
 		reg.tags[k] = overlay(reg.tags[k], v)
 	}
 	reg.entries = append(reg.entries, f.Repos...)
+	reg.roots = append(reg.roots, f.Roots...)
 	if f.Resolve != nil {
 		reg.mergeResolve(f.Resolve)
 	}
