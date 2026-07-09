@@ -65,7 +65,7 @@ with the staleness hash; wire `.zshenv`/`.zshrc` to source-with-fallback; teach
 **Proof:** new shells source generated artifacts; `cs pt-<TAB>` completes from the
 map; plugin list is generated — while `sync` still doesn't exist.
 
-### Stage 4 — `sync` engine, scoped to plugins (first mutation)  ⏭ next
+### Stage 4 — `sync` engine, scoped to plugins (first mutation)  ✅ done
 provision (clone/remotes), fetch, `upstream-push` + `supply-chain-mirror` updates,
 `on_rewrite`, drift, prune tiers, `--if-due` cadence, `-n` dry-run, report; scope to
 `--tag zsh-plugin`. Then flip `plugins-update` to delegate.
@@ -73,7 +73,7 @@ provision (clone/remotes), fetch, `upstream-push` + `supply-chain-mirror` update
 upstream ahead shows "review pending" and does not advance. **This is the vertical
 slice validating the whole architecture end to end.**
 
-### Stage 5 — worktrees, fork-pr/vendor, work strangulation
+### Stage 5 — worktrees, fork-pr/vendor, work strangulation  ⏭ next
 bare+worktree provisioning; `fork-pr` push (+ `gh repo sync` when present); `vendor`
 pins; `repo prune` confirmation UX; `repo home`/`path`. Then `wd-repos-update` ->
 `repo sync --tag work`.
