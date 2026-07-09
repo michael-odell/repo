@@ -27,7 +27,7 @@ var commands = []command{
 	{"list", "enumerate known repos (for completion)", cmdList},
 	{"resolve", "resolve a repo id to its physical URL (debug)", cmdResolve},
 	{"status", "report drift across repos (read-only)", cmdStatus},
-	{"apply", "regenerate shell artifacts from the registry", notImplemented},
+	{"apply", "regenerate shell artifacts from the registry", cmdApply},
 	{"clone", "clone a repo into its configured location", notImplemented},
 	{"scan", "discover on-disk repos", cmdScan},
 	{"sync", "reconcile repos toward the registry", notImplemented},
