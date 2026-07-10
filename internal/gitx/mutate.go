@@ -48,18 +48,26 @@ func RemoteURL(dir, name string) (string, bool) {
 	return u, true
 }
 
-// EnsureRemote adds the remote or updates its URL; reports whether it changed.
+// EnsureRemote adds the remote or updates its URL, and normalizes its fetch
+// refspec to the standard remote-tracking mapping so a fetch always populates
+// refs/remotes/<name>/* — including in a bare worktree container, whose clone
+// may otherwise carry a non-standard refspec. Reports whether the URL changed.
 func EnsureRemote(dir, name, url string) (changed bool, err error) {
 	cur, ok := RemoteURL(dir, name)
 	switch {
 	case !ok:
-		_, err = run(dir, "remote", "add", name, url)
-		return true, err
+		if _, err = run(dir, "remote", "add", name, url); err != nil {
+			return true, err
+		}
+		changed = true
 	case cur != url:
-		_, err = run(dir, "remote", "set-url", name, url)
-		return true, err
+		if _, err = run(dir, "remote", "set-url", name, url); err != nil {
+			return true, err
+		}
+		changed = true
 	}
-	return false, nil
+	_, err = run(dir, "config", "remote."+name+".fetch", "+refs/heads/*:refs/remotes/"+name+"/*")
+	return changed, err
 }
 
 // Fetch fetches a remote with prune and tags.

@@ -19,6 +19,7 @@ func cmdSync(_ context.Context, args []string) error {
 	tag := fs.String("tag", "", "limit to repos with this tag")
 	ifDue := fs.Bool("if-due", false, "only sync repos whose cadence is due")
 	force := fs.Bool("force", false, "ignore cadence")
+	fixLayout := fs.Bool("fix-layout", false, "convert a mismatched container to its configured layout (after syncing)")
 	var dryRun, dryRunN, verbose, verboseV bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show planned actions without changing anything")
 	fs.BoolVar(&dryRunN, "n", false, "alias for --dry-run")
@@ -49,6 +50,7 @@ func cmdSync(_ context.Context, args []string) error {
 		Verbose:   verbose || verboseV,
 		Force:     *force,
 		IfDue:     *ifDue,
+		FixLayout: *fixLayout,
 		Frequency: 7 * 24 * time.Hour,
 		StateDir:  filepath.Join(outDir(), "last-sync"),
 	}

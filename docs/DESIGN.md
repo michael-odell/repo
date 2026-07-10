@@ -255,6 +255,49 @@ with the source of truth; work happens on ad-hoc worktrees. `repo home pt-helm` 
 `main/` (worktree of `branches[0]`). `worktrees = false` collapses to a single
 working tree at the container path.
 
+### 4.1 Layout mismatch and `sync --fix-layout`
+
+A container's on-disk layout can disagree with its config: a single working tree
+where `worktrees = true`, or a bare+worktree parent where `worktrees = false`.
+`sync` classifies the layout by whether git sees a working tree at the container
+root (`rev-parse --is-bare-repository` — a normal clone reports `false`, a
+bare+worktree parent whose `.git` file points at `.bare` reports `true`) and
+compares it to config. On a mismatch it reconciles the repo *as far as the
+on-disk shape allows* — so data still flows — but **never reorganizes a directory
+on its own**: it surfaces `run: sync --fix-layout`.
+
+`sync --fix-layout` performs the conversion, but only **after** the normal sync
+has pushed/fetched, so committed history is safe on the remote before any
+directory is touched. Directory delete/recreate is expected (a shell or editor
+`cd`'d into a converting repo will break; this is not separately warned).
+
+Data-safety rules, in priority order:
+
+- **Uncommitted tracked changes, untracked (non-ignored) files, and unpushed
+  local branches are never lost.** The new layout is always built from the
+  *local* git data (`git clone --bare` of the existing clone), never re-cloned
+  from origin, so every local ref survives; working-tree residue is carried
+  across by copy.
+- **Ignored files are prompted, not silently dropped.** When a conversion would
+  discard `.gitignore`d content, `repo` prompts; `--lose-ignored` pre-approves;
+  with **no TTY it fails**, pointing at `--lose-ignored`. (Forward conversion
+  carries ignored files across, so the prompt only arises collapsing worktrees.)
+
+**Forward (single → bare+worktree).** Rename the container aside; `git clone
+--bare` its local repo into `<container>/.bare`; write the `.git` pointer;
+restore remotes and best-effort fetch; add a worktree per important branch (plus
+an ad-hoc worktree for the previously-checked-out branch when it isn't
+important); copy the old working tree — modified, untracked, and ignored — onto
+the matching worktree; validate; only then delete the aside copy. The original is
+intact until validation passes, so a mid-conversion failure aborts
+non-destructively (the aside copy is restored).
+
+**Reverse (bare+worktree → single).** Collapse to `branches[0]`, carrying its
+residue across. A non-primary worktree with uncommitted or untracked (non-ignored)
+work **fails** the conversion (it has no home in a single tree — resolve it and
+re-run); a non-primary worktree with only ignored residue triggers the
+ignored-files prompt.
+
 ## 5. `sync` engine
 
 Per repo, in order: **provision** (clone/remotes/worktrees) → **fetch** (all remotes,

@@ -46,6 +46,7 @@ type Options struct {
 	Verbose   bool
 	Force     bool
 	IfDue     bool
+	FixLayout bool // convert a mismatched container to its configured layout
 	Frequency time.Duration
 	StateDir  string
 }
@@ -129,9 +130,13 @@ func (x *run) provisionAndUpdate() {
 	}
 
 	if mismatch {
-		x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
-			layoutName(kind), x.r.Worktrees)
-		x.attention("layout mismatch — run: sync --fix-layout")
+		if x.opts.FixLayout {
+			x.relayout(kind) // data is already synced above; now convert
+		} else {
+			x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
+				layoutName(kind), x.r.Worktrees)
+			x.attention("layout mismatch — run: sync --fix-layout")
+		}
 	}
 }
 
