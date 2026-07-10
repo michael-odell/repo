@@ -9,7 +9,21 @@ import (
 	"text/tabwriter"
 
 	"github.com/michael-odell/repo/internal/discover"
+	"github.com/michael-odell/repo/internal/gitx"
 )
+
+// layoutLabel reports a discovered container's on-disk shape (DESIGN §4.1) so a
+// scan shows which repos are single working trees vs bare+worktree parents.
+func layoutLabel(dir string) string {
+	switch gitx.ClassifyLayout(dir) {
+	case gitx.LayoutWorktree:
+		return "worktree"
+	case gitx.LayoutSingle:
+		return "single"
+	default:
+		return "—"
+	}
+}
 
 func cmdScan(_ context.Context, _ []string) error {
 	reg, err := loadRegistry()
@@ -22,7 +36,7 @@ func cmdScan(_ context.Context, _ []string) error {
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Dir < found[j].Dir })
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tWORKFLOW\tTAG\tDIR\tNOTE")
+	fmt.Fprintln(tw, "ID\tWORKFLOW\tTAG\tLAYOUT\tDIR\tNOTE")
 	for _, f := range found {
 		id := "—"
 		if !f.ID.Zero() {
@@ -32,7 +46,7 @@ func cmdScan(_ context.Context, _ []string) error {
 		if tag == "" {
 			tag = "—"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", id, f.Workflow, tag, shorten(f.Dir), f.Note)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id, f.Workflow, tag, layoutLabel(f.Dir), shorten(f.Dir), f.Note)
 	}
 	return tw.Flush()
 }

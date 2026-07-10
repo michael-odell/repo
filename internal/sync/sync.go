@@ -71,8 +71,16 @@ type run struct {
 	r         model.Repo
 	opts      Options
 	container string
-	branch    string
-	res       *Result
+	branch    string // primary important branch (branches[0])
+
+	// The unit currently being reconciled: a single working tree, or one
+	// worktree of a worktree-layout repo. dir is its working tree, ub its
+	// branch, and unit its report label ("" for a single tree).
+	dir  string
+	ub   string
+	unit string
+
+	res *Result
 }
 
 func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
@@ -91,7 +99,6 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 	}
 
 	x.provisionAndUpdate()
-	x.mirrorReview()
 	x.hooks()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()
@@ -99,13 +106,48 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 	return *res
 }
 
-// provisionAndUpdate provisions the clone, then applies the per-workflow update
-// (DESIGN §5.1). provision does the layout-independent work shared by every
-// workflow; the switch routes to the workflow-specific reconcile.
+// provisionAndUpdate reconciles the repo in whichever layout it actually has on
+// disk — provisioning fresh in the configured layout when absent — then updates
+// it (DESIGN §4.1, §5.1). A worktree repo reconciles one worktree per important
+// branch; a single-tree repo reconciles the container itself. A layout that
+// disagrees with config is reconciled as far as the on-disk shape allows and
+// surfaced, but never reorganized here: conversion is the explicit
+// sync --fix-layout path.
 func (x *run) provisionAndUpdate() {
+	kind := gitx.ClassifyLayout(x.container)
+	mismatch := kind != gitx.LayoutAbsent && (kind == gitx.LayoutWorktree) != x.r.Worktrees
+
+	switch {
+	case kind == gitx.LayoutWorktree:
+		x.syncWorktree()
+	case kind == gitx.LayoutSingle:
+		x.syncSingle()
+	case x.r.Worktrees: // absent → provision in the configured layout
+		x.syncWorktree()
+	default:
+		x.syncSingle()
+	}
+
+	if mismatch {
+		x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
+			layoutName(kind), x.r.Worktrees)
+		x.attention("layout mismatch — run: sync --fix-layout")
+	}
+}
+
+func layoutName(k gitx.LayoutKind) string {
+	if k == gitx.LayoutWorktree {
+		return "worktree"
+	}
+	return "single"
+}
+
+// syncSingle provisions and updates a single working tree (worktrees = false).
+func (x *run) syncSingle() {
 	if !x.provision() {
 		return
 	}
+	x.dir, x.ub = x.container, x.branch
 	switch x.r.Workflow {
 	case model.Vendor:
 		x.updateVendor()
@@ -115,9 +157,129 @@ func (x *run) provisionAndUpdate() {
 		}
 	default: // upstream-push, supply-chain-mirror (both track origin)
 		if x.onImportantBranch() {
-			x.updateTracking("origin/" + x.branch)
+			x.updateTracking("origin/" + x.ub)
+			x.mirrorReview()
 		}
 	}
+}
+
+// syncWorktree provisions a bare+worktree container when absent, then reconciles
+// each important branch's worktree, adding any that a newly-declared branch
+// still lacks (DESIGN §4, §5.3).
+func (x *run) syncWorktree() {
+	if gitx.ClassifyLayout(x.container) == gitx.LayoutAbsent {
+		if !x.provisionWorktree() {
+			return
+		}
+	}
+	for _, b := range x.r.Branches {
+		wt := filepath.Join(x.container, b)
+		if !gitx.IsRepo(wt) {
+			if x.opts.DryRun {
+				x.add("would add worktree %s", b)
+				continue
+			}
+			if err := gitx.WorktreeAdd(x.container, wt, b); err != nil {
+				x.attention("worktree add failed")
+				x.add("add worktree %s failed: %v", b, err)
+				continue
+			}
+			x.add("added worktree %s", b)
+		}
+		x.updateUnit(wt, b)
+	}
+}
+
+// updateUnit reconciles one working tree (a worktree, or the single tree) to its
+// branch per workflow.
+func (x *run) updateUnit(dir, branch string) {
+	x.dir, x.ub, x.unit = dir, branch, branch
+	defer func() { x.unit = "" }()
+	switch x.r.Workflow {
+	case model.Vendor:
+		x.updateVendor()
+	case model.ForkPR:
+		x.updateForkPR()
+	default:
+		x.updateTracking("origin/" + branch)
+		x.mirrorReview()
+	}
+}
+
+// provisionWorktree creates the bare repo, its .git pointer, remotes, and a
+// worktree per important branch (DESIGN §4). Worktrees are added by syncWorktree
+// after this returns.
+func (x *run) provisionWorktree() bool {
+	origin, upstream, ok := x.resolveRemotes()
+	if !ok {
+		return false
+	}
+	bare := filepath.Join(x.container, ".bare")
+	if x.opts.DryRun {
+		x.add("would clone --bare %s and add worktrees %v", origin, x.r.Branches)
+		x.res.Outcome, x.res.Detail = Updated, "would clone (worktree)"
+		return false
+	}
+	x.add("cloning bare %s → %s", origin, shorten(bare))
+	if err := os.MkdirAll(x.container, 0o755); err != nil {
+		x.fail(err)
+		return false
+	}
+	if err := gitx.CloneBare(origin, bare); err != nil {
+		x.fail(err)
+		return false
+	}
+	if err := writeGitFile(x.container); err != nil {
+		x.fail(err)
+		return false
+	}
+	_, _ = gitx.EnsureRemote(x.container, "origin", origin)
+	if upstream != "" {
+		_, _ = gitx.EnsureRemote(x.container, "upstream", upstream)
+	}
+	if err := gitx.Fetch(x.container, "origin"); err != nil {
+		x.fail(err)
+		return false
+	}
+	if upstream != "" {
+		_ = gitx.Fetch(x.container, "upstream")
+	}
+	x.res.Cloned = true
+	return true
+}
+
+// resolveRemotes returns the origin and (when a fork exists) upstream clone URLs
+// for a declared repo, or the discovered origin verbatim.
+func (x *run) resolveRemotes() (origin, upstream string, ok bool) {
+	if x.r.OriginURL != "" {
+		return x.r.OriginURL, "", true
+	}
+	if x.r.Dir != "" {
+		x.attention("no remote")
+		x.add("discovered repo has no origin remote: nothing to sync")
+		return "", "", false
+	}
+	originID := x.r.ID
+	if x.r.Fork != nil {
+		originID = *x.r.Fork
+	}
+	u, err := x.reg.PhysicalID(originID, x.r.Tags)
+	if err != nil {
+		x.fail(err)
+		return "", "", false
+	}
+	if x.r.Fork != nil {
+		if up, err := x.reg.PhysicalID(x.r.ID, x.r.Tags); err == nil {
+			upstream = up
+		}
+	}
+	return u, upstream, true
+}
+
+// writeGitFile writes the container's `.git` file pointing at the bare repo, so
+// git commands run from the container root resolve to it (DESIGN §4).
+func writeGitFile(container string) error {
+	return os.WriteFile(filepath.Join(container, ".git"), []byte("gitdir: ./.bare\n"), 0o644)
 }
 
 // provision resolves the origin, clones when absent, ensures remotes, fetches,
@@ -227,31 +389,31 @@ func (x *run) onImportantBranch() bool {
 // fork-pr reuses the same fast-forward logic against upstream, then layers a
 // fork push on top (updateForkPR).
 func (x *run) updateTracking(ref string) {
-	if _, ok := gitx.RevParse(x.container, ref); !ok {
+	if _, ok := gitx.RevParse(x.dir, ref); !ok {
 		x.attention(ref + " missing")
 		x.add("no %s", ref)
 		return
 	}
-	ahead, behind, _ := gitx.AheadBehind(x.container, ref)
+	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
 	switch {
 	case ahead == 0 && behind == 0:
-		x.add("%s up to date with %s", x.branch, ref)
+		x.add("%s up to date with %s", x.ub, ref)
 		x.ok()
 	case ahead == 0 && behind > 0:
 		if x.opts.DryRun {
-			x.add("would fast-forward %s +%d", x.branch, behind)
+			x.add("would fast-forward %s +%d", x.ub, behind)
 			x.updated(fmt.Sprintf("+%d (dry-run)", behind))
 			return
 		}
-		if err := gitx.FastForwardCurrent(x.container, ref); err != nil {
+		if err := gitx.FastForwardCurrent(x.dir, ref); err != nil {
 			x.applyRewrite(ref) // behind-only but non-FF ⇒ upstream rewrite
 			return
 		}
-		x.add("fast-forwarded %s +%d", x.branch, behind)
+		x.add("fast-forwarded %s +%d", x.ub, behind)
 		x.updated(fmt.Sprintf("+%d", behind))
 	case ahead > 0 && behind == 0:
 		x.attention(fmt.Sprintf("%d unpushed", ahead))
-		x.add("%d unpushed commit(s) on %s", ahead, x.branch)
+		x.add("%d unpushed commit(s) on %s", ahead, x.ub)
 	default:
 		x.applyRewrite(ref)
 	}
@@ -259,7 +421,7 @@ func (x *run) updateTracking(ref string) {
 
 // applyRewrite handles a non-fast-forward on an important branch per on_rewrite.
 func (x *run) applyRewrite(ref string) {
-	ahead, behind, _ := gitx.AheadBehind(x.container, ref)
+	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
 	if x.r.OnRewrite == "follow" {
 		if ahead > 0 { // rail: never clobber local commits
 			x.attention(fmt.Sprintf("rewrite with %d local commit(s) — stopped", ahead))
@@ -267,15 +429,15 @@ func (x *run) applyRewrite(ref string) {
 			return
 		}
 		if x.opts.DryRun {
-			x.add("would follow rewrite: reset %s to %s", x.branch, ref)
+			x.add("would follow rewrite: reset %s to %s", x.ub, ref)
 			x.updated("would follow rewrite")
 			return
 		}
-		if err := gitx.ResetHardCurrent(x.container, ref); err != nil {
+		if err := gitx.ResetHardCurrent(x.dir, ref); err != nil {
 			x.fail(err)
 			return
 		}
-		x.add("followed rewrite: reset %s to %s", x.branch, ref)
+		x.add("followed rewrite: reset %s to %s", x.ub, ref)
 		x.updated("followed rewrite")
 		return
 	}
@@ -289,19 +451,16 @@ func (x *run) mirrorReview() {
 	if x.r.Workflow != model.SupplyChainMirror || x.r.Fork == nil {
 		return
 	}
-	upRef := "upstream/" + x.branch
-	if _, ok := gitx.RevParse(x.container, upRef); !ok {
+	upRef := "upstream/" + x.ub
+	if _, ok := gitx.RevParse(x.dir, upRef); !ok {
 		return
 	}
-	n, err := gitx.CountBetween(x.container, "origin/"+x.branch, upRef)
+	n, err := gitx.CountBetween(x.dir, "origin/"+x.ub, upRef)
 	if err != nil || n == 0 {
 		return
 	}
 	x.add("upstream is %d commit(s) ahead of the reviewed mirror — review pending", n)
-	if x.res.Outcome != Attention && x.res.Outcome != Failed {
-		x.res.Outcome = ReviewPending
-		x.res.Detail = fmt.Sprintf("upstream +%d — review pending (repo review %s)", n, x.res.Name)
-	}
+	x.mark(ReviewPending, fmt.Sprintf("upstream +%d — review pending (repo review %s)", n, x.res.Name))
 }
 
 func (x *run) hooks() {
@@ -317,7 +476,7 @@ func (x *run) hooks() {
 			continue
 		}
 		cmd := exec.Command("sh", "-c", h.Run)
-		cmd.Dir = x.container
+		cmd.Dir = x.r.PrimaryTree()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			x.add("hook failed (%s): %s", h.Run, strings.TrimSpace(string(out)))
 			x.attention("hook failed")
@@ -329,24 +488,58 @@ func (x *run) hooks() {
 
 // --- outcome helpers -------------------------------------------------------
 
+// add records a reasoning-trace line, prefixed with the current worktree's
+// branch when reconciling a multi-worktree repo.
 func (x *run) add(format string, a ...any) {
-	x.res.Actions = append(x.res.Actions, fmt.Sprintf(format, a...))
+	msg := fmt.Sprintf(format, a...)
+	if x.unit != "" {
+		msg = x.unit + ": " + msg
+	}
+	x.res.Actions = append(x.res.Actions, msg)
+}
+
+// mark raises the repo outcome to o (with detail) when o is at least as severe
+// as the current outcome, so the most-notable of several worktrees governs the
+// summary line while every worktree still contributes to the trace.
+func (x *run) mark(o Outcome, detail string) {
+	if rank(o) >= rank(x.res.Outcome) {
+		x.res.Outcome, x.res.Detail = o, detail
+	}
+}
+func rank(o Outcome) int {
+	switch o {
+	case Failed:
+		return 6
+	case Attention:
+		return 5
+	case ReviewPending:
+		return 4
+	case Updated:
+		return 3
+	case Deferred:
+		return 2
+	default: // UpToDate
+		return 1
+	}
 }
 func (x *run) ok() {
 	if x.res.Cloned {
-		x.res.Outcome, x.res.Detail = Updated, "cloned"
+		x.mark(Updated, "cloned")
 		return
 	}
-	x.res.Outcome, x.res.Detail = UpToDate, "up to date"
+	x.mark(UpToDate, "up to date")
 }
 func (x *run) updated(detail string) {
 	if x.res.Cloned {
 		detail = "cloned · " + detail
 	}
-	x.res.Outcome, x.res.Detail = Updated, detail
+	x.mark(Updated, detail)
 }
-func (x *run) attention(detail string) { x.res.Outcome, x.res.Detail = Attention, detail }
-func (x *run) fail(err error)          { x.res.Err, x.res.Outcome, x.res.Detail = err, Failed, err.Error() }
+func (x *run) attention(detail string) { x.mark(Attention, detail) }
+func (x *run) fail(err error) {
+	x.res.Err = err
+	x.mark(Failed, err.Error())
+}
 
 // --- cadence ---------------------------------------------------------------
 
@@ -384,10 +577,7 @@ func repoName(r model.Repo) string {
 }
 
 func deferredReason(r model.Repo) string {
-	if r.Worktrees {
-		return "worktrees not yet supported"
-	}
-	return ""
+	return "" // every workflow and layout is now reconciled
 }
 
 func ifFork(r model.Repo, s string) string {

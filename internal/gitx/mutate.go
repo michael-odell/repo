@@ -1,6 +1,7 @@
 package gitx
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -12,6 +13,30 @@ func Clone(url, dir string) error {
 	cmd := exec.Command("git", "clone", url, dir)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// CloneBare clones url into dir as a bare repository — the object store for a
+// worktree-layout container (DESIGN §4).
+func CloneBare(url, dir string) error {
+	cmd := exec.Command("git", "clone", "--bare", url, dir)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// WorktreeAdd checks out branch into a new worktree at path. It prefers an
+// existing local branch, else creates a tracking branch from origin/upstream so
+// a newly-declared important branch gets a worktree without manual setup.
+func WorktreeAdd(container, path, branch string) error {
+	if _, err := run(container, "worktree", "add", path, branch); err == nil {
+		return nil
+	}
+	for _, start := range []string{"origin/" + branch, "upstream/" + branch} {
+		if _, ok := RevParse(container, start); ok {
+			_, err := run(container, "worktree", "add", "-b", branch, path, start)
+			return err
+		}
+	}
+	return fmt.Errorf("no local or remote branch %q to add a worktree for", branch)
 }
 
 // RemoteURL returns the fetch URL of a remote and whether it exists.

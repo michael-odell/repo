@@ -31,6 +31,33 @@ func IsRepo(dir string) bool {
 	return err == nil
 }
 
+// LayoutKind classifies a container's on-disk shape (DESIGN §4.1).
+type LayoutKind int
+
+const (
+	LayoutAbsent   LayoutKind = iota // not a git repo (or the path is empty)
+	LayoutSingle                     // a normal working-tree clone at the container
+	LayoutWorktree                   // a bare repo (+ linked worktree siblings)
+)
+
+// ClassifyLayout reports whether the container is a single working-tree clone or
+// a bare+worktree parent, discriminated by whether git sees a working tree at the
+// container root: a normal clone reports is-bare=false, a bare+worktree parent
+// (whose .git file points at .bare) reports is-bare=true.
+func ClassifyLayout(dir string) LayoutKind {
+	if !IsRepo(dir) {
+		return LayoutAbsent
+	}
+	bare, err := run(dir, "rev-parse", "--is-bare-repository")
+	if err != nil {
+		return LayoutAbsent
+	}
+	if bare == "true" {
+		return LayoutWorktree
+	}
+	return LayoutSingle
+}
+
 // Remotes returns a name→fetch-URL map.
 func Remotes(dir string) (map[string]string, error) {
 	names, err := run(dir, "remote")
