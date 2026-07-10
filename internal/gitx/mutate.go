@@ -74,3 +74,57 @@ func CountBetween(dir, from, to string) (int, error) {
 	}
 	return strconv.Atoi(strings.TrimSpace(out))
 }
+
+// Push pushes a single branch to a remote without force, so a non-fast-forward
+// fails rather than clobbering the remote (fork-pr: DESIGN §5.1).
+func Push(dir, remote, branch string) error {
+	_, err := run(dir, "push", remote, branch)
+	return err
+}
+
+// Checkout switches the working tree to ref (a branch or, for a vendor tag pin,
+// a detached tag).
+func Checkout(dir, ref string) error {
+	_, err := run(dir, "checkout", "--quiet", ref)
+	return err
+}
+
+// Tags lists local tag names.
+func Tags(dir string) ([]string, error) {
+	out, err := run(dir, "tag", "--list")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+// TagAtHead returns the tag pointing exactly at HEAD, or "" when HEAD is not on a
+// tag. Used to report a vendor pin bump (old → new).
+func TagAtHead(dir string) string {
+	out, err := run(dir, "describe", "--tags", "--exact-match", "HEAD")
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+// RemoteTagSHA returns the object id a remote advertises for a tag, and whether
+// the remote has it. Compared against the local tag to detect a moved tag
+// (a rewrite: DESIGN §5.2).
+func RemoteTagSHA(dir, remote, tag string) (string, bool) {
+	out, err := run(dir, "ls-remote", "--tags", remote, "refs/tags/"+tag)
+	if err != nil || out == "" {
+		return "", false
+	}
+	return strings.Fields(out)[0], true
+}
+
+// ForceFetchTag overwrites a local tag with the remote's, used only when
+// on_rewrite=follow adopts a moved vendor tag.
+func ForceFetchTag(dir, remote, tag string) error {
+	_, err := run(dir, "fetch", "--force", remote, "refs/tags/"+tag+":refs/tags/"+tag)
+	return err
+}

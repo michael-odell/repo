@@ -99,7 +99,32 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 	return *res
 }
 
+// provisionAndUpdate provisions the clone, then applies the per-workflow update
+// (DESIGN §5.1). provision does the layout-independent work shared by every
+// workflow; the switch routes to the workflow-specific reconcile.
 func (x *run) provisionAndUpdate() {
+	if !x.provision() {
+		return
+	}
+	switch x.r.Workflow {
+	case model.Vendor:
+		x.updateVendor()
+	case model.ForkPR:
+		if x.onImportantBranch() {
+			x.updateForkPR()
+		}
+	default: // upstream-push, supply-chain-mirror (both track origin)
+		if x.onImportantBranch() {
+			x.updateTracking("origin/" + x.branch)
+		}
+	}
+}
+
+// provision resolves the origin, clones when absent, ensures remotes, fetches,
+// and applies the dirty guard. It returns false — having recorded the outcome —
+// when the caller must not proceed to a workflow update (dry-run clone,
+// discovered no-remote, dirty tree, or a failure).
+func (x *run) provision() bool {
 	// A discovered repo (found on disk) carries its own origin; act on that
 	// rather than re-resolving through [hosts.*], which need not know its host.
 	// A declared repo resolves its origin (or fork) from the registry.
@@ -108,7 +133,7 @@ func (x *run) provisionAndUpdate() {
 		if x.r.Dir != "" {
 			x.attention("no remote")
 			x.add("discovered repo has no origin remote: nothing to sync")
-			return
+			return false
 		}
 		originID := x.r.ID
 		if x.r.Fork != nil {
@@ -117,7 +142,7 @@ func (x *run) provisionAndUpdate() {
 		u, err := x.reg.PhysicalID(originID, x.r.Tags)
 		if err != nil {
 			x.fail(err)
-			return
+			return false
 		}
 		originURL = u
 	}
@@ -127,16 +152,16 @@ func (x *run) provisionAndUpdate() {
 		if x.opts.DryRun {
 			x.add("would clone %s → %s", originURL, shorten(x.container))
 			x.res.Outcome, x.res.Detail = Updated, "would clone"
-			return
+			return false
 		}
 		x.add("cloning %s", originURL)
 		if err := os.MkdirAll(filepath.Dir(x.container), 0o755); err != nil {
 			x.fail(err)
-			return
+			return false
 		}
 		if err := gitx.Clone(originURL, x.container); err != nil {
 			x.fail(err)
-			return
+			return false
 		}
 		x.res.Cloned = true
 	}
@@ -161,7 +186,7 @@ func (x *run) provisionAndUpdate() {
 	} else {
 		if err := gitx.Fetch(x.container, "origin"); err != nil {
 			x.fail(err)
-			return
+			return false
 		}
 		x.add("fetched origin")
 		if x.r.Fork != nil {
@@ -175,33 +200,42 @@ func (x *run) provisionAndUpdate() {
 	if dirty, _ := gitx.IsDirty(x.container); dirty {
 		x.attention("dirty — updates skipped")
 		x.add("dirty working tree: skipping updates")
-		return
+		return false
 	}
+	return true
+}
 
-	// Update the primary important branch (must be the checked-out one at Stage 4).
+// onImportantBranch reports whether the checked-out branch is the primary
+// important branch (the single-tree precondition for a branch-tracking update).
+func (x *run) onImportantBranch() bool {
 	cur, _ := gitx.CurrentBranch(x.container)
 	switch {
 	case cur == "":
 		x.attention("detached HEAD")
 		x.add("detached HEAD: skipping update")
-		return
+		return false
 	case cur != x.branch:
 		x.attention(fmt.Sprintf("on %s, expected %s", cur, x.branch))
 		x.add("on branch %s, expected %s: skipping update", cur, x.branch)
+		return false
+	}
+	return true
+}
+
+// updateTracking fast-forwards the checked-out important branch to ref: the
+// shared body for upstream-push and supply-chain-mirror (which track origin).
+// fork-pr reuses the same fast-forward logic against upstream, then layers a
+// fork push on top (updateForkPR).
+func (x *run) updateTracking(ref string) {
+	if _, ok := gitx.RevParse(x.container, ref); !ok {
+		x.attention(ref + " missing")
+		x.add("no %s", ref)
 		return
 	}
-
-	originRef := "origin/" + x.branch
-	if _, ok := gitx.RevParse(x.container, originRef); !ok {
-		x.attention(originRef + " missing")
-		x.add("no %s", originRef)
-		return
-	}
-
-	ahead, behind, _ := gitx.AheadBehind(x.container, originRef)
+	ahead, behind, _ := gitx.AheadBehind(x.container, ref)
 	switch {
 	case ahead == 0 && behind == 0:
-		x.add("%s up to date with %s", x.branch, originRef)
+		x.add("%s up to date with %s", x.branch, ref)
 		x.ok()
 	case ahead == 0 && behind > 0:
 		if x.opts.DryRun {
@@ -209,8 +243,8 @@ func (x *run) provisionAndUpdate() {
 			x.updated(fmt.Sprintf("+%d (dry-run)", behind))
 			return
 		}
-		if err := gitx.FastForwardCurrent(x.container, originRef); err != nil {
-			x.applyRewrite(originRef) // behind-only but non-FF ⇒ upstream rewrite
+		if err := gitx.FastForwardCurrent(x.container, ref); err != nil {
+			x.applyRewrite(ref) // behind-only but non-FF ⇒ upstream rewrite
 			return
 		}
 		x.add("fast-forwarded %s +%d", x.branch, behind)
@@ -219,7 +253,7 @@ func (x *run) provisionAndUpdate() {
 		x.attention(fmt.Sprintf("%d unpushed", ahead))
 		x.add("%d unpushed commit(s) on %s", ahead, x.branch)
 	default:
-		x.applyRewrite(originRef)
+		x.applyRewrite(ref)
 	}
 }
 
@@ -352,9 +386,6 @@ func repoName(r model.Repo) string {
 func deferredReason(r model.Repo) string {
 	if r.Worktrees {
 		return "worktrees not yet supported"
-	}
-	if r.Workflow != model.UpstreamPush && r.Workflow != model.SupplyChainMirror {
-		return "workflow " + r.Workflow + " not yet supported"
 	}
 	return ""
 }
