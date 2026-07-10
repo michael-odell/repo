@@ -32,8 +32,12 @@ func TestMirrorDoesNotAdvancePastReview(t *testing.T) {
 	fork := filepath.Join(remotes, "fork", "proj")
 	must(t, os.MkdirAll(filepath.Dir(up), 0o755))
 	must(t, os.MkdirAll(filepath.Dir(fork), 0o755))
-	git(t, T, "init", "-q", "--bare", up)
-	git(t, T, "init", "-q", "--bare", fork)
+	// Pin the bare repos' default branch to main; otherwise the clone of the
+	// fork inherits the runner's init.defaultBranch (e.g. master on CI) for its
+	// symbolic HEAD, which points at a ref that was never pushed, leaving the
+	// clone in detached HEAD.
+	git(t, T, "init", "-q", "-b", "main", "--bare", up)
+	git(t, T, "init", "-q", "-b", "main", "--bare", fork)
 
 	seed := filepath.Join(T, "seed")
 	git(t, T, "clone", "-q", up, seed)
