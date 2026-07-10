@@ -38,20 +38,32 @@ type Result struct {
 	Detail  string
 	Actions []string
 	Err     error
+
+	// migrate, when set, defers a --fix-layout conversion to the serial phase
+	// after every repo's network sync has finished (DESIGN §4.1).
+	migrate *pendingMigration
+}
+
+type pendingMigration struct {
+	kind gitx.LayoutKind // the container's current on-disk layout
 }
 
 // Options controls a sync run.
 type Options struct {
-	DryRun    bool
-	Verbose   bool
-	Force     bool
-	IfDue     bool
-	FixLayout bool // convert a mismatched container to its configured layout
-	Frequency time.Duration
-	StateDir  string
+	DryRun      bool
+	Verbose     bool
+	Force       bool
+	IfDue       bool
+	FixLayout   bool // convert a mismatched container to its configured layout
+	LoseIgnored bool // pre-approve discarding .gitignore'd files during a relayout
+	Frequency   time.Duration
+	StateDir    string
 }
 
-// Run reconciles the selected repos in a bounded, isolated sweep.
+// Run reconciles the selected repos in a bounded, isolated sweep, then performs
+// any --fix-layout conversions serially. Migrations run only after every repo's
+// network work is done, so their prompts are orderly and never interleave with
+// concurrent output (DESIGN §4.1).
 func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
 	results := make([]Result, len(repos))
 	var g errgroup.Group
@@ -64,6 +76,19 @@ func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
 		})
 	}
 	_ = g.Wait()
+
+	for i := range results {
+		if results[i].migrate == nil || results[i].Err != nil {
+			continue // nothing to convert, or the repo's sync already failed
+		}
+		r := repos[i]
+		// The conversion owns the headline outcome; the sync trace is preserved
+		// in Actions, but the pre-migration dirty/attention state should not mask
+		// a successful relayout.
+		results[i].Outcome, results[i].Detail = UpToDate, ""
+		x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: &results[i]}
+		x.relayout(results[i].migrate.kind)
+	}
 	return results
 }
 
@@ -131,13 +156,26 @@ func (x *run) provisionAndUpdate() {
 
 	if mismatch {
 		if x.opts.FixLayout {
-			x.relayout(kind) // data is already synced above; now convert
+			// Defer the conversion to Run's serial phase, after all network work.
+			x.res.migrate = &pendingMigration{kind: kind}
+			x.add("layout mismatch — will convert to %s layout after sync",
+				layoutName(opp(kind)))
 		} else {
 			x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
 				layoutName(kind), x.r.Worktrees)
 			x.attention("layout mismatch — run: sync --fix-layout")
 		}
 	}
+}
+
+// hookDir picks an existing working tree to run hooks in: the configured primary
+// tree when it exists, else the container (e.g. a mismatched single clone that
+// has not yet been converted to worktrees).
+func (x *run) hookDir() string {
+	if pt := x.r.PrimaryTree(); gitx.IsRepo(pt) {
+		return pt
+	}
+	return x.container
 }
 
 func layoutName(k gitx.LayoutKind) string {
@@ -481,7 +519,7 @@ func (x *run) hooks() {
 			continue
 		}
 		cmd := exec.Command("sh", "-c", h.Run)
-		cmd.Dir = x.r.PrimaryTree()
+		cmd.Dir = x.hookDir()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			x.add("hook failed (%s): %s", h.Run, strings.TrimSpace(string(out)))
 			x.attention("hook failed")

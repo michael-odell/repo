@@ -46,8 +46,8 @@ func TestFixLayoutSingleToWorktreeIsLossless(t *testing.T) {
 	git(t, container, "checkout", "-q", "main")
 
 	// Working-tree residue that must survive the conversion.
-	must(t, os.WriteFile(filepath.Join(container, "tracked.txt"), []byte("MODIFIED\n"), 0o644)) // uncommitted
-	must(t, os.WriteFile(filepath.Join(container, "untracked.txt"), []byte("keep me\n"), 0o644)) // untracked
+	must(t, os.WriteFile(filepath.Join(container, "tracked.txt"), []byte("MODIFIED\n"), 0o644))   // uncommitted
+	must(t, os.WriteFile(filepath.Join(container, "untracked.txt"), []byte("keep me\n"), 0o644))  // untracked
 	must(t, os.WriteFile(filepath.Join(container, "ignored.txt"), []byte("build junk\n"), 0o644)) // ignored
 	git(t, container, "branch", "spike")                                                          // unpushed local branch
 

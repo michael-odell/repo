@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/michael-odell/repo/internal/gitx"
 )
@@ -28,9 +29,7 @@ func (x *run) relayout(kind gitx.LayoutKind) {
 	case gitx.LayoutSingle:
 		x.relayoutToWorktree()
 	default:
-		// Reverse (worktree → single) lands in a follow-up; never touch data here.
-		x.attention("worktree → single relayout not yet implemented")
-		x.add("worktree → single conversion is pending; keep worktrees=true or convert manually")
+		x.relayoutToSingle()
 	}
 }
 
@@ -140,6 +139,140 @@ func (x *run) relayoutToWorktree() {
 	if rank(x.res.Outcome) < rank(Updated) {
 		x.mark(Updated, "relayout: single → worktree")
 	}
+}
+
+// relayoutToSingle collapses a bare+worktree container into a single working
+// tree on branches[0]. Local refs are preserved (the clone is built from the
+// local bare); the primary worktree's residue is carried across. A non-primary
+// worktree with uncommitted or untracked work fails the conversion; one with
+// only ignored residue is discarded on consent (DESIGN §4.1).
+func (x *run) relayoutToSingle() {
+	container := x.container
+	primary := branch0(x.r)
+
+	// 1. Classify residue on the worktrees that will be discarded.
+	wts, err := gitx.Worktrees(container)
+	if err != nil {
+		x.fail(err)
+		return
+	}
+	var blocking, ignoredOnly []string
+	for _, wt := range wts {
+		// Skip the bare parent and the surviving primary (matched by branch, as
+		// `worktree list` may report symlink-resolved paths).
+		if wt.Bare || wt.Branch == primary {
+			continue
+		}
+		label := wt.Branch
+		if label == "" {
+			label = filepath.Base(wt.Path)
+		}
+		dirty, _ := gitx.IsDirty(wt.Path)
+		untracked, _ := gitx.UntrackedFiles(wt.Path)
+		if dirty || len(untracked) > 0 {
+			blocking = append(blocking, label)
+			continue
+		}
+		if ignored, _ := gitx.IgnoredFiles(wt.Path); len(ignored) > 0 {
+			ignoredOnly = append(ignoredOnly, label)
+		}
+	}
+	if len(blocking) > 0 {
+		x.attention("worktree(s) hold uncommitted/untracked work — not collapsed")
+		x.add("cannot collapse: worktree(s) %s hold uncommitted or untracked work — resolve and re-run",
+			strings.Join(blocking, ", "))
+		return
+	}
+	if len(ignoredOnly) > 0 && !x.opts.LoseIgnored && !confirmLoseIgnored(ignoredOnly) {
+		x.attention("ignored files present — re-run with --lose-ignored")
+		x.add("worktree(s) %s hold .gitignore'd files; re-run with --lose-ignored to discard them",
+			strings.Join(ignoredOnly, ", "))
+		return
+	}
+
+	// 2. Rebuild a single clone from the local bare (preserving every ref),
+	//    keeping the original recoverable until the new layout validates.
+	aside := container + ".pre-single"
+	if _, err := os.Stat(aside); err == nil {
+		x.fail(fmt.Errorf("relayout staging path already exists: %s", shorten(aside)))
+		return
+	}
+	if err := os.Rename(container, aside); err != nil {
+		x.fail(err)
+		return
+	}
+	fail := func(err error) {
+		if gitx.ClassifyLayout(container) != gitx.LayoutWorktree {
+			_ = os.RemoveAll(container)
+			_ = os.Rename(aside, container)
+		}
+		x.fail(err)
+	}
+
+	if err := gitx.CloneLocal(filepath.Join(aside, ".bare"), container); err != nil {
+		fail(err)
+		return
+	}
+	// Recreate every branch locally so unpushed branches survive the collapse.
+	if branches, err := gitx.RemoteBranches(container, "origin"); err == nil {
+		for _, b := range branches {
+			if _, ok := gitx.RevParse(container, "refs/heads/"+b); !ok {
+				_ = gitx.CreateBranch(container, b, "refs/remotes/origin/"+b)
+			}
+		}
+	}
+	origin, upstream, ok := x.resolveRemotes()
+	if !ok {
+		fail(fmt.Errorf("cannot resolve remotes for %s", x.res.Name))
+		return
+	}
+	_, _ = gitx.EnsureRemote(container, "origin", origin)
+	if upstream != "" {
+		_, _ = gitx.EnsureRemote(container, "upstream", upstream)
+	}
+	if err := gitx.Checkout(container, primary); err != nil {
+		fail(err)
+		return
+	}
+	// Carry the primary worktree's residue (modified, untracked, ignored) across;
+	// after the rename it lives under the staging dir.
+	asidePrimary := filepath.Join(aside, primary)
+	if _, err := os.Stat(asidePrimary); err == nil {
+		if err := copyTree(asidePrimary, container, ".git"); err != nil {
+			fail(err)
+			return
+		}
+	}
+
+	if gitx.ClassifyLayout(container) != gitx.LayoutSingle {
+		fail(fmt.Errorf("relayout produced an unexpected layout"))
+		return
+	}
+	if err := os.RemoveAll(aside); err != nil {
+		x.add("relayout complete but could not remove %s: %v", shorten(aside), err)
+	}
+	x.add("relayout: worktree → single (kept %s)", primary)
+	x.updated("relayout: worktree → single")
+}
+
+// confirmLoseIgnored asks whether to discard ignored files in worktrees being
+// removed. With no TTY it returns false (the caller then points at
+// --lose-ignored), never blocking a non-interactive run.
+func confirmLoseIgnored(where []string) bool {
+	if !isTTY() {
+		return false
+	}
+	fmt.Printf("worktree(s) %s hold only .gitignore'd files that will be discarded — discard? [y/N] ",
+		strings.Join(where, ", "))
+	var resp string
+	_, _ = fmt.Scanln(&resp)
+	resp = strings.ToLower(strings.TrimSpace(resp))
+	return resp == "y" || resp == "yes"
+}
+
+func isTTY() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
 func opp(k gitx.LayoutKind) gitx.LayoutKind {

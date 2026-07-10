@@ -20,6 +20,7 @@ func cmdSync(_ context.Context, args []string) error {
 	ifDue := fs.Bool("if-due", false, "only sync repos whose cadence is due")
 	force := fs.Bool("force", false, "ignore cadence")
 	fixLayout := fs.Bool("fix-layout", false, "convert a mismatched container to its configured layout (after syncing)")
+	loseIgnored := fs.Bool("lose-ignored", false, "with --fix-layout, discard .gitignore'd files without prompting")
 	var dryRun, dryRunN, verbose, verboseV bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show planned actions without changing anything")
 	fs.BoolVar(&dryRunN, "n", false, "alias for --dry-run")
@@ -46,13 +47,14 @@ func cmdSync(_ context.Context, args []string) error {
 	}
 
 	opts := syncpkg.Options{
-		DryRun:    dryRun || dryRunN,
-		Verbose:   verbose || verboseV,
-		Force:     *force,
-		IfDue:     *ifDue,
-		FixLayout: *fixLayout,
-		Frequency: 7 * 24 * time.Hour,
-		StateDir:  filepath.Join(outDir(), "last-sync"),
+		DryRun:      dryRun || dryRunN,
+		Verbose:     verbose || verboseV,
+		Force:       *force,
+		IfDue:       *ifDue,
+		FixLayout:   *fixLayout,
+		LoseIgnored: *loseIgnored,
+		Frequency:   7 * 24 * time.Hour,
+		StateDir:    filepath.Join(outDir(), "last-sync"),
 	}
 	results := syncpkg.Run(reg, selected, opts)
 	renderSync(os.Stdout, results, opts)

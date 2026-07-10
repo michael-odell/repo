@@ -23,6 +23,22 @@ func CloneBare(url, dir string) error {
 	return cmd.Run()
 }
 
+// CloneLocal clones a local repository into dir as a normal working clone,
+// hardlinking objects where possible — used to collapse a bare worktree
+// container back into a single tree (DESIGN §4.1).
+func CloneLocal(src, dir string) error {
+	cmd := exec.Command("git", "clone", "--local", src, dir)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// CreateBranch creates a local branch at start (no checkout), used to preserve
+// every ref when rebuilding a clone from a bare repo.
+func CreateBranch(dir, name, start string) error {
+	_, err := run(dir, "branch", name, start)
+	return err
+}
+
 // WorktreeAdd checks out branch into a new worktree at path. It prefers an
 // existing local branch, else creates a tracking branch from origin/upstream so
 // a newly-declared important branch gets a worktree without manual setup.
