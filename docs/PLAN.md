@@ -59,7 +59,7 @@ here — `status` is the safe place to prove one failure never aborts the sweep 
 **Proof:** `repo status` over real `~/src`/`~/wd`, mutates nothing, reports drift.
 
 ### Stage 3 — artifacts (`repo apply`)  ✅ done · shell wiring pending review
-`repo apply` generates `prjpath.zsh`/`homes.zsh`/`plugins.zsh` into `~/.local/repos`
+`repo apply` generates `prjpath.zsh`/`homes.zsh`/`plugins.zsh` into `~/.local/repo`
 with the staleness hash; wire `.zshenv`/`.zshrc` to source-with-fallback; teach
 `cs`/`_cs` to prefer `REPO_HOME`. Fully reversible.
 **Proof:** new shells source generated artifacts; `cs pt-<TAB>` completes from the
@@ -72,6 +72,12 @@ provision (clone/remotes), fetch, `upstream-push` + `supply-chain-mirror` update
 **Proof:** `repo sync --tag zsh-plugin` clones/updates plugins; a mirror plugin with
 upstream ahead shows "review pending" and does not advance. **This is the vertical
 slice validating the whole architecture end to end.**
+
+**Update:** `sync` is no longer scoped to plugins — it now operates over the full
+declared ∪ discovered union (DESIGN §3.2), the same set as `status`, via a shared
+`unionRepos` builder. Discovered-only repos carry their real on-disk location and
+existing origin; unsupported workflows (`fork-pr`, `vendor`, worktrees) are still
+deferred, not attempted, until Stage 5.
 
 ### Stage 5 — worktrees, fork-pr/vendor, work strangulation  ⏭ next
 bare+worktree provisioning; `fork-pr` push (+ `gh repo sync` when present); `vendor`

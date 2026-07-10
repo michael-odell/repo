@@ -19,7 +19,7 @@ import (
 // [[repo]]. Pointers/slices distinguish "unset" (inherit) from a set value.
 type Settings struct {
 	HomeRoot  *string      `toml:"home_root"`
-	Path      *string      `toml:"path"`
+	Layout    *string      `toml:"layout"`
 	Worktrees *bool        `toml:"worktrees"`
 	Branches  []string     `toml:"branches"`
 	OnRewrite *string      `toml:"on_rewrite"`
@@ -80,7 +80,7 @@ type Registry struct {
 var builtinDefaults = model.Repo{
 	Workflow:  model.UpstreamPush,
 	HomeRoot:  "~/src",
-	Path:      model.PathFlat,
+	Layout:    model.LayoutFlat,
 	Worktrees: false,
 	Branches:  []string{"main"},
 	OnRewrite: "stop",
@@ -193,7 +193,7 @@ func (reg *Registry) effective(e RepoEntry) (model.Repo, error) {
 		Tags:      e.Tags,
 		Pin:       e.Pin,
 		HomeRoot:  strOr(s.HomeRoot, builtinDefaults.HomeRoot),
-		Path:      strOr(s.Path, builtinDefaults.Path),
+		Layout:    strOr(s.Layout, builtinDefaults.Layout),
 		Worktrees: boolOr(s.Worktrees, builtinDefaults.Worktrees),
 		Branches:  sliceOr(s.Branches, builtinDefaults.Branches),
 		OnRewrite: strOr(s.OnRewrite, builtinDefaults.OnRewrite),
@@ -271,8 +271,8 @@ func overlay(base, over Settings) Settings {
 	if over.HomeRoot != nil {
 		base.HomeRoot = over.HomeRoot
 	}
-	if over.Path != nil {
-		base.Path = over.Path
+	if over.Layout != nil {
+		base.Layout = over.Layout
 	}
 	if over.Worktrees != nil {
 		base.Worktrees = over.Worktrees

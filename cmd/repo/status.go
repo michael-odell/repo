@@ -11,8 +11,8 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/michael-odell/repo/internal/config"
-	"github.com/michael-odell/repo/internal/discover"
 	"github.com/michael-odell/repo/internal/gitx"
+	"github.com/michael-odell/repo/internal/model"
 )
 
 // resolveRoots picks discovery roots: REPO_ROOTS env, else [[root]] entries,
@@ -53,74 +53,58 @@ func cmdStatus(ctx context.Context, _ []string) error {
 	if err != nil {
 		return err
 	}
-	found, err := discover.Discover(resolveRoots(reg), reg)
+	repos, err := unionRepos(reg)
 	if err != nil {
 		return err
 	}
 
 	// Observe drift per repo in a bounded, isolated sweep: one repo's failure
 	// is captured, never aborting the others (DESIGN §2.5).
-	obs := make([]observation, len(found))
+	obs := make([]observation, len(repos))
 	var g errgroup.Group
 	g.SetLimit(8)
-	for i, f := range found {
-		i, f := i, f
+	for i, r := range repos {
+		i, r := i, r
 		g.Go(func() error {
-			obs[i] = observe(f)
+			obs[i] = observe(r)
 			return nil
 		})
 	}
 	_ = g.Wait()
 
-	// Declared-but-not-cloned repos.
-	onDisk := map[string]bool{}
-	for _, f := range found {
-		if !f.ID.Zero() {
-			onDisk[f.ID.String()] = true
-		}
-	}
-	repos, err := reg.Repos()
-	if err != nil {
-		return err
-	}
-	for _, r := range repos {
-		if onDisk[r.ID.String()] || gitx.IsRepo(r.PrimaryTree()) {
-			continue
-		}
-		obs = append(obs, observation{name: r.ID.Short(), note: "not cloned"})
-	}
-
 	render(os.Stdout, obs)
 	return nil
 }
 
-func observe(f discover.Found) observation {
-	o := observation{name: nameOf(f), cloned: true, note: f.Note}
-	branch, err := gitx.CurrentBranch(f.Dir)
+func observe(r model.Repo) observation {
+	o := observation{name: repoName(r)}
+	dir := r.PrimaryTree()
+	if !gitx.IsRepo(dir) {
+		o.note = "not cloned"
+		return o
+	}
+	o.cloned = true
+	if r.Dir != "" && r.OriginURL == "" {
+		o.note = "no remote"
+	}
+	branch, err := gitx.CurrentBranch(dir)
 	if err != nil {
 		o.err = err
 		return o
 	}
 	o.branch = branch
-	if dirty, err := gitx.IsDirty(f.Dir); err == nil {
+	if dirty, err := gitx.IsDirty(dir); err == nil {
 		o.dirty = dirty
 	}
 	if branch != "" {
-		if up := gitx.Upstream(f.Dir, branch); up != "" {
+		if up := gitx.Upstream(dir, branch); up != "" {
 			o.upstream = up
-			o.ahead, o.behind, _ = gitx.AheadBehind(f.Dir, up)
-		} else {
+			o.ahead, o.behind, _ = gitx.AheadBehind(dir, up)
+		} else if o.note == "" {
 			o.note = "no upstream"
 		}
 	}
 	return o
-}
-
-func nameOf(f discover.Found) string {
-	if f.ID.Zero() {
-		return filepath.Base(f.Dir)
-	}
-	return f.ID.Short()
 }
 
 func render(w *os.File, obs []observation) {

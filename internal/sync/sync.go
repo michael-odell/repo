@@ -76,7 +76,7 @@ type run struct {
 }
 
 func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
-	res := &Result{Name: r.ID.Short()}
+	res := &Result{Name: repoName(r)}
 	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
 
 	if reason := deferredReason(r); reason != "" {
@@ -100,14 +100,26 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 }
 
 func (x *run) provisionAndUpdate() {
-	originID := x.r.ID
-	if x.r.Fork != nil {
-		originID = *x.r.Fork
-	}
-	originURL, err := x.reg.PhysicalID(originID, x.r.Tags)
-	if err != nil {
-		x.fail(err)
-		return
+	// A discovered repo (found on disk) carries its own origin; act on that
+	// rather than re-resolving through [hosts.*], which need not know its host.
+	// A declared repo resolves its origin (or fork) from the registry.
+	originURL := x.r.OriginURL
+	if originURL == "" {
+		if x.r.Dir != "" {
+			x.attention("no remote")
+			x.add("discovered repo has no origin remote: nothing to sync")
+			return
+		}
+		originID := x.r.ID
+		if x.r.Fork != nil {
+			originID = *x.r.Fork
+		}
+		u, err := x.reg.PhysicalID(originID, x.r.Tags)
+		if err != nil {
+			x.fail(err)
+			return
+		}
+		originURL = u
 	}
 
 	// Provision.
@@ -327,6 +339,14 @@ func branch0(r model.Repo) string {
 		return r.Branches[0]
 	}
 	return "main"
+}
+
+// repoName falls back to the directory leaf for a discovered repo with no id.
+func repoName(r model.Repo) string {
+	if r.ID.Zero() {
+		return filepath.Base(r.Container())
+	}
+	return r.ID.Short()
 }
 
 func deferredReason(r model.Repo) string {

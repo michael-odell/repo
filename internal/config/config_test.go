@@ -41,7 +41,7 @@ func TestInheritance(t *testing.T) {
 	reg := load(t, "base.toml")
 
 	pt := repoByShort(t, reg, "pt-helm")
-	if pt.HomeRoot != "~/wd" || pt.Path != model.PathOwner || !pt.Worktrees {
+	if pt.HomeRoot != "~/wd" || pt.Layout != model.LayoutOwner || !pt.Worktrees {
 		t.Errorf("pt-helm inherited wrong from tag work: %+v", pt)
 	}
 	if pt.Workflow != model.ForkPR {

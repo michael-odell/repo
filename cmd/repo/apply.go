@@ -10,14 +10,14 @@ import (
 	"github.com/michael-odell/repo/internal/discover"
 )
 
-// outDir is where generated artifacts live: $REPO_OUT, else ~/.local/repos
+// outDir is where generated artifacts live: $REPO_OUT, else ~/.local/repo
 // (uncommitted; DESIGN §6).
 func outDir() string {
 	if v := os.Getenv("REPO_OUT"); v != "" {
 		return v
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "repos")
+	return filepath.Join(home, ".local", "repo")
 }
 
 func cmdApply(_ context.Context, _ []string) error {

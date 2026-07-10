@@ -112,7 +112,7 @@ are orthogonal:** the `zsh-plugin` tag groups repos and sets sync scope, but
 
 ### 3.5 Layout: two orthogonal axes
 
-- **`path`** = `flat` (`~/src/<repo>`) | `owner` (`~/wd/<owner>/<repo>`).
+- **`layout`** = `flat` (`~/src/<repo>`) | `owner` (`~/wd/<owner>/<repo>`).
 - **`worktrees`** = bool. `false` → the container dir is a single working tree.
   `true` → bare repo + one worktree per important branch (§4).
 
@@ -152,11 +152,11 @@ scan, not a single file.
 ### 3.8 Example registry
 
 ```toml
-# a fragment on REPO_REGISTRY_PATH (e.g. ~/.config/repos/registry.toml) — public base
+# a fragment on REPO_REGISTRY_PATH (e.g. ~/.config/repo/registry.toml) — public base
 
 [defaults]
 home_root  = "~/src"
-path       = "flat"
+layout       = "flat"
 worktrees  = false
 branches   = ["main"]
 on_rewrite = "stop"      # stop | follow  (§5.2)
@@ -169,13 +169,13 @@ base = "git@ghe.example.com:"
 
 [tag.work]
 home_root = "~/wd"
-path      = "owner"      # ~/wd/<owner>/<repo>
+layout      = "owner"      # ~/wd/<owner>/<repo>
 host      = "ghe"
 worktrees = true
 
 [tag.zsh-plugin]
 home_root = "~/.zsh/plugins"
-path      = "flat"
+layout      = "flat"
 
 # third-party plugin: supply-chain-mirror (review-gated)
 [[repo]]
@@ -207,7 +207,7 @@ tags      = ["vendor"]
 workflow  = "vendor"
 pin       = "latest-tag"
 home_root = "~/vendor"
-path      = "owner"
+layout      = "owner"
 ```
 
 ```toml
@@ -226,7 +226,7 @@ Resolution rule: `overrides[id]` → else `via + owner/repo` if matched by
 
 ## 4. On-disk layouts
 
-`fork-pr`, `path = owner`, `worktrees = true` — directory named by the **definitive**
+`fork-pr`, `layout = owner`, `worktrees = true` — directory named by the **definitive**
 identity (not the fork; forks are a remote detail, and naming by identity keeps the
 owner-grouping intact):
 
@@ -348,7 +348,7 @@ repo sync — 12 repos, 3 due
 
 ## 6. Emitted artifacts (shell contract)
 
-Artifacts live in a machine-local state dir `$REPO_OUT` (default `~/.local/repos`),
+Artifacts live in a machine-local state dir `$REPO_OUT` (default `~/.local/repo`),
 **outside any committed repository** — `~/.local` is already gitignored. Committed
 shell files (`.zshenv`, `.zshrc`) contain only a `source` line plus a cold-bootstrap
 fallback; the artifact *files* they source live in `$REPO_OUT`. This separation is
@@ -449,6 +449,6 @@ None blocking. Resolved: membership is declared ∪ discovered (§3.2); registry
 composed path so private repos need no public reference (§3.7); `repo` lives in its
 own repo (§7); rewrite following via `on_rewrite`; prune is three-tiered and
 rebase/squash-aware (§5.3); the mirror workflow is `supply-chain-mirror` and the
-resolution key is `via` (no naming collision); artifacts live in `~/.local/repos`,
+resolution key is `via` (no naming collision); artifacts live in `~/.local/repo`,
 sourced by committed files (§6); fork-pr pushes on the if-due run; latest-tag vendor
 auto-advances while moved tags still trip `on_rewrite`.

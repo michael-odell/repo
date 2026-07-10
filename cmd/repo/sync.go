@@ -32,7 +32,7 @@ func cmdSync(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	repos, err := reg.Repos()
+	repos, err := unionRepos(reg)
 	if err != nil {
 		return err
 	}

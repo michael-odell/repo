@@ -13,13 +13,13 @@ import (
 )
 
 // registryPaths returns the REPO_REGISTRY_PATH fragment list and whether it was
-// set explicitly. When unset it defaults to ~/.config/repos (DESIGN §3.7).
+// set explicitly. When unset it defaults to ~/.config/repo (DESIGN §3.7).
 func registryPaths() (paths []string, explicit bool) {
 	if v := os.Getenv("REPO_REGISTRY_PATH"); v != "" {
 		return filepath.SplitList(v), true
 	}
 	if home, err := os.UserHomeDir(); err == nil {
-		return []string{filepath.Join(home, ".config", "repos")}, false
+		return []string{filepath.Join(home, ".config", "repo")}, false
 	}
 	return nil, false
 }
