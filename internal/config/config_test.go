@@ -187,6 +187,33 @@ workflow = "fork-pr"
 	}
 }
 
+func TestInheritedForDiscovered(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[root.contrib]
+dir      = "~/contrib"
+workflow = "vendor"
+pin      = "latest-tag"
+
+[root.src]
+dir = "~/src"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// A repo under the contrib root inherits vendor + pin, overriding whatever a
+	// discovered repo's remotes would infer.
+	if got := reg.InheritedFor([]string{"contrib"}); got.Workflow != "vendor" || got.Pin != "latest-tag" {
+		t.Errorf("contrib inherited = %+v, want workflow=vendor pin=latest-tag", got)
+	}
+	// A root that sets no workflow leaves it unset, so the caller keeps its
+	// remote-inferred value rather than being forced to a default.
+	if got := reg.InheritedFor([]string{"src"}); got.Workflow != "" {
+		t.Errorf("src inherited workflow = %q, want empty (caller infers)", got.Workflow)
+	}
+}
+
 func writeTOML(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "f.toml"), []byte(body), 0o644); err != nil {

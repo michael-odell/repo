@@ -45,7 +45,7 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 		if !f.ID.Zero() {
 			seenID[f.ID.String()] = true
 		}
-		repos = append(repos, discoveredRepo(f))
+		repos = append(repos, discoveredRepo(reg, f))
 	}
 	return repos, nil
 }
@@ -53,15 +53,23 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 // discoveredRepo synthesizes the merged model for a repo found on disk. Its
 // container and origin come from disk (not the registry), and its lone important
 // branch is whatever is checked out — so sync targets that rather than assuming
-// "main" and flagging every repo on another branch.
-func discoveredRepo(f discover.Found) model.Repo {
+// "main" and flagging every repo on another branch. Everything else is inherited
+// from the root it sits under (DESIGN §3.2: config overrides remote inference),
+// falling back to what disk/remotes report where config is silent.
+func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
+	inh := reg.InheritedFor(f.Roots)
 	r := model.Repo{
 		ID:        f.ID,
-		Workflow:  f.Workflow,
+		Roots:     f.Roots,
 		Dir:       f.Dir,
 		OriginURL: f.Remotes["origin"],
-		OnRewrite: builtinOnRewrite,
-		Prune:     builtinPrune,
+		Workflow:  strOrDefault(inh.Workflow, f.Workflow), // config wins over inference
+		Layout:    strOrDefault(inh.Layout, model.LayoutFlat),
+		Worktrees: inh.Worktrees != nil && *inh.Worktrees,
+		OnRewrite: strOrDefault(inh.OnRewrite, builtinOnRewrite),
+		Prune:     strOrDefault(inh.Prune, builtinPrune),
+		Pin:       inh.Pin,
+		Hooks:     inh.Hooks,
 	}
 	if r.OriginURL == "" {
 		for _, u := range f.Remotes {
@@ -69,11 +77,17 @@ func discoveredRepo(f discover.Found) model.Repo {
 			break
 		}
 	}
-	r.Roots = f.Roots
 	if b, err := gitx.CurrentBranch(f.Dir); err == nil && b != "" {
 		r.Branches = []string{b}
 	}
 	return r
+}
+
+func strOrDefault(s, def string) string {
+	if s != "" {
+		return s
+	}
+	return def
 }
 
 // repoName is the display/selection name for a repo, falling back to the

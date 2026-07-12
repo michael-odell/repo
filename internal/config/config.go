@@ -253,6 +253,38 @@ func (reg *Registry) chain(name string) []string {
 	return names
 }
 
+// Inherited resolves the settings a discovered repo in the given root chain
+// should adopt (DESIGN §3.2: config overrides remote inference). Fields the
+// config leaves unset are returned zero/"" so the caller falls back to what it
+// reads from disk and remotes.
+type Inherited struct {
+	Workflow  string // "" when unset by config → caller keeps its inference
+	Layout    string // "" when unset
+	Worktrees *bool  // nil when unset
+	OnRewrite string // "" when unset
+	Prune     string // "" when unset
+	Pin       string // "" when unset
+	Hooks     []model.Hook
+}
+
+// InheritedFor overlays [defaults] with each root in the chain and returns the
+// result for a discovered repo.
+func (reg *Registry) InheritedFor(chain []string) Inherited {
+	s := reg.defaults
+	for _, n := range chain {
+		s = overlay(s, reg.roots[n].Settings)
+	}
+	return Inherited{
+		Workflow:  strOr(s.Workflow, ""),
+		Layout:    strOr(s.Layout, ""),
+		Worktrees: s.Worktrees,
+		OnRewrite: strOr(s.OnRewrite, ""),
+		Prune:     strOr(s.Prune, ""),
+		Pin:       strOr(s.Pin, ""),
+		Hooks:     s.Hooks,
+	}
+}
+
 func (reg *Registry) effective(m member) (model.Repo, error) {
 	id, err := ident.Parse(m.entry.ID)
 	if err != nil {

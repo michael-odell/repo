@@ -46,7 +46,13 @@ func cmdScan(_ context.Context, _ []string) error {
 		if root == "" {
 			root = "—"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id, f.Workflow, root, layoutLabel(f.Dir), shorten(f.Dir), f.Note)
+		// Show the effective workflow: the root's configured value overrides the
+		// remote-inferred one (DESIGN §3.2), matching what sync will act on.
+		workflow := f.Workflow
+		if w := reg.InheritedFor(f.Roots).Workflow; w != "" {
+			workflow = w
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id, workflow, root, layoutLabel(f.Dir), shorten(f.Dir), f.Note)
 	}
 	return tw.Flush()
 }
