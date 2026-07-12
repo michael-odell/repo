@@ -306,13 +306,13 @@ func (x *run) resolveRemotes() (origin, upstream string, ok bool) {
 	if x.r.Fork != nil {
 		originID = *x.r.Fork
 	}
-	u, err := x.reg.PhysicalID(originID, x.r.Tags)
+	u, err := x.reg.PhysicalID(originID, x.r.Roots)
 	if err != nil {
 		x.fail(err)
 		return "", "", false
 	}
 	if x.r.Fork != nil {
-		if up, err := x.reg.PhysicalID(x.r.ID, x.r.Tags); err == nil {
+		if up, err := x.reg.PhysicalID(x.r.ID, x.r.Roots); err == nil {
 			upstream = up
 		}
 	}
@@ -344,7 +344,7 @@ func (x *run) provision() bool {
 		if x.r.Fork != nil {
 			originID = *x.r.Fork
 		}
-		u, err := x.reg.PhysicalID(originID, x.r.Tags)
+		u, err := x.reg.PhysicalID(originID, x.r.Roots)
 		if err != nil {
 			x.fail(err)
 			return false
@@ -377,7 +377,7 @@ func (x *run) provision() bool {
 			x.add("set origin = %s", originURL)
 		}
 		if x.r.Fork != nil {
-			if up, err := x.reg.PhysicalID(x.r.ID, x.r.Tags); err == nil {
+			if up, err := x.reg.PhysicalID(x.r.ID, x.r.Roots); err == nil {
 				if changed, _ := gitx.EnsureRemote(x.container, "upstream", up); changed {
 					x.add("set upstream = %s", up)
 				}

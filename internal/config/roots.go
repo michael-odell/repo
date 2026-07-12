@@ -1,40 +1,54 @@
 package config
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
-// DeclaredRoots returns the [[root]] entries from the registry fragments.
-func (reg *Registry) DeclaredRoots() []Root { return reg.roots }
+// ScanRoot is a discovery location: a directory to walk and the root name whose
+// settings its repos inherit.
+type ScanRoot struct {
+	Name string
+	Dir  string
+}
 
-// HomeRoots returns the unique home_root values worth scanning, used as a
-// discovery fallback when no [[root]] entries are configured. It unions the
-// effective default home_root (so ~/src is scanned even when every declared
-// repo overrides it via a tag), every tag's home_root, and every declared
-// repo's home_root — so a location is discovered even before it holds a repo
-// the registry names.
-func (reg *Registry) HomeRoots() []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(root string) {
-		if root != "" && !seen[root] {
-			seen[root] = true
-			out = append(out, root)
+// ScanRoots returns the directories worth walking for discovery: every declared
+// [root.*]'s `dir`, sorted by name. These are the scan set (DESIGN §3.2); a
+// discovered repo inherits from whichever root's `dir` is the deepest prefix of
+// its path.
+func (reg *Registry) ScanRoots() []ScanRoot {
+	names := make([]string, 0, len(reg.roots))
+	for n := range reg.roots {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]ScanRoot, 0, len(names))
+	for _, n := range names {
+		if dir := reg.roots[n].Dir; dir != "" {
+			out = append(out, ScanRoot{Name: n, Dir: dir})
 		}
-	}
-
-	add(strOr(reg.defaults.HomeRoot, builtinDefaults.HomeRoot))
-	for _, t := range reg.tags {
-		if t.HomeRoot != nil {
-			add(*t.HomeRoot)
-		}
-	}
-	repos, err := reg.Repos()
-	if err != nil {
-		return out
-	}
-	for _, r := range repos {
-		add(r.HomeRoot)
 	}
 	return out
+}
+
+// RootFor returns the name of the root whose `dir` is the deepest path-prefix of
+// dir, and the ordered inheritance chain (shallowest → deepest) for a repo found
+// there — used to resolve a discovered repo's settings. The name is "" when no
+// root covers the path.
+func (reg *Registry) RootFor(dir string) (name string, chain []string) {
+	target := expandHome(dir)
+	for n, r := range reg.roots {
+		if r.Dir != "" && pathHasPrefix(target, expandHome(r.Dir)) {
+			chain = append(chain, n)
+		}
+	}
+	sort.Slice(chain, func(i, j int) bool {
+		return len(expandHome(reg.roots[chain[i]].Dir)) < len(expandHome(reg.roots[chain[j]].Dir))
+	})
+	if len(chain) > 0 {
+		name = chain[len(chain)-1] // deepest prefix
+	}
+	return name, chain
 }
 
 // HostKeyForURL returns the [hosts.*] key whose base contains the given remote

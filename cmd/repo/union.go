@@ -69,9 +69,7 @@ func discoveredRepo(f discover.Found) model.Repo {
 			break
 		}
 	}
-	if f.Tag != "" {
-		r.Tags = []string{f.Tag}
-	}
+	r.Roots = f.Roots
 	if b, err := gitx.CurrentBranch(f.Dir); err == nil && b != "" {
 		r.Branches = []string{b}
 	}

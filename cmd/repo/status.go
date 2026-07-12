@@ -15,26 +15,19 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
-// resolveRoots picks discovery roots: REPO_ROOTS env, else [[root]] entries,
-// else the registry's home_roots (DESIGN §3.2).
-func resolveRoots(reg *config.Registry) []config.Root {
+// resolveRoots picks discovery roots: the REPO_ROOTS env override if set, else
+// the registry's declared [root.*] dirs (DESIGN §3.2).
+func resolveRoots(reg *config.Registry) []config.ScanRoot {
 	if v := os.Getenv("REPO_ROOTS"); v != "" {
-		var rs []config.Root
+		var rs []config.ScanRoot
 		for _, p := range filepath.SplitList(v) {
 			if p != "" {
-				rs = append(rs, config.Root{Path: p})
+				rs = append(rs, config.ScanRoot{Dir: p})
 			}
 		}
 		return rs
 	}
-	if dr := reg.DeclaredRoots(); len(dr) > 0 {
-		return dr
-	}
-	var rs []config.Root
-	for _, h := range reg.HomeRoots() {
-		rs = append(rs, config.Root{Path: h})
-	}
-	return rs
+	return reg.ScanRoots()
 }
 
 type observation struct {

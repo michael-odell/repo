@@ -16,7 +16,8 @@ and augmented by what is discovered on disk.
 The zsh plugin handling and an ad-hoc `wd-repos-update` script are the two existing
 special cases this generalises. Success criterion: promoting the zsh plugins into
 the registry makes `plugins-update` shrink to a one-line delegation, and
-`wd-repos-update` disappears into `repo sync --tag work`, with no lost behaviour.
+`wd-repos-update` disappears into `repo sync work` (the `work` root), with no lost
+behaviour.
 
 ## 2. Principles
 
@@ -76,19 +77,22 @@ union of:
 
 - **Declared** repos (in config): must be provisioned on a fresh machine, or need
   non-default metadata (special branches, hooks, workflow override).
-- **Discovered** repos (on disk): anything found under a known root (`REPO_ROOTS`,
-  a path-style var defaulting from `home_root`s) is trusted as desired.
+- **Discovered** repos (on disk): anything found under a configured root's `dir`
+  (the roots' `dir`s are the scan set; `REPO_ROOTS` remains an optional env
+  override) is trusted as desired.
 
 A discovered repo needs essentially zero config because a clone already carries most
 of what the registry would state:
 
 - **identity** ← its `origin` remote;
-- **tag / home** ← which root it sits under (`~/wd/...` → `work`);
+- **root / settings** ← the root whose `dir` is the deepest prefix of its path
+  (`~/contrib/...` → the `contrib` root's settings);
 - **workflow** ← inferred from remotes (`origin` only → `upstream-push`;
-  `origin`+`upstream` → `fork-pr`). Config only *overrides* inference.
+  `origin`+`upstream` → `fork-pr`; `origin`+`untrusted` → `supply-chain-mirror`,
+  §3.6). Config only *overrides* inference.
 
 So ordinary cloning stays toil-free: `git clone` (or `repo clone <url>`, a thin
-convenience that places it per tag/org defaults) and never edit config. `sync` /
+convenience that places it per root/owner defaults) and never edit config. `sync` /
 `status` operate over the union, so the operational list is complete without the
 config file being hand-maintained. `repo scan --record` reconciles disk→config on
 demand when an authoritative list is wanted.
@@ -102,31 +106,94 @@ field), not a collision. `host` keys (`github`, `ghe`, `gogsprod`, …) are defi
 once in `[hosts.*]`, so the same identity resolves to different physical hosts per
 machine without changing identity.
 
-### 3.4 Tags carry configuration
+### 3.4 Roots carry configuration
 
-Tags are config-bearing, not just selectors. Precedence: `[defaults]` → each
-`[tag.*]` the repo lists (in order) → the `[[repo]]` itself. **Tags and workflows
-are orthogonal:** the `zsh-plugin` tag groups repos and sets sync scope, but
-`workflow` is per-repo — some `zsh-plugin` repos are third-party
-`supply-chain-mirror`s, others are your own `upstream-push`/`fork-pr` code.
+Configuration attaches to **roots**, not tags. A root is a named directory node —
+`[root.<name>]` with a `dir` — that carries any part of the settings bundle
+(`layout`, `worktrees`, `branches`, `workflow`, `on_rewrite`, `prune`, `host`,
+`pin`, `hooks`, `fork_owner`). Settings flow *down the directory tree*: roots are
+ordered by `dir` prefix, and a repo inherits
+
+    [defaults] → every root whose `dir` is a prefix of the repo's path
+                 (shallowest → deepest) → the repo entry
+
+with the longest matching prefix winning per field. A nested root
+(`dir = "~/contrib/prometheus"` under `dir = "~/contrib"`) therefore overrides its
+parent for that subtree — the per-org override case — with no new mechanism.
+`home_root` is gone: a root's `dir` *is* its home. The standalone tag namespace and
+`[[root]]`-with-tag are gone, and `REPO_ROOTS` is obviated (the roots' `dir`s are
+the scan set), though it remains an optional env override.
+
+A root holds its declared members as two child collections, and **containment
+expresses membership** (no back-reference field):
+
+- `repos` — an array of bare `host:owner/name` id strings. The common case: one
+  line per repo, every setting inherited from the root. Adding a normal repo is a
+  one-line edit.
+- `[[root.<name>.repo]]` — tables for the exceptions, carrying *only* the
+  irreducible fields (a `workflow` that can't yet be detected, a non-default
+  `branches`, an off-pattern `fork`). Everything derivable is still derived.
+
+Both are for *declared* repos (provisioning + annotation). A repo already on disk
+is picked up by prefix-match with **no** entry (§3.2), so the lists hold what you
+want *provisioned*, not an inventory to hand-maintain.
+
+Selection for `sync`/`status` is by location, not tag: a root name, a path, or a
+single repo (§7). Cross-cutting grouping is deliberately dropped — directory-scoped
+sweeps (a whole root, an org subdir, one repo) cover it, and `sync` is idempotent
+and cheap enough that broader-than-needed is never harmful.
 
 ### 3.5 Layout: two orthogonal axes
 
-- **`layout`** = `flat` (`~/src/<repo>`) | `owner` (`~/wd/<owner>/<repo>`).
+- **`layout`** = `flat` (`<dir>/<repo>`) | `owner` (`<dir>/<owner>/<repo>`).
 - **`worktrees`** = bool. `false` → the container dir is a single working tree.
   `true` → bare repo + one worktree per important branch (§4).
 
+A repo's container is therefore a pure function of its root's `dir`, its effective
+`layout`, and its identity — so a repo found at the *wrong* path (flat where the
+root says `owner`, or under the wrong root) is just another config↔disk mismatch,
+reconciled by `--fix` (§4.1).
+
 ### 3.6 Workflows
 
-| workflow               | origin / upstream                                | intent |
-|------------------------|--------------------------------------------------|--------|
-| `upstream-push`        | origin = definitive                              | push branches straight to origin |
-| `fork-pr`              | origin = your fork, upstream = definitive        | push to fork, PR to upstream |
-| `supply-chain-mirror`  | origin = your safety fork, upstream = definitive | track upstream but advance only after **review** (§5.4) |
-| `vendor`               | origin = definitive (read-only), pinned          | pulled to match a `pin`; never pushed |
+Each workflow defines a **remote contract**: the named remotes it *manages* and
+their required targets. `--fix` reconciles only those names; any *other* remote you
+add (`backup`, a colleague's fork, …) is left untouched.
+
+| workflow               | managed remotes                           | negative      | intent |
+|------------------------|-------------------------------------------|---------------|--------|
+| `upstream-push`        | `origin` = definitive                     | —             | push branches straight to origin |
+| `fork-pr`              | `origin` = fork, `upstream` = definitive  | —             | push to fork, PR to upstream |
+| `supply-chain-mirror`  | `origin` = fork, `untrusted` = definitive | no `upstream` | track the untrusted source but advance only after **review** (§5.4) |
+| `vendor`               | `origin` = definitive (read-only), pinned | —             | pulled to match a `pin`; never pushed |
+
+`supply-chain-mirror` names the definitive source `untrusted`, not `upstream`. It is
+self-documenting at the git level (the source is not to be auto-advanced) and it
+makes the workflow **detectable from remotes** — `origin`+`upstream` → `fork-pr`,
+`origin`+`untrusted` → `supply-chain-mirror`. So config is needed to *establish* a
+mirror (provision the clone, set up `untrusted`, hold the gate); once the remote
+exists, detection *maintains* it and the config line is redundant-but-harmless.
+`--fix` on a `fork-pr` clone being hardened into a mirror renames `upstream` →
+`untrusted`.
 
 `pin` (vendor only): a branch (fast-forward), an explicit tag (checkout), or
 `latest-tag` (re-resolve highest semver each run).
+
+**Fork resolution.** A `fork` is two things, resolved separately from workflow:
+
+1. `fork` — a per-repo full identity (`github:michael-odell/powerlevel10k`), the
+   exception field for an off-pattern fork (renamed, or under a different org).
+2. `fork_owner` — an inheritable `host:owner` (`[defaults]`/`[root.*]`) from which a
+   fork is *derived*: `fork = <fork_owner>/<identity.name>`.
+
+Order matters. **Workflow is resolved first and independently** — explicit repo →
+root → remote-inference → default — and only *then*, if the chosen workflow needs a
+fork (`fork-pr`, `supply-chain-mirror`), is the fork resolved: explicit `fork` →
+else derive from the effective `fork_owner` → else a config error. An *explicit*
+per-repo `fork` may imply `fork-pr`, but an ambient `fork_owner` never does —
+otherwise setting `fork_owner` at a root would turn every `upstream-push` repo under
+it into a fork-pr. `fork_owner` only *supplies* a fork the workflow already
+requires.
 
 ### 3.7 Registry composition (and keeping private repos private)
 
@@ -138,13 +205,14 @@ dotfiles:
 - Public dotfiles ship only the mechanism + your public repos.
 - A company-specific zsh plugin (which already assists bootstrap) contributes a
   **private fragment** — living in that plugin's own repo or a local-only path — by
-  appending to `REPO_REGISTRY_PATH`, and/or adds a company source dir to
-  `REPO_ROOTS`. `[hosts.*]`, tags, and defaults may all come from the fragment.
+  appending to `REPO_REGISTRY_PATH`. `[hosts.*]`, roots (with their `dir`), and
+  defaults may all come from the fragment; because a root's `dir` is a *value*, the
+  fragment can even redefine a public root's location for this machine.
 - No private references (not even the host) touch the public repo. Combined with
   disk-discovery (§3.2), the private machine's repos can be *purely discovered* under
-  a plugin-registered root with the fragment supplying only defaults — so no private
-  repo name is written down anywhere. Generated artifacts contain private paths but
-  live in the uncommitted state dir (§6), so nothing leaks.
+  a fragment-supplied root — so no private repo name is written down anywhere.
+  Generated artifacts contain private paths but live in the uncommitted state dir
+  (§6), so nothing leaks.
 
 The artifact staleness hash (§6) must cover *all* contributing fragments + the disk
 scan, not a single file.
@@ -155,59 +223,66 @@ scan, not a single file.
 # a fragment on REPO_REGISTRY_PATH (e.g. ~/.config/repo/registry.toml) — public base
 
 [defaults]
-home_root  = "~/src"
-layout       = "flat"
 worktrees  = false
 branches   = ["main"]
-on_rewrite = "stop"      # stop | follow  (§5.2)
-prune      = "auto"      # auto | report | manual  (§5.3)
+on_rewrite = "stop"        # stop | follow  (§5.2)
+prune      = "auto"        # auto | report | manual  (§5.3)
+host       = "github"      # default host for bare-name clones
+fork_owner = "github:michael-odell"   # forks derive here unless overridden
 
 [hosts.github]
 base = "git@github.com:"
 [hosts.ghe]
 base = "git@ghe.example.com:"
 
-[tag.work]
-home_root = "~/wd"
-layout      = "owner"      # ~/wd/<owner>/<repo>
-host      = "ghe"
-worktrees = true
+# ── roots: named directory nodes; settings inherit down the tree by `dir` prefix ──
 
-[tag.zsh-plugin]
-home_root = "~/.zsh/plugins"
-layout      = "flat"
-
-# third-party plugin: supply-chain-mirror (review-gated)
-[[repo]]
-id       = "github:romkatv/powerlevel10k"
-fork     = "github:michael-odell/powerlevel10k"
-tags     = ["zsh-plugin"]
-workflow = "supply-chain-mirror"
-branches = ["master"]
-
-# my own plugin: a normal repo I work on
-[[repo]]
-id       = "github:michael-odell/zsh-history"
-tags     = ["zsh-plugin"]
+[root.src]
+dir      = "~/src"
+layout   = "flat"          # ~/src/<repo>
 workflow = "upstream-push"
+repos = [                   # normal repos: one line each, everything inherited
+  "github:michael-odell/repo",
+  "github:michael-odell/homelab",
+]
 
-# work repo: fork-pr, owner-nested worktrees, helm hook
-[[repo]]
-id       = "ghe:cban-ops/pt-helm"
-fork     = "ghe:michael-odell/pt-helm"
-tags     = ["work"]
-workflow = "fork-pr"
-branches = ["main", "release"]
-hooks    = [ { after = "fetch", run = "helm dep update ." } ]
+[root.contrib]
+dir      = "~/contrib"
+layout   = "owner"         # ~/contrib/<owner>/<repo>
+workflow = "vendor"
+pin      = "latest-tag"
+repos = [
+  "github:prometheus/prometheus",
+]
 
-# vendored, pinned to latest tag, read-only
-[[repo]]
-id        = "github:prometheus/prometheus"
-tags      = ["vendor"]
-workflow  = "vendor"
-pin       = "latest-tag"
-home_root = "~/vendor"
-layout      = "owner"
+[root.plugins]
+dir    = "~/.zsh/plugins"
+layout = "flat"
+repos = [
+  "github:michael-odell/zsh-history",   # own plugin: upstream-push, fork derived
+]
+
+# exception under the plugins root — only the irreducible facts; containment sets
+# membership, and location/host/layout/fork are inherited or derived
+[[root.plugins.repo]]
+id       = "github:romkatv/powerlevel10k"
+workflow = "supply-chain-mirror"        # undetectable until the untrusted remote exists
+branches = ["master"]
+# fork → derived github:michael-odell/powerlevel10k
+
+# a work root — owner-nested worktrees, ghe host — typically contributed by a
+# private fragment on the work machine (§3.7):
+#   [root.work]
+#   dir        = "~/wd"
+#   host       = "ghe"
+#   layout     = "owner"
+#   worktrees  = true
+#   branches   = ["main", "release"]
+#   fork_owner = "ghe:michael-odell"
+#
+#   [[root.work.repo]]
+#   id    = "ghe:cban-ops/pt-helm"       # fork-pr inferred from remotes; fork derived
+#   hooks = [ { after = "fetch", run = "helm dep update ." } ]
 ```
 
 ```toml
@@ -221,8 +296,8 @@ apply_to = "*"
 ```
 
 Resolution rule: `overrides[id]` → else `via + owner/repo` if matched by
-`apply_to` → else `hosts[id.host].base + owner/repo`. (`via` avoids the word
-"mirror", which is reserved for the workflow.)
+`apply_to` (root names or `*`) → else `hosts[id.host].base + owner/repo`. (`via`
+avoids the word "mirror", which is reserved for the workflow.)
 
 ## 4. On-disk layouts
 
@@ -255,20 +330,31 @@ with the source of truth; work happens on ad-hoc worktrees. `repo home pt-helm` 
 `main/` (worktree of `branches[0]`). `worktrees = false` collapses to a single
 working tree at the container path.
 
-### 4.1 Layout mismatch and `sync --fix-layout`
+### 4.1 Config↔disk mismatch and `sync --fix`
 
-A container's on-disk layout can disagree with its config: a single working tree
-where `worktrees = true`, or a bare+worktree parent where `worktrees = false`.
-`sync` classifies the layout by whether git sees a working tree at the container
-root (`rev-parse --is-bare-repository` — a normal clone reports `false`, a
-bare+worktree parent whose `.git` file points at `.bare` reports `true`) and
-compares it to config. On a mismatch it reconciles the repo *as far as the
-on-disk shape allows* — so data still flows — but **never reorganizes a directory
-on its own**: it surfaces `run: sync --fix-layout`.
+A container can disagree with its config three ways, and `--fix` reconciles all
+three. **`sync` always detects and reports; `--fix` only applies what `sync`
+already surfaced** — nothing is found only under `--fix`.
 
-`sync --fix-layout` performs the conversion, but only **after** the normal sync
-has pushed/fetched, so committed history is safe on the remote before any
-directory is touched. Directory delete/recreate is expected (a shell or editor
+- **Layout shape** — a single working tree where `worktrees = true`, or a
+  bare+worktree parent where `worktrees = false`. `sync` classifies by whether git
+  sees a working tree at the container root (`rev-parse --is-bare-repository` — a
+  normal clone reports `false`, a bare+worktree parent whose `.git` file points at
+  `.bare` reports `true`).
+- **Remotes** — the managed remotes don't match the workflow's contract (§3.6): a
+  `fork-pr` clone missing `upstream`, a `supply-chain-mirror` still on `upstream`
+  instead of `untrusted`, an `origin` pointing at the wrong place. `--fix`
+  reconciles *only* the managed names and never deletes an unmanaged remote.
+- **Location** — the container sits at the wrong path for its root's `dir` +
+  `layout` + identity (flat where `owner` is configured, or under the wrong root).
+  `--fix` moves it.
+
+On a mismatch, plain `sync` reconciles *as far as the on-disk shape allows* — so
+data still flows — but **never reorganizes on its own**: it surfaces `run: sync
+--fix`. `sync --fix` performs the changes, but only **after** the normal sync has
+pushed/fetched, so committed history is safe on the remote before any directory or
+remote is touched. Remote reconciliation is a metadata change (low risk); a
+directory move or layout conversion delete/recreates paths (a shell or editor
 `cd`'d into a converting repo will break; this is not separately warned).
 
 Data-safety rules, in priority order:
@@ -310,7 +396,7 @@ prune, tags) → **update important branches** (per workflow) → **run hooks** 
 |-----------------------|-------------------------|---------------|------------------|
 | `upstream-push`       | `origin/<branch>`       | fast-forward only | ahead → *N unpushed*; diverged → skip+report |
 | `fork-pr`             | `upstream/<branch>`     | FF to upstream, then push to origin (fork); via `gh repo sync` when available | local commits on important branch → report; fork push not FF → skip+report |
-| `supply-chain-mirror` | `upstream/<branch>`     | fetch only; **do not advance**; flag "upstream +N, review pending" | advancing gated on `repo review` |
+| `supply-chain-mirror` | `untrusted/<branch>`    | fetch only; **do not advance**; flag "untrusted +N, review pending" | advancing gated on `repo review` |
 | `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → *"consider changing workflow"* |
 
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
@@ -318,7 +404,7 @@ dirty — computed live via `rev-list`.
 
 ### 5.2 History rewrites — follow, but always surface
 
-Per repo/tag/branch `on_rewrite`:
+Per repo/root/branch `on_rewrite`:
 
 - **`stop` (default)** — a non-fast-forward on an important branch, or a moved tag,
   is skipped and surfaced prominently. Right default for supply-chain safety.
@@ -334,7 +420,7 @@ Applies to tags too — a `vendor` pinned tag whose content moves is a rewrite
 ### 5.3 Prune — three tiers (rebase/squash aware)
 
 `git branch --merged` is unreliable where the merge strategy is squash or rebase, so
-prune is tiered. Per repo/tag/global `prune`:
+prune is tiered. Per repo/root/global `prune`:
 
 - **confirmed merged** (true ancestor / patch-id match) **and clean** → auto-pruned
   (`auto` default). Reclaims branches that went nowhere.
@@ -351,9 +437,10 @@ worktree.
 ### 5.4 The `supply-chain-mirror` review gate
 
 Periodic sync always *fetches* (all workflows) and *flags* mirror repos whose
-upstream advanced, but does not advance the mirror or the local clone past the last
-reviewed point. `repo review <repo>` shows the upstream diff over the current mirror
-point and, on approval, pushes to the fork and fast-forwards the local clone.
+`untrusted` source advanced, but does not advance the mirror or the local clone past
+the last reviewed point. `repo review <repo>` shows the `untrusted` diff over the
+current mirror point and, on approval, pushes to the fork and fast-forwards the local
+clone.
 Trusted workflows (`upstream-push`, `fork-pr`, `vendor`) auto-advance; only
 `supply-chain-mirror` waits for review. This is **trigger-independent**: the startup
 if-due run is not a weaker mode — it does full writes (including fork pushes; it
@@ -362,7 +449,7 @@ already holds pull creds) — but the review gate holds regardless of trigger.
 ### 5.5 Cadence and trigger
 
 Reuses the existing `PLUGIN_UPDATE_FREQUENCY` + `older-than` + timestamp-file
-pattern. Global `sync.frequency`, per-tag/per-repo override, `--force` to ignore.
+pattern. Global `sync.frequency`, per-root/per-repo override, `--force` to ignore.
 Per principle 2, the shell *invokes* `repo sync --if-due` when the binary is present
 (a cheap timestamp no-op most days; may run backgrounded after the prompt); this is
 maintenance, distinct from config loading, which only ever reads artifacts. After
@@ -385,7 +472,7 @@ repo sync — 12 repos, 3 due
       ? hotfix-2      deleted upstream, merge unconfirmed — confirm? (repo prune)
   ⚠ charts           main rewritten (a1b→9f3) — stopped (on_rewrite=stop)
   ⏸ prometheus       vendor v2.50.1 → v2.51.0
-  ⚑ fast-syntax-hl   upstream +2 — review pending (repo review fast-syntax-hl)
+  ⚑ fast-syntax-hl   untrusted +2 — review pending (repo review fast-syntax-hl)
   ✗ idx-svc          fetch failed: host unreachable
 ```
 
@@ -450,10 +537,13 @@ binary", which is exactly the shim's job.
 
 CLI (initial):
 
-- `repo sync [--tag T | <name>] [--if-due] [--force] [-n]` — the engine above.
+- `repo sync [<root> | <path> | <name>] [--if-due] [--force] [--fix] [-n]` — the
+  engine above; the positional arg scopes the sweep to a root, a path subtree, or a
+  single repo. `--fix` applies the config↔disk reconciliations `sync` surfaces (§4.1).
 - `repo status` — drift sweep, no updates.
 - `repo apply` — regenerate artifacts from registry + overlay + disk scan.
-- `repo clone <url> [--tag T]` — low-toil clone into the right place.
+- `repo clone <url> [<root>]` — low-toil clone into the right place (root or,
+  omitted, inferred from the url's owner/host against the configured roots).
 - `repo scan [--record]` — discover on-disk repos; optionally reconcile into config.
 - `repo home <name[@branch]>` / `repo path <name> <rel>` — navigation primitives.
 - `repo prune` — explicit/confirmation prune sweep.
@@ -463,11 +553,11 @@ CLI (initial):
 ## 8. Strangulation / migration order
 
 1. **Plugins first** (smallest, best understood): `plugins-update` →
-   `repo sync --tag zsh-plugin` when `repo` present, pure-shell floor otherwise.
-   Behaviour upgrades: `supply-chain-mirror` plugins gain the review gate.
+   `repo sync plugins` (the `plugins` root) when `repo` present, pure-shell floor
+   otherwise. Behaviour upgrades: `supply-chain-mirror` plugins gain the review gate.
 2. **Status sweep** → `repo status` (proves discovery + live observed-state).
-3. **`wd-repos-update`** → `repo sync --tag work` (proves hooks + fork/upstream
-   flows; fixes the die-on-first-failure pain).
+3. **`wd-repos-update`** → `repo sync work` (proves hooks + fork/upstream flows;
+   fixes the die-on-first-failure pain).
 
 Source-folding and disk-discovery are threaded through from the start (they touch the
 schema, not a late add).
@@ -494,4 +584,14 @@ own repo (§7); rewrite following via `on_rewrite`; prune is three-tiered and
 rebase/squash-aware (§5.3); the mirror workflow is `supply-chain-mirror` and the
 resolution key is `via` (no naming collision); artifacts live in `~/.local/repo`,
 sourced by committed files (§6); fork-pr pushes on the if-due run; latest-tag vendor
-auto-advances while moved tags still trip `on_rewrite`.
+auto-advances while moved tags still trip `on_rewrite`. **Configuration attaches to
+named roots, not tags (§3.4):** a root is a `[root.<name>]` directory node with a
+`dir` value, carrying the full settings bundle; settings inherit down the tree by
+`dir` prefix; members nest under the root (`repos` bare-id array for the common case,
+`[[root.<name>.repo]]` tables for exceptions), so containment expresses membership
+and `home_root`/tags/`[[root]]`/`REPO_ROOTS` all fall away. Fork is split into a
+per-repo `fork` and an inheritable `fork_owner` that derives it, with workflow
+resolved before (and independently of) fork (§3.6). `supply-chain-mirror` uses an
+`untrusted` remote (self-documenting + detectable). `--fix-layout` generalises to
+`--fix`, reconciling layout shape, remotes, and location, always reporting first
+(§4.1). Cross-cutting tag selection is dropped in favour of location-scoped sweeps.

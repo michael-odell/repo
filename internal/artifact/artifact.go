@@ -17,7 +17,10 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
-const zshPluginTag = "zsh-plugin"
+// pluginRoot is the root name whose members are emitted as zsh plugins into
+// plugins.zsh. TODO(design): make plugin emission an explicit root/repo attribute
+// rather than a hardcoded root name.
+const pluginRoot = "plugins"
 
 // entry is a unified view of a repo (declared or discovered) for emission.
 type entry struct {
@@ -70,7 +73,7 @@ func build(reg *config.Registry, repos []model.Repo, found []discover.Found) []e
 				e.worktrees[b] = r.WorktreePath(b)
 			}
 		}
-		if hasTag(r.Tags, zshPluginTag) {
+		if hasRoot(r.Roots, pluginRoot) {
 			// Plugins clone from origin: the fork when present (supply-chain
 			// mirror / fork-pr), otherwise the definitive identity.
 			origin := r
@@ -165,9 +168,9 @@ func header(body string) string {
 
 func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"` }
 
-func hasTag(tags []string, want string) bool {
-	for _, t := range tags {
-		if t == want {
+func hasRoot(roots []string, want string) bool {
+	for _, r := range roots {
+		if r == want {
 			return true
 		}
 	}

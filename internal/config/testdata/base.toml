@@ -1,44 +1,39 @@
 # Public base fragment (mirrors DESIGN §3.8).
 
 [defaults]
-home_root  = "~/src"
-layout       = "flat"
 worktrees  = false
 branches   = ["main"]
 on_rewrite = "stop"
 prune      = "auto"
+host       = "github"
 
 [hosts.github]
 base = "git@github.com:"
 [hosts.ghe]
 base = "git@ghe.example.com:"
 
-[tag.work]
-home_root = "~/wd"
-layout      = "owner"
-host      = "ghe"
-worktrees = true
+[root.work]
+dir        = "~/wd"
+host       = "ghe"
+layout     = "owner"
+worktrees  = true
+fork_owner = "ghe:michael-odell"
 
-[tag.zsh-plugin]
-home_root = "~/.zsh/plugins"
-layout      = "flat"
-
-[[repo]]
-id       = "github:romkatv/powerlevel10k"
-fork     = "github:michael-odell/powerlevel10k"
-tags     = ["zsh-plugin"]
-workflow = "supply-chain-mirror"
-branches = ["master"]
-
-[[repo]]
-id       = "github:michael-odell/zsh-history"
-tags     = ["zsh-plugin"]
-workflow = "upstream-push"
-
-[[repo]]
+[[root.work.repo]]
 id       = "ghe:cban-ops/pt-helm"
-fork     = "ghe:michael-odell/pt-helm"
-tags     = ["work"]
 workflow = "fork-pr"
 branches = ["main", "release"]
 hooks    = [ { after = "fetch", run = "helm dep update ." } ]
+
+[root.plugins]
+dir    = "~/.zsh/plugins"
+layout = "flat"
+repos = [
+  "github:michael-odell/zsh-history",   # own plugin: upstream-push, no fork
+]
+
+[[root.plugins.repo]]
+id       = "github:romkatv/powerlevel10k"
+fork     = "github:michael-odell/powerlevel10k"
+workflow = "supply-chain-mirror"
+branches = ["master"]

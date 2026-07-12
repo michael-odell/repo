@@ -53,12 +53,13 @@ func TestForkPRFastForwardsUpstreamAndPushesFork(t *testing.T) {
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
 id = "local:up/proj"
 fork = "local:fork/proj"
 workflow = "fork-pr"
 branches = ["main"]
-home_root = "`+filepath.Join(T, "clones")+`"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})
@@ -105,12 +106,13 @@ func TestVendorLatestTagChecksOutHighest(t *testing.T) {
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+layout = "owner"
+[[root.clones.repo]]
 id = "local:acme/lib"
 workflow = "vendor"
 pin = "latest-tag"
-home_root = "`+filepath.Join(T, "clones")+`"
-layout = "owner"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})

@@ -38,7 +38,14 @@ func loadRegistry() (*config.Registry, error) {
 		}
 		paths = existing
 	}
-	return config.Load(paths)
+	reg, err := config.Load(paths)
+	if err != nil {
+		return nil, err
+	}
+	if err := reg.Validate(); err != nil {
+		return nil, err
+	}
+	return reg, nil
 }
 
 func cmdList(_ context.Context, _ []string) error {

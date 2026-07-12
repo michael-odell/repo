@@ -42,7 +42,11 @@ func TestInheritance(t *testing.T) {
 
 	pt := repoByShort(t, reg, "pt-helm")
 	if pt.HomeRoot != "~/wd" || pt.Layout != model.LayoutOwner || !pt.Worktrees {
-		t.Errorf("pt-helm inherited wrong from tag work: %+v", pt)
+		t.Errorf("pt-helm inherited wrong from root work: %+v", pt)
+	}
+	// fork was derived from the work root's fork_owner, not stated on the repo.
+	if pt.Fork == nil || pt.Fork.String() != "ghe:michael-odell/pt-helm" {
+		t.Errorf("pt-helm derived fork = %v, want ghe:michael-odell/pt-helm", pt.Fork)
 	}
 	if pt.Workflow != model.ForkPR {
 		t.Errorf("pt-helm workflow = %q, want fork-pr", pt.Workflow)
@@ -108,6 +112,85 @@ func TestPhysicalWithFold(t *testing.T) {
 	}
 	if want := "git@gogsprod.example.com:team/pt-helm"; got != want {
 		t.Errorf("override Physical = %q, want %q", got, want)
+	}
+}
+
+func TestUnknownKeysRejected(t *testing.T) {
+	dir := t.TempDir()
+	// The pre-pivot schema: home_root/tags/[[repo]] no longer exist.
+	writeTOML(t, dir, `
+[defaults]
+home_root = "~/src"
+[[repo]]
+id = "github:me/x"
+tags = ["work"]
+`)
+	_, err := Load([]string{dir})
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("want unknown-key error, got %v", err)
+	}
+	for _, want := range []string{"defaults.home_root", "repo", "repo.tags"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should name %q; got %v", want, err)
+		}
+	}
+}
+
+func TestValidateSemantics(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.bad]
+dir = "~/bad"
+workflow = "teleport"
+
+[[root.bad.repo]]
+id = "github:me/x"
+
+[root.nodir]
+layout = "flat"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil {
+		t.Fatal("want validation error, got nil")
+	}
+	for _, want := range []string{`workflow = "teleport"`, `root "nodir": missing`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("validation error should mention %q; got:\n%v", want, err)
+		}
+	}
+}
+
+func TestForkOwnerRequiredWhenWorkflowNeedsFork(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+[root.r]
+dir = "~/r"
+[[root.r.repo]]
+id = "github:me/x"
+workflow = "fork-pr"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, err := reg.Repos(); err == nil || !strings.Contains(err.Error(), "fork_owner") {
+		t.Fatalf("want fork_owner error, got %v", err)
+	}
+}
+
+func writeTOML(t *testing.T, dir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "f.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

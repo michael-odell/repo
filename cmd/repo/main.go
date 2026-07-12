@@ -39,9 +39,9 @@ var commands = []command{
 	{name: "clone", summary: "clone a repo into its configured location", run: notImplemented,
 		help: "usage: repo clone <url|id>"},
 	{name: "scan", summary: "discover on-disk repos", run: cmdScan,
-		help: "usage: repo scan\n\nWalk the discovery roots and list every git repo found, with its inferred id,\nworkflow, and tag."},
+		help: "usage: repo scan\n\nWalk the discovery roots and list every git repo found, with its inferred id,\nworkflow, and root."},
 	{name: "sync", summary: "reconcile repos toward the registry", run: cmdSync,
-		help: "usage: repo sync [flags] [repo...]\n\nReconcile the selected repos (all, or by --tag or name) toward the registry.\n\nflags:\n  --tag <tag>    limit to repos with this tag\n  --if-due       only sync repos whose cadence is due\n  --force        ignore cadence\n  -n, --dry-run  show planned actions without changing anything\n  -v, --verbose  explain the decision for every repo"},
+		help: "usage: repo sync [flags] [root|path|repo...]\n\nReconcile the selected repos toward the registry. With no selector, all repos\nare included; a selector may be a root name, a directory path, or a repo name.\n\nflags:\n  --if-due       only sync repos whose cadence is due\n  --force        ignore cadence\n  --fix          apply the config↔disk reconciliations sync reports\n  -n, --dry-run  show planned actions without changing anything\n  -v, --verbose  explain the decision for every repo"},
 	{name: "prune", summary: "prune stale local branches", run: notImplemented,
 		help: "usage: repo prune [repo...]"},
 	{name: "home", summary: "print the home path of a repo", run: notImplemented,
@@ -111,7 +111,7 @@ func usage(w io.Writer) {
 const environmentHelp = `
 environment:
   REPO_REGISTRY_PATH  registry fragment files/dirs to merge (default ~/.config/repo)
-  REPO_ROOTS          directories to scan for repos (default: the registry's home_roots)
+  REPO_ROOTS          override directories to scan for repos (default: the [root.*] dirs)
   REPO_OUT            where generated shell artifacts are written (default ~/.local/repo)
 `
 

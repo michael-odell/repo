@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -16,11 +17,10 @@ import (
 
 func cmdSync(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	tag := fs.String("tag", "", "limit to repos with this tag")
 	ifDue := fs.Bool("if-due", false, "only sync repos whose cadence is due")
 	force := fs.Bool("force", false, "ignore cadence")
-	fixLayout := fs.Bool("fix-layout", false, "convert a mismatched container to its configured layout (after syncing)")
-	loseIgnored := fs.Bool("lose-ignored", false, "with --fix-layout, discard .gitignore'd files without prompting")
+	fix := fs.Bool("fix", false, "apply the config↔disk reconciliations sync reports (after syncing)")
+	loseIgnored := fs.Bool("lose-ignored", false, "with --fix, discard .gitignore'd files without prompting")
 	var dryRun, dryRunN, verbose, verboseV bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show planned actions without changing anything")
 	fs.BoolVar(&dryRunN, "n", false, "alias for --dry-run")
@@ -38,7 +38,7 @@ func cmdSync(_ context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	selected, err := selectRepos(repos, *tag, fs.Args())
+	selected, err := selectRepos(repos, fs.Args())
 	if err != nil {
 		return err
 	}
@@ -51,7 +51,7 @@ func cmdSync(_ context.Context, args []string) error {
 		Verbose:     verbose || verboseV,
 		Force:       *force,
 		IfDue:       *ifDue,
-		FixLayout:   *fixLayout,
+		FixLayout:   *fix,
 		LoseIgnored: *loseIgnored,
 		Frequency:   7 * 24 * time.Hour,
 		StateDir:    filepath.Join(outDir(), "last-sync"),
@@ -66,31 +66,75 @@ func cmdSync(_ context.Context, args []string) error {
 	return nil
 }
 
-func selectRepos(repos []model.Repo, tag string, names []string) ([]model.Repo, error) {
-	if len(names) > 0 {
-		var out []model.Repo
-		for _, n := range names {
-			r, ok := find(repos, n)
-			if !ok {
-				return nil, fmt.Errorf("no repo matching %q", n)
-			}
-			out = append(out, r)
-		}
-		return out, nil
-	}
-	if tag == "" {
+// selectRepos scopes the sweep by the positional selectors (DESIGN §7). With no
+// selector, every repo is included. Each selector matches, in order of
+// preference: a root name (every repo in that root), a directory path (every repo
+// whose container is at or below it), or a single repo (id or short name).
+func selectRepos(repos []model.Repo, selectors []string) ([]model.Repo, error) {
+	if len(selectors) == 0 {
 		return repos, nil
 	}
 	var out []model.Repo
-	for _, r := range repos {
-		for _, t := range r.Tags {
-			if t == tag {
-				out = append(out, r)
-				break
-			}
+	seen := map[string]bool{}
+	addRepo := func(r model.Repo) {
+		key := r.Container()
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, r)
 		}
 	}
+	for _, sel := range selectors {
+		matched := false
+		for _, r := range repos {
+			if hasRootName(r.Roots, sel) {
+				addRepo(r)
+				matched = true
+			}
+		}
+		if matched {
+			continue
+		}
+		if path := expandPath(sel); strings.ContainsAny(sel, "/~") {
+			for _, r := range repos {
+				if pathAtOrBelow(r.Container(), path) {
+					addRepo(r)
+					matched = true
+				}
+			}
+			if matched {
+				continue
+			}
+		}
+		r, ok := find(repos, sel)
+		if !ok {
+			return nil, fmt.Errorf("no root, path, or repo matching %q", sel)
+		}
+		addRepo(r)
+	}
 	return out, nil
+}
+
+func hasRootName(roots []string, want string) bool {
+	for _, r := range roots {
+		if r == want {
+			return true
+		}
+	}
+	return false
+}
+
+func pathAtOrBelow(p, prefix string) bool {
+	p, prefix = filepath.Clean(p), filepath.Clean(prefix)
+	return p == prefix || strings.HasPrefix(p, prefix+string(filepath.Separator))
+}
+
+func expandPath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
 }
 
 func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {

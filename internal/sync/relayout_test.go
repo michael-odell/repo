@@ -55,13 +55,14 @@ func TestFixLayoutSingleToWorktreeIsLossless(t *testing.T) {
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.wd]
+dir = "`+filepath.Join(T, "wd")+`"
+layout = "owner"
+[[root.wd.repo]]
 id = "local:acme/svc"
 workflow = "upstream-push"
 worktrees = true
 branches = ["main", "release"]
-home_root = "`+filepath.Join(T, "wd")+`"
-layout = "owner"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})

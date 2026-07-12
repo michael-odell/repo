@@ -40,14 +40,15 @@ func TestWorktreeProvisionForkPR(t *testing.T) {
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.wd]
+dir = "`+filepath.Join(T, "wd")+`"
+layout = "owner"
+[[root.wd.repo]]
 id = "local:up/proj"
 fork = "local:fork/proj"
 workflow = "fork-pr"
 worktrees = true
 branches = ["main", "release"]
-home_root = "`+filepath.Join(T, "wd")+`"
-layout = "owner"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})
@@ -105,13 +106,14 @@ func TestLayoutMismatchSurfacesWithoutReorganizing(t *testing.T) {
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.wd]
+dir = "`+filepath.Join(T, "wd")+`"
+layout = "owner"
+[[root.wd.repo]]
 id = "local:up/proj"
 workflow = "upstream-push"
 worktrees = true
 branches = ["main"]
-home_root = "`+filepath.Join(T, "wd")+`"
-layout = "owner"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})

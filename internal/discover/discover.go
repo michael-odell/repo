@@ -26,15 +26,16 @@ type Found struct {
 	Dir      string
 	Remotes  map[string]string
 	Workflow string
-	Tag      string
-	Note     string // e.g. "no remote"
+	Root     string   // name of the deepest root whose dir contains it ("" if none)
+	Roots    []string // inheritance chain of root names
+	Note     string   // e.g. "no remote"
 }
 
-// Discover walks the roots and returns the repos found beneath them.
-func Discover(roots []config.Root, reg *config.Registry) ([]Found, error) {
+// Discover walks the scan roots and returns the repos found beneath them.
+func Discover(roots []config.ScanRoot, reg *config.Registry) ([]Found, error) {
 	var found []Found
 	for _, root := range roots {
-		base := expandHome(root.Path)
+		base := expandHome(root.Dir)
 		if _, err := os.Stat(base); err != nil {
 			continue // a configured root need not exist on every machine
 		}
@@ -49,7 +50,7 @@ func Discover(roots []config.Root, reg *config.Registry) ([]Found, error) {
 				return fs.SkipDir
 			}
 			if gitx.IsRepo(path) {
-				found = append(found, inspect(path, root.Tag, reg))
+				found = append(found, inspect(path, reg))
 				return fs.SkipDir // don't descend into a repo
 			}
 			return nil
@@ -61,8 +62,9 @@ func Discover(roots []config.Root, reg *config.Registry) ([]Found, error) {
 	return found, nil
 }
 
-func inspect(dir, tag string, reg *config.Registry) Found {
-	f := Found{Dir: dir, Tag: tag, Workflow: model.UpstreamPush}
+func inspect(dir string, reg *config.Registry) Found {
+	name, chain := reg.RootFor(dir)
+	f := Found{Dir: dir, Root: name, Roots: chain, Workflow: model.UpstreamPush}
 	remotes, err := gitx.Remotes(dir)
 	if err != nil || len(remotes) == 0 {
 		f.Note = "no remote"
@@ -76,7 +78,11 @@ func inspect(dir, tag string, reg *config.Registry) Found {
 			break
 		}
 	}
-	if _, ok := remotes["upstream"]; ok {
+	// Remote-inferred workflow: origin+upstream → fork-pr; origin+untrusted →
+	// supply-chain-mirror (its self-documenting remote name, DESIGN §3.6).
+	if _, ok := remotes["untrusted"]; ok {
+		f.Workflow = model.SupplyChainMirror
+	} else if _, ok := remotes["upstream"]; ok {
 		f.Workflow = model.ForkPR
 	}
 	if host, ownerRepo, err := ident.ParseRemoteURL(origin); err == nil {

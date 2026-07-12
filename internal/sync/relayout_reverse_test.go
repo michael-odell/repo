@@ -34,13 +34,14 @@ func setupWorktreeContainer(t *testing.T, T string, branches string) (container,
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.wd]
+dir = "`+filepath.Join(T, "wd")+`"
+layout = "owner"
+[[root.wd.repo]]
 id = "local:acme/svc"
 workflow = "upstream-push"
 worktrees = true
 branches = [`+branches+`]
-home_root = "`+filepath.Join(T, "wd")+`"
-layout = "owner"
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})
@@ -63,13 +64,14 @@ func reloadSingle(t *testing.T, T, regPath, remotes string, loseIgnored bool) Re
 	must(t, os.WriteFile(regPath, []byte(`
 [hosts.local]
 base = "`+remotes+`/"
-[[repo]]
+[root.wd]
+dir = "`+filepath.Join(T, "wd")+`"
+layout = "owner"
+[[root.wd.repo]]
 id = "local:acme/svc"
 workflow = "upstream-push"
 worktrees = false
 branches = ["main"]
-home_root = "`+filepath.Join(T, "wd")+`"
-layout = "owner"
 `), 0o644))
 	reg, err := config.Load([]string{regPath})
 	must(t, err)

@@ -36,17 +36,17 @@ func cmdScan(_ context.Context, _ []string) error {
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Dir < found[j].Dir })
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tWORKFLOW\tTAG\tLAYOUT\tDIR\tNOTE")
+	fmt.Fprintln(tw, "ID\tWORKFLOW\tROOT\tLAYOUT\tDIR\tNOTE")
 	for _, f := range found {
 		id := "—"
 		if !f.ID.Zero() {
 			id = f.ID.String()
 		}
-		tag := f.Tag
-		if tag == "" {
-			tag = "—"
+		root := f.Root
+		if root == "" {
+			root = "—"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id, f.Workflow, tag, layoutLabel(f.Dir), shorten(f.Dir), f.Note)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", id, f.Workflow, root, layoutLabel(f.Dir), shorten(f.Dir), f.Note)
 	}
 	return tw.Flush()
 }

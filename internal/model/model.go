@@ -12,10 +12,10 @@ import (
 
 // Workflow values (DESIGN §3.6).
 const (
-	UpstreamPush       = "upstream-push"
-	ForkPR             = "fork-pr"
-	SupplyChainMirror  = "supply-chain-mirror"
-	Vendor             = "vendor"
+	UpstreamPush      = "upstream-push"
+	ForkPR            = "fork-pr"
+	SupplyChainMirror = "supply-chain-mirror"
+	Vendor            = "vendor"
 )
 
 // Layouts (DESIGN §3.5).
@@ -30,13 +30,13 @@ type Hook struct {
 	Run   string
 }
 
-// Repo is a fully-resolved repository: all tag/default inheritance applied.
+// Repo is a fully-resolved repository: all root/default inheritance applied.
 type Repo struct {
 	ID        ident.ID
 	Fork      *ident.ID // nil when there is no separate fork
-	Tags      []string
+	Roots     []string  // inheritance chain of root names (shallowest → deepest)
 	Workflow  string
-	HomeRoot  string
+	HomeRoot  string // the owning root's dir; where the container lives
 	Layout    string // LayoutFlat | LayoutOwner
 	Worktrees bool
 	Branches  []string
