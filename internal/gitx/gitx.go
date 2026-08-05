@@ -17,11 +17,18 @@ func run(dir string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(ee.Stderr)))
+			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
 		}
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// oneLine collapses git's (often multi-line, blank-line-padded) stderr into a
+// single line, so it reads as part of a Result's one-line Detail/Summary
+// instead of breaking out of the tabular or verbose report layout.
+func oneLine(stderr []byte) string {
+	return strings.Join(strings.Fields(string(stderr)), " ")
 }
 
 // IsRepo reports whether dir contains a git repository (a .git dir or file, as
