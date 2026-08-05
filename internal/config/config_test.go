@@ -51,6 +51,9 @@ func TestInheritance(t *testing.T) {
 	if pt.Workflow != model.ForkPR {
 		t.Errorf("pt-helm workflow = %q, want fork-pr", pt.Workflow)
 	}
+	if pt.Push != "auto" || pt.TaskBranches != "auto" {
+		t.Errorf("pt-helm push/task_branches = %q/%q, want auto/auto (fork-pr default)", pt.Push, pt.TaskBranches)
+	}
 	if len(pt.Branches) != 2 || pt.Branches[0] != "main" || pt.Branches[1] != "release" {
 		t.Errorf("pt-helm branches = %v, want [main release]", pt.Branches)
 	}
@@ -76,6 +79,51 @@ func TestInheritance(t *testing.T) {
 	}
 	if zh.HomeRoot != "~/.zsh/plugins" {
 		t.Errorf("zsh-history home_root = %q, want ~/.zsh/plugins", zh.HomeRoot)
+	}
+	if zh.Push != "manual" || zh.TaskBranches != "report" {
+		t.Errorf("zsh-history push/task_branches = %q/%q, want manual/report (upstream-push default)", zh.Push, zh.TaskBranches)
+	}
+
+	// supply-chain-mirror defaults to never/disallow, but every setting stays
+	// overridable (DESIGN §3.6) — it's a default, not a hard rule.
+	p10k := repoByShort(t, reg, "powerlevel10k")
+	if p10k.Push != "never" || p10k.TaskBranches != "disallow" {
+		t.Errorf("powerlevel10k push/task_branches = %q/%q, want never/disallow (mirror default)", p10k.Push, p10k.TaskBranches)
+	}
+}
+
+// TestWorkflowDefaults locks in the per-workflow push/task_branches defaults
+// (DESIGN §3.6): a workflow is a named bundle of defaults over one shared
+// settings surface, not a set of per-workflow-only switches.
+func TestWorkflowDefaults(t *testing.T) {
+	cases := []struct {
+		workflow, push, task string
+	}{
+		{model.UpstreamPush, "manual", "report"},
+		{model.ForkPR, "auto", "auto"},
+		{model.SupplyChainMirror, "never", "disallow"},
+		{model.Vendor, "never", "disallow"},
+	}
+	for _, c := range cases {
+		push, task := WorkflowDefaults(c.workflow)
+		if push != c.push || task != c.task {
+			t.Errorf("WorkflowDefaults(%q) = %q, %q; want %q, %q", c.workflow, push, task, c.push, c.task)
+		}
+	}
+}
+
+// TestPushTaskBranchesOverridable confirms a repo can override its workflow's
+// push/task_branches default in either direction (DESIGN §3.6) — including
+// overriding a mirror's "never"/"disallow" default to "auto", which only
+// affects local↔fork traffic and can't itself bypass the review gate (§5.4).
+func TestPushTaskBranchesOverridable(t *testing.T) {
+	reg := load(t, "base.toml", "push_override.toml")
+	p10k := repoByShort(t, reg, "powerlevel10k")
+	if p10k.Push != "auto" || p10k.TaskBranches != "auto" {
+		t.Errorf("powerlevel10k push/task_branches = %q/%q, want auto/auto (explicit override)", p10k.Push, p10k.TaskBranches)
+	}
+	if len(p10k.ForcePush) != 1 || p10k.ForcePush[0] != "wip/*" {
+		t.Errorf("powerlevel10k force_push = %v, want [wip/*]", p10k.ForcePush)
 	}
 }
 
@@ -143,8 +191,11 @@ func TestValidateSemantics(t *testing.T) {
 base = "git@github.com:"
 
 [root.bad]
-dir = "~/bad"
-workflow = "teleport"
+dir           = "~/bad"
+workflow      = "teleport"
+push          = "sometimes"
+task_branches = "ignore"
+force_push    = ["["]
 
 [[root.bad.repo]]
 id = "github:me/x"
@@ -160,7 +211,11 @@ layout = "flat"
 	if err == nil {
 		t.Fatal("want validation error, got nil")
 	}
-	for _, want := range []string{`workflow = "teleport"`, `root "nodir": missing`} {
+	for _, want := range []string{
+		`workflow = "teleport"`, `root "nodir": missing`,
+		`push = "sometimes"`, `task_branches = "ignore"`,
+		`force_push: "["`,
+	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("validation error should mention %q; got:\n%v", want, err)
 		}

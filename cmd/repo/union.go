@@ -58,18 +58,23 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 // falling back to what disk/remotes report where config is silent.
 func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 	inh := reg.InheritedFor(f.Roots)
+	workflow := strOrDefault(inh.Workflow, f.Workflow) // config wins over inference
+	pushDefault, taskDefault := config.WorkflowDefaults(workflow)
 	r := model.Repo{
-		ID:        f.ID,
-		Roots:     f.Roots,
-		Dir:       f.Dir,
-		OriginURL: f.Remotes["origin"],
-		Workflow:  strOrDefault(inh.Workflow, f.Workflow), // config wins over inference
-		Layout:    strOrDefault(inh.Layout, model.LayoutFlat),
-		Worktrees: inh.Worktrees != nil && *inh.Worktrees,
-		OnRewrite: strOrDefault(inh.OnRewrite, builtinOnRewrite),
-		Prune:     strOrDefault(inh.Prune, builtinPrune),
-		Pin:       inh.Pin,
-		Hooks:     inh.Hooks,
+		ID:           f.ID,
+		Roots:        f.Roots,
+		Dir:          f.Dir,
+		OriginURL:    f.Remotes["origin"],
+		Workflow:     workflow,
+		Layout:       strOrDefault(inh.Layout, model.LayoutFlat),
+		Worktrees:    inh.Worktrees != nil && *inh.Worktrees,
+		Push:         strOrDefault(inh.Push, pushDefault),
+		TaskBranches: strOrDefault(inh.TaskBranches, taskDefault),
+		ForcePush:    inh.ForcePush,
+		ForcePull:    inh.ForcePull,
+		Prune:        strOrDefault(inh.Prune, builtinPrune),
+		Pin:          inh.Pin,
+		Hooks:        inh.Hooks,
 	}
 	if r.OriginURL == "" {
 		for _, u := range f.Remotes {
@@ -99,7 +104,4 @@ func repoName(r model.Repo) string {
 	return r.ID.Short()
 }
 
-const (
-	builtinOnRewrite = "stop"
-	builtinPrune     = "auto"
-)
+const builtinPrune = "auto"

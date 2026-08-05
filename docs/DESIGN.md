@@ -42,9 +42,9 @@ behaviour.
    repo-absent boxes, not to duplicate the tool's full behaviour.
 
 3. **Declarative desired state, live observed state.** Desired state lives in a
-   composed registry (§3.7). Observed state (unpushed/unmerged/dirty/divergence) is
-   computed from git every run and never persisted. The *only* persisted state is a
-   per-repo update timestamp used for cadence.
+   composed registry (§3.7). Observed state (unpushed/unmerged/dirty/untracked/
+   divergence) is computed from git every run and never persisted. The *only*
+   persisted state is a per-repo update timestamp used for cadence.
 
 4. **Never lose work.** Never touch a dirty tree, never force, never move or delete
    a branch with unpushed/unmerged commits without bringing it to attention.
@@ -110,8 +110,9 @@ machine without changing identity.
 
 Configuration attaches to **roots**, not tags. A root is a named directory node —
 `[root.<name>]` with a `dir` — that carries any part of the settings bundle
-(`layout`, `worktrees`, `branches`, `workflow`, `on_rewrite`, `prune`, `host`,
-`pin`, `hooks`, `fork_owner`). Settings flow *down the directory tree*: roots are
+(`layout`, `worktrees`, `branches`, `workflow`, `prune`, `push`, `task_branches`,
+`force_push`, `force_pull`, `host`, `pin`, `hooks`, `fork_owner`). Settings flow
+*down the directory tree*: roots are
 ordered by `dir` prefix, and a repo inherits
 
     [defaults] → every root whose `dir` is a prefix of the repo's path
@@ -195,6 +196,72 @@ otherwise setting `fork_owner` at a root would turn every `upstream-push` repo u
 it into a fork-pr. `fork_owner` only *supplies* a fork the workflow already
 requires.
 
+**Push and task-branch policy.** A workflow is a **named bundle of defaults over
+one shared settings surface**, not a set of switches that only mean something for
+particular workflows. `upstream-push` names a remote *contract* (`origin` is
+definitive); it doesn't by itself say whether `sync` should act on that contract
+autonomously — the same contract fits a solo repo (no reason not to push straight
+to `origin`) and a shared team repo (everyone has push rights, but a gentlemen's
+agreement means `sync` shouldn't land commits on the shared `main` unattended).
+Rather than hard-wiring that distinction into per-workflow code paths, every
+workflow gets the *same* settings below with a workflow-appropriate default;
+overriding one for a specific repo or root is always legal, even where the default
+looks like a hard rule (§2 principle: refuse-and-report beats clever-and-sorry, but
+the person configuring the repo outranks the workflow's guess). All four are
+cascading (`[defaults]` → `[root.*]` → `[[root.*.repo]]`, same as `prune`):
+
+- **`push`** — the important branch's ahead-only (clean fast-forward) commits.
+  `"auto"` pushes them straight to the workflow's write target (`origin` for
+  `upstream-push` and `supply-chain-mirror`'s fork, the fork for `fork-pr`);
+  `"manual"` leaves them as a reported *"N unpushed"*, an expected/normal state
+  you'll push yourself; `"never"` also just reports rather than pushing, but frames
+  it as a surprise — the important branch on this repo isn't expected to
+  accumulate local-only commits at all (a `vendor` pin is read-only; a mirror's
+  `origin` is only meant to move via `repo review`, §5.4). `"never"` is a default,
+  not a lock: a mirror repo you've decided to trust enough to auto-sync can be set
+  to `push = "auto"` — it only affects local↔`origin`(fork) traffic, never
+  `untrusted`, so it can't itself bypass the review gate (§5.4 governs advancing
+  past `untrusted` unconditionally, regardless of `push`).
+- **`task_branches`** — every other local branch. `"auto"` pushes them the moment
+  they exist or advance (their own write target, same as `push`); `"report"`
+  defers to PR time, only flagging unpushed/unmerged state (as today); `"disallow"`
+  additionally treats their mere *existence* as an anomaly worth flagging loudly —
+  the right default for a repo not expected to carry local branches at all
+  (`vendor`, `supply-chain-mirror`). A repo where you deliberately keep a local
+  patch branch on an otherwise-`disallow` repo just overrides that one repo to
+  `report` — no separate allowlist of branch names is needed.
+
+Defaults, chosen so the common case needs zero configuration and the exception is a
+one-line override:
+
+| workflow              | `push`   | `task_branches` |
+|-----------------------|----------|------------------|
+| `upstream-push`       | `manual` | `report`         |
+| `fork-pr`             | `auto`   | `auto`           |
+| `supply-chain-mirror` | `never`  | `disallow`       |
+| `vendor`              | `never`  | `disallow`       |
+
+A mostly-solo fleet sets `[defaults] push = "auto"`, `task_branches = "auto"` once
+and overrides the few team `upstream-push` roots back to `manual`/`report`.
+
+Orthogonal to both, and symmetric with each other: **`force_push`** and
+**`force_pull`**, each a glob list of branch names (e.g. `["wip/*"]`, or `["*"]`/
+`["main"]` for a fully solo repo) naming the branches `sync` may carry through a
+*non-fast-forward* update rather than stopping and reporting (§5.2). Ordinary
+fast-forwards — either direction, whichever side is simply behind — are never
+gated by either list; they always just happen. The lists only matter once history
+has actually diverged:
+
+- **`force_push`** — local rewrote its own history (rebase/amend); the listed
+  branches may be force-pushed over the remote's version.
+- **`force_pull`** — the remote rewrote (someone force-pushed, or a `vendor` tag
+  moved); the listed branches (or pins) may be reset/re-checked-out to match,
+  clobbering the local copy.
+
+Both default to empty, everywhere: no forced overwrite in either direction is ever
+attempted without an explicit, per-branch opt-in. Full mechanics, including the
+never-clobber-unpushed-work rail, are in §5.2.
+
 ### 3.7 Registry composition (and keeping private repos private)
 
 The registry is **merged from a path-style list of fragments** (`REPO_REGISTRY_PATH`)
@@ -223,12 +290,14 @@ scan, not a single file.
 # a fragment on REPO_REGISTRY_PATH (e.g. ~/.config/repo/registry.toml) — public base
 
 [defaults]
-worktrees  = false
-branches   = ["main"]
-on_rewrite = "stop"        # stop | follow  (§5.2)
-prune      = "auto"        # auto | report | manual  (§5.3)
-host       = "github"      # default host for bare-name clones
-fork_owner = "github:michael-odell"   # forks derive here unless overridden
+worktrees     = false
+branches      = ["main"]
+push          = "auto"      # auto | manual | never  (§3.6)
+task_branches = "auto"      # auto | report | disallow  (§3.6)
+prune         = "auto"      # auto | report | manual  (§5.3)
+host          = "github"    # default host for bare-name clones
+fork_owner    = "github:michael-odell"   # forks derive here unless overridden
+# force_push/force_pull default to [] (never) — listed per-repo/root when needed
 
 [hosts.github]
 base = "git@github.com:"
@@ -394,28 +463,45 @@ prune, tags) → **update important branches** (per workflow) → **run hooks** 
 
 | workflow              | important branch tracks | update action | strayed warnings |
 |-----------------------|-------------------------|---------------|------------------|
-| `upstream-push`       | `origin/<branch>`       | fast-forward only | ahead → *N unpushed*; diverged → skip+report |
-| `fork-pr`             | `upstream/<branch>`     | FF to upstream, then push to origin (fork); via `gh repo sync` when available | local commits on important branch → report; fork push not FF → skip+report |
-| `supply-chain-mirror` | `untrusted/<branch>`    | fetch only; **do not advance**; flag "untrusted +N, review pending" | advancing gated on `repo review` |
-| `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → *"consider changing workflow"* |
+| `upstream-push`       | `origin/<branch>`       | FF from origin when behind; ahead-only → per `push` (default `manual`) | diverged → `force_pull` decides, else skip+report |
+| `fork-pr`             | `upstream/<branch>`     | FF to upstream, then push to fork per `push` (default `auto`); via `gh repo sync` when available | local commits ahead of *upstream* → always report (a PR, not a push, lands those); fork push not FF → `force_push` decides, else skip+report |
+| `supply-chain-mirror` | `origin/<branch>` (the fork) — `untrusted` is fetched and compared, **never merged** | FF from origin when behind; ahead-only → per `push` (default `never`); `untrusted` only ever advances via `repo review` (§5.4), independent of `push` | diverged from origin → `force_pull` decides, else skip+report; `untrusted` ahead of origin → "review pending" |
+| `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → per `push` (default `never`, *"consider changing workflow"*); pin moved on a diverged tag → `force_pull` decides |
+
+Task branches (any branch not in `branches`) are handled per `task_branches`
+(§3.6) uniformly across workflows, independent of the important-branch row above.
 
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
-dirty — computed live via `rev-list`.
+dirty, and untracked (non-ignored) files — computed live via `git status`/`rev-list`,
+never persisted.
 
-### 5.2 History rewrites — follow, but always surface
+### 5.2 History rewrites — surface always, force only when named
 
-Per repo/root/branch `on_rewrite`:
+A non-fast-forward is a divergence in one of two directions, each governed by its
+own glob list of branch names (§3.6), both empty (no branch, i.e. never) by
+default:
 
-- **`stop` (default)** — a non-fast-forward on an important branch, or a moved tag,
-  is skipped and surfaced prominently. Right default for supply-chain safety.
-- **`follow`** — adopt the rewrite (reset branch / retag to the tracked remote)
-  without manual intervention, **but always surface that it happened.**
+- **`force_pull`** — the *remote* rewrote (someone force-pushed, or a `vendor`
+  pinned tag's content moved). A branch matching the list is reset/re-checked-out
+  to the remote's version without manual intervention, **but always surfaces that
+  it happened.** A branch *not* matching is skipped and surfaced prominently
+  instead — the right default for supply-chain safety.
+- **`force_push`** — the *local* copy rewrote (rebase/amend). A branch matching the
+  list may be force-pushed over the remote's version. A branch not matching is
+  skipped and surfaced, same as an unmatched `force_pull` — `sync` never
+  force-pushes without an explicit, per-branch opt-in.
 
-Rails on `follow`: if the branch carries local unpushed/unmerged commits, a rewrite
-escalates back to *stop + surface* (never clobber work). The notice fires on
-*detection*, so blessed repos still report every rewrite; you just needn't act.
-Applies to tags too — a `vendor` pinned tag whose content moves is a rewrite
-(default `stop`; a normal *new higher* tag is an ordinary advance, not a rewrite).
+This replaces a single repo-wide `on_rewrite: stop | follow` toggle with two glob
+lists, which is strictly more expressive: `force_pull = ["main"]` alone lets `main`
+absorb upstream rewrites while a `release` branch still stops and waits for you,
+something one repo-wide enum couldn't express.
+
+Rails on `force_pull`: if the branch carries local unpushed/unmerged commits, a
+rewrite escalates back to *stop + surface* regardless of the glob match — never
+clobber work you haven't pushed anywhere. The notice fires on *detection*, so
+blessed branches still report every rewrite; you just needn't act. Applies to tags
+too — a `vendor` pinned tag whose content moves is a rewrite matched against the
+pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).
 
 ### 5.3 Prune — three tiers (rebase/squash aware)
 
@@ -470,7 +556,8 @@ repo sync — 12 repos, 3 due
       ⚠ spike-auth   1 unpushed, unmerged · 3 weeks stale
       🗑 old-poc      deleted upstream, clean+merged — pruned
       ? hotfix-2      deleted upstream, merge unconfirmed — confirm? (repo prune)
-  ⚠ charts           main rewritten (a1b→9f3) — stopped (on_rewrite=stop)
+  ⚠ charts           main rewritten (a1b→9f3) — stopped (no force_pull match)
+  ⚠ handwritten      3 untracked file(s)
   ⏸ prometheus       vendor v2.50.1 → v2.51.0
   ⚑ fast-syntax-hl   untrusted +2 — review pending (repo review fast-syntax-hl)
   ✗ idx-svc          fetch failed: host unreachable
@@ -580,11 +667,13 @@ schema, not a late add).
 
 None blocking. Resolved: membership is declared ∪ discovered (§3.2); registry is a
 composed path so private repos need no public reference (§3.7); `repo` lives in its
-own repo (§7); rewrite following via `on_rewrite`; prune is three-tiered and
-rebase/squash-aware (§5.3); the mirror workflow is `supply-chain-mirror` and the
-resolution key is `via` (no naming collision); artifacts live in `~/.local/repo`,
-sourced by committed files (§6); fork-pr pushes on the if-due run; latest-tag vendor
-auto-advances while moved tags still trip `on_rewrite`. **Configuration attaches to
+own repo (§7); rewrite following via glob-list `force_pull`/`force_push` (§5.2,
+superseding an earlier repo-wide `on_rewrite: stop|follow` toggle); prune is
+three-tiered and rebase/squash-aware (§5.3); the mirror workflow is
+`supply-chain-mirror` and the resolution key is `via` (no naming collision);
+artifacts live in `~/.local/repo`, sourced by committed files (§6); fork-pr pushes
+on the if-due run; latest-tag vendor auto-advances while a moved tag still trips
+`force_pull`. **Configuration attaches to
 named roots, not tags (§3.4):** a root is a `[root.<name>]` directory node with a
 `dir` value, carrying the full settings bundle; settings inherit down the tree by
 `dir` prefix; members nest under the root (`repos` bare-id array for the common case,
@@ -595,3 +684,18 @@ resolved before (and independently of) fork (§3.6). `supply-chain-mirror` uses 
 `untrusted` remote (self-documenting + detectable). `--fix-layout` generalises to
 `--fix`, reconciling layout shape, remotes, and location, always reporting first
 (§4.1). Cross-cutting tag selection is dropped in favour of location-scoped sweeps.
+**A workflow is a named bundle of defaults over one shared settings surface, not a
+set of per-workflow-only switches (§3.6):** `push` (`auto`/`manual`/`never`, the
+important branch's ahead-only commits) and `task_branches` (`auto`/`report`/
+`disallow`, every other branch) are valid and overridable on *every* workflow;
+only their default varies (`fork-pr` defaults both to `auto`; `upstream-push`
+defaults to `manual`/`report`; `vendor`/`supply-chain-mirror` default to
+`never`/`disallow` since those important branches aren't expected to accumulate
+local-only commits — but a mirror repo you've decided to trust can still be set to
+`push = "auto"`, since that only touches local↔fork traffic and can't itself
+bypass the `untrusted` review gate, §5.4). `force_push`/`force_pull` are a
+symmetric pair of glob lists (§5.2) replacing the old repo-wide `on_rewrite`
+toggle — empty by default (no forced overwrite either direction), naming exactly
+which branches may absorb a rewrite in which direction, which a single enum
+couldn't express per-branch. Drift detection now also covers untracked
+(non-ignored) files, not just tracked-file dirtiness.

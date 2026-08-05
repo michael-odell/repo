@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,16 +33,27 @@ const (
 
 // Result is the per-repo outcome plus an ordered reasoning trace (--verbose).
 type Result struct {
-	Name    string
-	Cloned  bool
-	Outcome Outcome
-	Detail  string
-	Actions []string
-	Err     error
+	Name     string
+	Cloned   bool
+	Outcome  Outcome
+	Detail   string
+	Branches []BranchNote // task-branch findings, rendered as sub-bullets (DESIGN §5.6)
+	Actions  []string
+	Err      error
 
 	// migrate, when set, defers a --fix-layout conversion to the serial phase
 	// after every repo's network sync has finished (DESIGN §4.1).
 	migrate *pendingMigration
+}
+
+// BranchNote is one task-branch finding, shown as an indented sub-bullet under
+// its repo (DESIGN §5.6) in both compact and --verbose output, and regardless
+// of dry-run vs a real sync. It never affects the repo's own Outcome/Detail —
+// a messy task branch is informational, not a reason to flag the whole repo.
+type BranchNote struct {
+	Name      string
+	Summary   string
+	Attention bool // true renders a warning glyph, false a neutral one
 }
 
 type pendingMigration struct {
@@ -204,6 +216,7 @@ func (x *run) syncSingle() {
 			x.mirrorReview()
 		}
 	}
+	x.taskBranches()
 }
 
 // syncWorktree provisions a bare+worktree container when absent, then reconciles
@@ -231,6 +244,9 @@ func (x *run) syncWorktree() {
 		}
 		x.updateUnit(wt, b)
 	}
+	// Once per repo, not per worktree — task branches live in the shared bare
+	// repo, not any one worktree.
+	x.taskBranches()
 }
 
 // updateUnit reconciles one working tree (a worktree, or the single tree) to its
@@ -401,8 +417,16 @@ func (x *run) provision() bool {
 		}
 	}
 
-	// Dirty guard.
-	if dirty, _ := gitx.IsDirty(x.container); dirty {
+	// Dirty guard: uncommitted tracked changes block updates (a merge could
+	// conflict with them). Untracked files are reported the same way but never
+	// block — a plain fast-forward doesn't touch them (DESIGN §5.1, principle 3).
+	dirty, _ := gitx.IsDirty(x.container)
+	untracked, _ := gitx.UntrackedFiles(x.container)
+	if len(untracked) > 0 {
+		x.attention(fmt.Sprintf("%d untracked file(s)", len(untracked)))
+		x.add("%d untracked file(s) present", len(untracked))
+	}
+	if dirty {
 		x.attention("dirty — updates skipped")
 		x.add("dirty working tree: skipping updates")
 		return false
@@ -428,9 +452,9 @@ func (x *run) onImportantBranch() bool {
 }
 
 // updateTracking fast-forwards the checked-out important branch to ref: the
-// shared body for upstream-push and supply-chain-mirror (which track origin).
-// fork-pr reuses the same fast-forward logic against upstream, then layers a
-// fork push on top (updateForkPR).
+// shared body for upstream-push and supply-chain-mirror (which track origin),
+// and a vendor branch pin. fork-pr reuses the same fast-forward logic against
+// upstream, then layers a fork push on top (updateForkPR).
 func (x *run) updateTracking(ref string) {
 	if _, ok := gitx.RevParse(x.dir, ref); !ok {
 		x.attention(ref + " missing")
@@ -455,17 +479,52 @@ func (x *run) updateTracking(ref string) {
 		x.add("fast-forwarded %s +%d", x.ub, behind)
 		x.updated(fmt.Sprintf("+%d", behind))
 	case ahead > 0 && behind == 0:
-		x.attention(fmt.Sprintf("%d unpushed", ahead))
-		x.add("%d unpushed commit(s) on %s", ahead, x.ub)
+		x.pushOrReport(ahead, "origin")
 	default:
 		x.applyRewrite(ref)
 	}
 }
 
-// applyRewrite handles a non-fast-forward on an important branch per on_rewrite.
+// pushOrReport handles the important branch's ahead-only (clean fast-forward)
+// commits per the `push` setting (DESIGN §3.6): every workflow shares this
+// setting and this code path, only the default differs.
+func (x *run) pushOrReport(ahead int, remote string) {
+	switch x.r.Push {
+	case "auto":
+		x.pushAhead(ahead, remote)
+	case "never":
+		x.attention(fmt.Sprintf("%d unpushed (unexpected)", ahead))
+		x.add("%d local commit(s) on %s — consider changing workflow (push=never)", ahead, x.ub)
+	default: // "manual"
+		x.attention(fmt.Sprintf("%d unpushed", ahead))
+		x.add("%d unpushed commit(s) on %s", ahead, x.ub)
+	}
+}
+
+// pushAhead fast-forward-pushes local commits straight to remote. Only ever
+// called when behind == 0 (relative to remote), so this is always a clean,
+// non-force push (DESIGN §3.6 push=auto).
+func (x *run) pushAhead(ahead int, remote string) {
+	if x.opts.DryRun {
+		x.add("would push %s +%d to %s", x.ub, ahead, remote)
+		x.updated(fmt.Sprintf("+%d (dry-run)", ahead))
+		return
+	}
+	if err := gitx.Push(x.dir, remote, x.ub); err != nil {
+		x.attention(fmt.Sprintf("%d unpushed — push failed", ahead))
+		x.add("push %s to %s failed: %v", x.ub, remote, err)
+		return
+	}
+	x.add("pushed %s +%d to %s", x.ub, ahead, remote)
+	x.updated(fmt.Sprintf("pushed +%d", ahead))
+}
+
+// applyRewrite handles a non-fast-forward on an important branch per
+// force_pull (DESIGN §5.2): the remote rewrote; a listed branch follows
+// automatically, an unmatched one stops and reports.
 func (x *run) applyRewrite(ref string) {
 	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
-	if x.r.OnRewrite == "follow" {
+	if matchesAny(x.r.ForcePull, x.ub) {
 		if ahead > 0 { // rail: never clobber local commits
 			x.attention(fmt.Sprintf("rewrite with %d local commit(s) — stopped", ahead))
 			x.add("rewrite on %s but %d local commit(s) present: escalated to stop", ref, ahead)
@@ -485,7 +544,23 @@ func (x *run) applyRewrite(ref string) {
 		return
 	}
 	x.attention(fmt.Sprintf("rewritten/diverged (+%d/-%d) — stopped", ahead, behind))
-	x.add("non-fast-forward on %s (on_rewrite=stop): stopped", ref)
+	x.add("non-fast-forward on %s (no force_pull match): stopped", ref)
+}
+
+// matchesAny reports whether name matches any of the glob patterns (DESIGN
+// §3.6/§5.2). "*" alone is special-cased to mean every branch — plain
+// path.Match doesn't cross "/" boundaries, which would otherwise surprise
+// anyone naming a branch like "wip/foo".
+func matchesAny(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if p == "*" {
+			return true
+		}
+		if ok, _ := path.Match(p, name); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // mirrorReview flags a supply-chain-mirror whose upstream is ahead of the
@@ -539,6 +614,12 @@ func (x *run) add(format string, a ...any) {
 		msg = x.unit + ": " + msg
 	}
 	x.res.Actions = append(x.res.Actions, msg)
+}
+
+// branchNote records a task-branch finding as a sub-bullet (DESIGN §5.6),
+// deliberately not touching Outcome/Detail — see BranchNote.
+func (x *run) branchNote(name, summary string, attention bool) {
+	x.res.Branches = append(x.res.Branches, BranchNote{Name: name, Summary: summary, Attention: attention})
 }
 
 // mark raises the repo outcome to o (with detail) when o is at least as severe

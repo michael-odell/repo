@@ -1,0 +1,8 @@
+# Exercises DESIGN §3.6: every setting is overridable on every workflow, even
+# where the default looks like a hard rule. Overriding at the root flows down
+# to the supply-chain-mirror repo nested under it, same as any other setting.
+
+[root.plugins]
+push          = "auto"
+task_branches = "auto"
+force_push    = ["wip/*"]

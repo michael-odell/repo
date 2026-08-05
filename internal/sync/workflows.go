@@ -48,9 +48,10 @@ func (x *run) updateForkPR() {
 	x.pushFork()
 }
 
-// pushFork fast-forward-pushes the important branch to the fork (origin). A fork
-// that has diverged (commits the local branch lacks) is left untouched and
-// surfaced — never force-pushed. DESIGN §5.1.
+// pushFork advances the fork (origin) to match the important branch, per
+// `push` (DESIGN §3.6, default `auto` for fork-pr). A fork that has diverged
+// (commits the local branch lacks) is force-pushed only when `force_push`
+// matches (DESIGN §5.2); otherwise it is left untouched and surfaced.
 func (x *run) pushFork() {
 	if x.res.Err != nil {
 		return
@@ -65,24 +66,57 @@ func (x *run) pushFork() {
 			x.add("fork is %d ahead on %s — left as is", behind, x.ub)
 			return
 		case ahead > 0 && behind > 0:
-			x.attention("fork diverged — push skipped")
-			x.add("fork and local diverged on %s (+%d/-%d): not force-pushing", x.ub, ahead, behind)
+			if !matchesAny(x.r.ForcePush, x.ub) {
+				x.attention("fork diverged — push skipped")
+				x.add("fork and local diverged on %s (+%d/-%d): not force-pushing (no force_push match)", x.ub, ahead, behind)
+				return
+			}
+			x.forcePush(ahead, behind, "origin", "fork")
+			return
+		case ahead > 0 && behind == 0:
+			x.pushOrReport(ahead, "origin")
+		}
+		return
+	}
+	// No commits on the fork yet — a brand-new branch there.
+	switch x.r.Push {
+	case "auto":
+		if x.opts.DryRun {
+			x.add("would push %s to fork", x.ub)
 			return
 		}
+		if err := gitx.Push(x.dir, "origin", x.ub); err != nil {
+			x.attention("fork push failed")
+			x.add("push %s to fork failed: %v", x.ub, err)
+			return
+		}
+		x.add("pushed %s to fork", x.ub)
+		if x.res.Outcome == UpToDate {
+			x.updated("pushed fork")
+		}
+	default:
+		x.attention("not yet on fork")
+		x.add("%s not yet pushed to fork (push=%s)", x.ub, x.r.Push)
 	}
+}
+
+// forcePush force-pushes a branch already known to diverge (ahead and behind
+// both > 0) to remote — only ever called for a branch matched by `force_push`
+// (DESIGN §5.2). label is the human-readable name of remote for messages
+// ("fork", "origin").
+func (x *run) forcePush(ahead, behind int, remote, label string) {
 	if x.opts.DryRun {
-		x.add("would push %s to fork", x.ub)
+		x.add("would force-push %s to %s (+%d/-%d)", x.ub, label, ahead, behind)
+		x.updated(fmt.Sprintf("would force-push (+%d/-%d)", ahead, behind))
 		return
 	}
-	if err := gitx.Push(x.dir, "origin", x.ub); err != nil {
-		x.attention("fork push failed")
-		x.add("push %s to fork failed: %v", x.ub, err)
+	if err := gitx.ForcePush(x.dir, remote, x.ub); err != nil {
+		x.attention("force-push failed")
+		x.add("force-push %s to %s failed: %v", x.ub, label, err)
 		return
 	}
-	x.add("pushed %s to fork", x.ub)
-	if x.res.Outcome == UpToDate {
-		x.updated("pushed fork")
-	}
+	x.add("force-pushed %s to %s (+%d/-%d)", x.ub, label, ahead, behind)
+	x.updated(fmt.Sprintf("force-pushed (+%d/-%d)", ahead, behind))
 }
 
 // updateVendor reconciles a vendored, read-only repo to its pin: a branch
@@ -142,7 +176,8 @@ func (x *run) onVendorBranch(branch string) bool {
 }
 
 // vendorCheckoutTag pins the working tree to a tag, treating a moved tag as a
-// rewrite (honoring on_rewrite) and reporting an ordinary version bump.
+// rewrite (matched against `force_pull`, DESIGN §5.2) and reporting an
+// ordinary version bump otherwise.
 func (x *run) vendorCheckoutTag(tag string) {
 	tagCommit, ok := gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
 	if !ok {
@@ -156,9 +191,9 @@ func (x *run) vendorCheckoutTag(tag string) {
 	// upstream force-moved it.
 	if localTag, ok := gitx.RevParse(x.dir, "refs/tags/"+tag); ok {
 		if remoteTag, ok := gitx.RemoteTagSHA(x.dir, "origin", tag); ok && remoteTag != localTag {
-			if x.r.OnRewrite != "follow" {
+			if !matchesAny(x.r.ForcePull, tag) {
 				x.attention(fmt.Sprintf("tag %s moved upstream — stopped", tag))
-				x.add("tag %s content moved (on_rewrite=stop): staying at the reviewed tag", tag)
+				x.add("tag %s content moved (no force_pull match): staying at the reviewed tag", tag)
 				return
 			}
 			if x.opts.DryRun {

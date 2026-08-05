@@ -32,18 +32,21 @@ type Hook struct {
 
 // Repo is a fully-resolved repository: all root/default inheritance applied.
 type Repo struct {
-	ID        ident.ID
-	Fork      *ident.ID // nil when there is no separate fork
-	Roots     []string  // inheritance chain of root names (shallowest → deepest)
-	Workflow  string
-	HomeRoot  string // the owning root's dir; where the container lives
-	Layout    string // LayoutFlat | LayoutOwner
-	Worktrees bool
-	Branches  []string
-	OnRewrite string // "stop" | "follow"
-	Prune     string // "auto" | "report" | "manual"
-	Pin       string // vendor only
-	Hooks     []Hook
+	ID           ident.ID
+	Fork         *ident.ID // nil when there is no separate fork
+	Roots        []string  // inheritance chain of root names (shallowest → deepest)
+	Workflow     string
+	HomeRoot     string // the owning root's dir; where the container lives
+	Layout       string // LayoutFlat | LayoutOwner
+	Worktrees    bool
+	Branches     []string
+	Push         string   // "auto" | "manual" | "never" (DESIGN §3.6)
+	TaskBranches string   // "auto" | "report" | "disallow" (DESIGN §3.6)
+	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
+	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
+	Prune        string   // "auto" | "report" | "manual"
+	Pin          string   // vendor only
+	Hooks        []Hook
 
 	// Discovered-only: a repo found on disk that the registry does not declare
 	// (DESIGN §3.2). Dir is its actual container (authoritative over the computed

@@ -99,7 +99,8 @@ func FastForwardCurrent(dir, ref string) error {
 	return err
 }
 
-// ResetHardCurrent resets the checked-out branch to ref (used for on_rewrite=follow).
+// ResetHardCurrent resets the checked-out branch to ref (used when force_pull
+// matches, DESIGN §5.2).
 func ResetHardCurrent(dir, ref string) error {
 	_, err := run(dir, "reset", "--hard", ref)
 	return err
@@ -128,6 +129,15 @@ func CountBetween(dir, from, to string) (int, error) {
 // fails rather than clobbering the remote (fork-pr: DESIGN §5.1).
 func Push(dir, remote, branch string) error {
 	_, err := run(dir, "push", remote, branch)
+	return err
+}
+
+// ForcePush force-pushes a single branch to a remote with --force-with-lease
+// (rejects if the remote moved since the last fetch, so it can't clobber a
+// concurrent push it hasn't seen) — used only for a branch explicitly listed in
+// `force_push` (DESIGN §5.2).
+func ForcePush(dir, remote, branch string) error {
+	_, err := run(dir, "push", "--force-with-lease", remote, branch)
 	return err
 }
 
@@ -172,7 +182,7 @@ func RemoteTagSHA(dir, remote, tag string) (string, bool) {
 }
 
 // ForceFetchTag overwrites a local tag with the remote's, used only when
-// on_rewrite=follow adopts a moved vendor tag.
+// force_pull matches a moved vendor tag (DESIGN §5.2).
 func ForceFetchTag(dir, remote, tag string) error {
 	_, err := run(dir, "fetch", "--force", remote, "refs/tags/"+tag+":refs/tags/"+tag)
 	return err

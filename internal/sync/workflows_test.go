@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/michael-odell/repo/internal/config"
+	"github.com/michael-odell/repo/internal/model"
 )
 
 // headCount returns the number of commits reachable from HEAD in a repo.
@@ -78,6 +79,84 @@ branches = ["main"]
 	}
 	if got := bareCount(t, fork, "main"); got != "2" {
 		t.Errorf("fork main at %s commits, want 2 (should be pushed)", got)
+	}
+}
+
+// upstreamPushFixture builds a bare origin with one commit and a registry
+// declaring a single upstream-push repo, with pushSetting appended verbatim to
+// the repo table (e.g. `push = "auto"`, or "" to exercise the built-in default).
+func upstreamPushFixture(t *testing.T, pushSetting string) (reg *config.Registry, repos []model.Repo, origin, clone string) {
+	t.Helper()
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	origin = filepath.Join(remotes, "acme", "proj")
+	must(t, os.MkdirAll(filepath.Dir(origin), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", origin)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", origin, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	writeCommit(t, seed, "a", "one\n", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:acme/proj"
+workflow = "upstream-push"
+branches = ["main"]
+`+pushSetting+`
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err = reg.Repos()
+	must(t, err)
+
+	// First sync just clones.
+	if results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour}); len(results) != 1 {
+		t.Fatalf("initial sync: got %d results, want 1", len(results))
+	}
+	clone = filepath.Join(T, "clones", "proj")
+	writeCommit(t, clone, "b", "two\n", "two") // local commit, not on origin
+	return reg, repos, origin, clone
+}
+
+// TestUpstreamPushAutoPushesAheadCommits: with push=auto, an ahead-only local
+// commit on an upstream-push repo's important branch is pushed straight to
+// origin rather than merely reported (DESIGN §3.6).
+func TestUpstreamPushAutoPushesAheadCommits(t *testing.T) {
+	reg, repos, origin, _ := upstreamPushFixture(t, `push = "auto"`)
+
+	results := Run(reg, repos, Options{StateDir: filepath.Join(t.TempDir(), "out"), Frequency: time.Hour})
+	if len(results) != 1 || results[0].Outcome != Updated {
+		t.Fatalf("outcome = %v (want Updated); actions=%v", results[0].Outcome, results[0].Actions)
+	}
+	if got := bareCount(t, origin, "main"); got != "2" {
+		t.Errorf("origin main at %s commits, want 2 (ahead commit should be pushed)", got)
+	}
+}
+
+// TestUpstreamPushDefaultsToManual: with no `push` override, upstream-push
+// defaults to `manual` (DESIGN §3.6) — a team-safe default, since the same
+// remote contract fits both a solo and a shared repo. The ahead commit must be
+// left on origin, only reported.
+func TestUpstreamPushDefaultsToManual(t *testing.T) {
+	reg, repos, origin, _ := upstreamPushFixture(t, "")
+
+	// A fresh StateDir/timestamp store: reuse the same one the fixture's first
+	// sync used isn't necessary since Attention doesn't depend on cadence state.
+	out := filepath.Join(t.TempDir(), "out")
+	results := Run(reg, repos, Options{StateDir: out, Frequency: time.Hour})
+	if len(results) != 1 || results[0].Outcome != Attention {
+		t.Fatalf("outcome = %v (want Attention); actions=%v", results[0].Outcome, results[0].Actions)
+	}
+	if got := bareCount(t, origin, "main"); got != "1" {
+		t.Errorf("origin main at %s commits, want 1 (ahead commit must not be pushed)", got)
 	}
 }
 

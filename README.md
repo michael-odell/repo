@@ -40,10 +40,13 @@ fails loudly instead of misbehaving.
 [defaults]
 worktrees  = false          # single working tree (true → bare + worktree-per-branch)
 branches   = ["main"]       # important branches, synced/worktree'd
-on_rewrite = "stop"         # stop | follow      — history-rewrite policy (§5.2)
 prune      = "auto"         # auto | report | manual  — stale-branch policy (§5.3)
 host       = "github"       # default host for bare-name clones
 fork_owner = "github:michael-odell"   # forks derive here unless overridden
+# push/task_branches (auto|manual|never, auto|report|disallow) default per
+# workflow (§3.6) — override here or per-root/repo when a default doesn't fit.
+# force_push/force_pull (branch-name globs, e.g. ["wip/*"]) default to [] —
+# never force in either direction unless a branch is explicitly listed (§5.2).
 
 # ── hosts: an identity's host key → the physical base URL (per machine) ──
 [hosts.github]
@@ -115,7 +118,10 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `worktrees`  | bool                                            | single tree vs bare + one worktree per important branch |
 | `branches`   | list of strings                                 | important branches (synced, given worktrees) |
 | `workflow`   | `upstream-push` \| `fork-pr` \| `supply-chain-mirror` \| `vendor` | remote contract (below) |
-| `on_rewrite` | `stop` \| `follow`                              | what to do when a synced branch's history was rewritten |
+| `push`       | `auto` \| `manual` \| `never`                   | important branch's ahead-only commits: push automatically, leave for you, or flag as unexpected — default varies per workflow (§3.6) |
+| `task_branches` | `auto` \| `report` \| `disallow`             | every other local branch: push automatically, defer to PR time, or treat existence itself as an anomaly — default varies per workflow (§3.6) |
+| `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
+| `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `prune`      | `auto` \| `report` \| `manual`                  | stale local-branch handling |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |

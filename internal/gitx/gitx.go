@@ -110,7 +110,15 @@ func Upstream(dir, branch string) string {
 // AheadBehind returns how many commits HEAD is ahead of and behind the given
 // ref, computed via `rev-list --left-right --count ref...HEAD`.
 func AheadBehind(dir, ref string) (ahead, behind int, err error) {
-	out, err := run(dir, "rev-list", "--left-right", "--count", ref+"...HEAD")
+	return AheadBehindRefs(dir, ref, "HEAD")
+}
+
+// AheadBehindRefs returns how many commits branch is ahead of and behind base,
+// computed via `rev-list --left-right --count base...branch`. Unlike
+// AheadBehind, neither side needs to be checked out — used for task branches,
+// which aren't the current HEAD (DESIGN §3.6).
+func AheadBehindRefs(dir, base, branch string) (ahead, behind int, err error) {
+	out, err := run(dir, "rev-list", "--left-right", "--count", base+"..."+branch)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -118,7 +126,7 @@ func AheadBehind(dir, ref string) (ahead, behind int, err error) {
 	if len(fields) != 2 {
 		return 0, 0, fmt.Errorf("unexpected rev-list output %q", out)
 	}
-	behind, _ = strconv.Atoi(fields[0]) // left = ref-only
-	ahead, _ = strconv.Atoi(fields[1])  // right = HEAD-only
+	behind, _ = strconv.Atoi(fields[0]) // left = base-only
+	ahead, _ = strconv.Atoi(fields[1])  // right = branch-only
 	return ahead, behind, nil
 }

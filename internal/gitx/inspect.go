@@ -16,6 +16,17 @@ func IgnoredFiles(dir string) ([]string, error) {
 	return splitLines(out), err
 }
 
+// LocalBranches lists local branch names (short form). Used to find task
+// branches — any local branch not among a repo's configured important
+// `branches` (DESIGN §3.6, §5.1).
+func LocalBranches(dir string) ([]string, error) {
+	out, err := run(dir, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	return splitLines(out), nil
+}
+
 // RemoteBranches lists a remote's branch names (short form), excluding its HEAD
 // symref. Used to recreate local branches when collapsing a bare into a clone.
 func RemoteBranches(dir, remote string) ([]string, error) {

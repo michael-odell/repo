@@ -3,7 +3,6 @@
 [defaults]
 worktrees  = false
 branches   = ["main"]
-on_rewrite = "stop"
 prune      = "auto"
 host       = "github"
 
