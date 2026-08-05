@@ -594,12 +594,12 @@ repo sync — 14 repos, 4 due
   ✓ romkatv/powerlevel10k    up to date
   ⏸ cban-ops/pt-helm         main: ff +4
   ⚠ acme/gitops-infra        2 branches need attention
-  ⚠   main                   origin ref missing
-  ⚠   release                diverged (+2/-1): not force-pushing (no force_push match)
+      ⚠ main                  origin ref missing
+      ⚠ release               diverged (+2/-1): not force-pushing (no force_push match)
   ⚠ acme/noodle              3 branches need attention
-  ⚠   fix-login              2 unpushed
-  ⚠   spike-auth             1 unpushed, unmerged
-  ⏸   hotfix                 would push (never pushed)
+      ⚠ fix-login              2 unpushed
+      ⚠ spike-auth             1 unpushed, unmerged
+      ⏸ hotfix                 would push (never pushed)
   ⚠ acme/charts              main rewritten (a1b→9f3) — stopped (no force_pull match)
   ⚠ acme/handwritten         3 untracked file(s)
   ⏸ acme/prometheus          vendor v2.50.1 → v2.51.0
@@ -610,12 +610,11 @@ repo sync — 14 repos, 4 due
 
 The report is definitive-identity-first (owner/repo), not just the short name —
 the same repo name recurring across different owners (a common fork/mirror
-shape) must never read as one line in the table. Every glyph, repo or branch,
-sits in the same left column so the status column reads straight down the
-page; a branch's place under its repo is shown by indenting its *name*, not
-its glyph. Names/branches are always plain text; only the leading glyph
-carries color (bold red for ✗ specifically, since a plain ✗/✓ pair reads as
-too similar without it), and only when stdout is an actual terminal —
+shape) must never read as one line in the table. A branch sub-bullet's glyph
+is itself indented past its repo's, not just its name, so nesting reads
+clearly at a glance. Names/branches are always plain text; only the leading
+glyph carries color (bold red for ✗ specifically, since a plain ✗/✓ pair reads
+as too similar without it), and only when stdout is an actual terminal —
 `NO_COLOR` or piping/redirecting turns it off.
 
 ## 6. Emitted artifacts (shell contract)
