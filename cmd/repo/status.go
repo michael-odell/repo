@@ -113,7 +113,7 @@ func render(w *os.File, obs []observation) {
 		default:
 			clean++
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\n", glyph(o), o.name, detail(o))
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n", colorCell(glyphColor(o), glyph(o)), o.name, detail(o))
 	}
 	tw.Flush()
 	fmt.Fprintf(w, "\n%d clean · %d need attention · %d not cloned\n", clean, attention, absent)
@@ -131,6 +131,23 @@ func glyph(o observation) string {
 		return "•"
 	default:
 		return "✓"
+	}
+}
+
+// glyphColor is glyph's color: bold red for an error specifically, so it
+// isn't easy to mistake for a clean ✓ at a glance.
+func glyphColor(o observation) string {
+	switch {
+	case o.err != nil:
+		return ansiBoldRed
+	case !o.cloned:
+		return ansiGray
+	case o.dirty || o.ahead > 0 || o.behind > 0:
+		return ansiYellow
+	case o.note != "":
+		return ansiCyan
+	default:
+		return ansiGreen
 	}
 }
 

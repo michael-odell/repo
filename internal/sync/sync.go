@@ -862,12 +862,14 @@ func branch0(r model.Repo) string {
 	return "main"
 }
 
-// repoName falls back to the directory leaf for a discovered repo with no id.
+// repoName is owner/repo — definitive regardless of how many repos elsewhere
+// share a short name — falling back to the directory leaf for a discovered
+// repo with no id.
 func repoName(r model.Repo) string {
 	if r.ID.Zero() {
 		return filepath.Base(r.Container())
 	}
-	return r.ID.Short()
+	return r.ID.OwnerRepo()
 }
 
 func deferredReason(r model.Repo) string {

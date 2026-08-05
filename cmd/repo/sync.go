@@ -140,23 +140,27 @@ func expandPath(p string) string {
 func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 
+	// Every glyph — repo or branch — sits in the same left column, so the
+	// status column reads straight down regardless of nesting; a branch's
+	// place under its repo comes from indenting its NAME two spaces further,
+	// not from shifting its glyph (DESIGN §5.6).
 	if opts.Verbose {
 		for _, r := range results {
-			fmt.Fprintf(w, "%s %s\n", syncGlyph(r.Outcome), r.Name)
+			fmt.Fprintf(w, "  %s %s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name)
 			for _, a := range r.Actions {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}
 			for _, b := range r.Branches {
-				fmt.Fprintf(w, "      %s %s: %s\n", syncGlyph(b.Outcome), b.Name, b.Summary)
+				fmt.Fprintf(w, "  %s   %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
 			}
 		}
 		fmt.Fprintln(w)
 	} else {
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 		for _, r := range results {
-			fmt.Fprintf(tw, "  %s\t%s\t%s\n", syncGlyph(r.Outcome), r.Name, r.Detail)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", colorCell(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name, r.Detail)
 			for _, b := range r.Branches {
-				fmt.Fprintf(tw, "      %s\t%s\t%s\n", syncGlyph(b.Outcome), b.Name, b.Summary)
+				fmt.Fprintf(tw, "  %s\t  %s\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
 			}
 		}
 		tw.Flush()
@@ -189,6 +193,26 @@ func syncGlyph(o syncpkg.Outcome) string {
 		return "✗"
 	default:
 		return "✓"
+	}
+}
+
+// outcomeColor is syncGlyph's color: bold red for Failed specifically, since
+// that's the one most worth catching at a glance and the plain ✗/✓ glyphs
+// read as similar without it.
+func outcomeColor(o syncpkg.Outcome) string {
+	switch o {
+	case syncpkg.Updated:
+		return ansiCyan
+	case syncpkg.Attention:
+		return ansiYellow
+	case syncpkg.ReviewPending:
+		return ansiMagenta
+	case syncpkg.Deferred:
+		return ansiGray
+	case syncpkg.Failed:
+		return ansiBoldRed
+	default:
+		return ansiGreen
 	}
 }
 

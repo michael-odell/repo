@@ -123,13 +123,16 @@ func strOrDefault(s, def string) string {
 	return def
 }
 
-// repoName is the display/selection name for a repo, falling back to the
-// directory leaf for a discovered repo with no usable identity.
+// repoName is the display name for a repo: owner/repo, definitive regardless
+// of how many repos elsewhere share a short name — falling back to the
+// directory leaf for a discovered repo with no usable identity. Selection
+// (matching a CLI argument against a repo) is separate, in find(), and still
+// accepts the bare short name.
 func repoName(r model.Repo) string {
 	if r.ID.Zero() {
 		return filepath.Base(r.Container())
 	}
-	return r.ID.Short()
+	return r.ID.OwnerRepo()
 }
 
 const builtinPrune = "auto"
