@@ -182,7 +182,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 func syncGlyph(o syncpkg.Outcome) string {
 	switch o {
 	case syncpkg.Updated:
-		return "⏸"
+		return "↻"
 	case syncpkg.Attention:
 		return "⚠"
 	case syncpkg.ReviewPending:

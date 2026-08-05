@@ -592,17 +592,17 @@ carries real, unreported work.
 ```
 repo sync — 14 repos, 4 due
   ✓ romkatv/powerlevel10k    up to date
-  ⏸ cban-ops/pt-helm         main: ff +4
+  ↻ cban-ops/pt-helm         main: ff +4
   ⚠ acme/gitops-infra        2 branches need attention
       ⚠ main                  origin ref missing
       ⚠ release               diverged (+2/-1): not force-pushing (no force_push match)
   ⚠ acme/noodle              3 branches need attention
       ⚠ fix-login              2 unpushed
       ⚠ spike-auth             1 unpushed, unmerged
-      ⏸ hotfix                 would push (never pushed)
+      ↻ hotfix                 would push (never pushed)
   ⚠ acme/charts              main rewritten (a1b→9f3) — stopped (no force_pull match)
   ⚠ acme/handwritten         3 untracked file(s)
-  ⏸ acme/prometheus          vendor v2.50.1 → v2.51.0
+  ↻ acme/prometheus          vendor v2.50.1 → v2.51.0
   ⚑ acme/fast-syntax-hl      untrusted +2 — review pending (repo review fast-syntax-hl)
   ✓ acme/zsh-plugins         17 branches up to date
   ✗ acme/idx-svc             fetch failed: host unreachable
