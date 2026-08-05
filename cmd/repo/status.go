@@ -103,7 +103,7 @@ func observe(r model.Repo) observation {
 func render(w *os.File, obs []observation) {
 	sort.Slice(obs, func(i, j int) bool { return obs[i].name < obs[j].name })
 	clean, attention, absent := 0, 0, 0
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 	for _, o := range obs {
 		switch {
 		case !o.cloned:

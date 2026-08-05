@@ -156,7 +156,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 		}
 		fmt.Fprintln(w)
 	} else {
-		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 		for _, r := range results {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\n", colorCell(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name, r.Detail)
 			for _, b := range r.Branches {

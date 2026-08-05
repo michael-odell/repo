@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
+	"text/tabwriter"
 )
 
 // TestColorDisabledIsPassthrough: with colorEnabled false (the non-tty
@@ -52,5 +54,47 @@ func TestColorCellEscapesANSIForTabwriter(t *testing.T) {
 	// Exactly two escape-delimited spans, glyph itself unescaped.
 	if n := strings.Count(got, esc); n != 4 {
 		t.Errorf("colorCell() has %d escape bytes, want 4 (two open/close pairs)", n)
+	}
+}
+
+// TestColorCellRequiresStripEscapeFlag: colorCell's escape bytes are only
+// exempted from tabwriter's *width* math by default — tabwriter.StripEscape
+// must also be passed to NewWriter, or those \xff bytes get written to
+// output verbatim (invalid standalone UTF-8, renders as garbage in a real
+// terminal). This pins the actual sync.go/status.go construction, not just
+// colorCell in isolation, since that's the wiring that was missing.
+func TestColorCellRequiresStripEscapeFlag(t *testing.T) {
+	old := colorEnabled
+	colorEnabled = true
+	defer func() { colorEnabled = old }()
+
+	cell := colorCell(ansiBoldRed, "✗")
+
+	var withFlag bytes.Buffer
+	tw := tabwriter.NewWriter(&withFlag, 0, 4, 2, ' ', tabwriter.StripEscape)
+	fprintCell(t, tw, cell)
+
+	if bytes.IndexByte(withFlag.Bytes(), 0xff) >= 0 {
+		t.Errorf("output with StripEscape still contains raw \\xff bytes: %q", withFlag.String())
+	}
+	if !bytes.Contains(withFlag.Bytes(), []byte(ansiBoldRed)) {
+		t.Errorf("output with StripEscape lost the ANSI color code: %q", withFlag.String())
+	}
+
+	var withoutFlag bytes.Buffer
+	tw2 := tabwriter.NewWriter(&withoutFlag, 0, 4, 2, ' ', 0)
+	fprintCell(t, tw2, cell)
+	if bytes.IndexByte(withoutFlag.Bytes(), 0xff) < 0 {
+		t.Errorf("expected raw \\xff bytes without StripEscape (sanity check that the flag is what matters)")
+	}
+}
+
+func fprintCell(t *testing.T, tw *tabwriter.Writer, cell string) {
+	t.Helper()
+	if _, err := tw.Write([]byte(cell + "\tname\tdetail\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Flush(); err != nil {
+		t.Fatal(err)
 	}
 }

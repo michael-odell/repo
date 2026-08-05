@@ -46,6 +46,11 @@ func color(code, s string) string {
 // as visible characters and throw off alignment. The glyph itself stays
 // outside the escape brackets, so its width still counts exactly as it did
 // uncolored.
+//
+// The tabwriter.Writer this feeds MUST be constructed with the StripEscape
+// flag — without it, tabwriter excludes the escape bytes from width math but
+// still writes them to output verbatim, which renders as garbage (the raw
+// \xff bytes aren't valid standalone UTF-8).
 func colorCell(code, s string) string {
 	if !colorEnabled {
 		return s
