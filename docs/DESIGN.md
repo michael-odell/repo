@@ -224,12 +224,21 @@ cascading (`[defaults]` → `[root.*]` → `[[root.*.repo]]`, same as `prune`):
   past `untrusted` unconditionally, regardless of `push`).
 - **`task_branches`** — every other local branch. `"auto"` pushes them the moment
   they exist or advance (their own write target, same as `push`); `"report"`
-  defers to PR time, only flagging unpushed/unmerged state (as today); `"disallow"`
-  additionally treats their mere *existence* as an anomaly worth flagging loudly —
-  the right default for a repo not expected to carry local branches at all
-  (`vendor`, `supply-chain-mirror`). A repo where you deliberately keep a local
-  patch branch on an otherwise-`disallow` repo just overrides that one repo to
-  `report` — no separate allowlist of branch names is needed.
+  defers to PR time, only flagging unpushed/unmerged state (as today); `"pull-only"`
+  additionally keeps any purely-behind branch fast-forwarded to its own remote in
+  place, without checking it out, rather than flagging it — the right default for a
+  repo not expected to carry local *work* at all (`vendor`, `supply-chain-mirror`).
+  It's not a one-branch allowance: a `vendor`/`supply-chain-mirror` clone may
+  reasonably carry several local branches you want kept current read-only
+  (whatever a plain `git clone` left checked out, plus any others you've since
+  added purely to track), and `pull-only` treats every one of them the same way,
+  regardless of how or why it's there. Existence alone is never the anomaly under
+  any value; local commits (unpushed, unmerged, or diverged) still get surfaced
+  loudly under `pull-only` exactly as under `report` — `push` never happens, so
+  they're never silently carried anywhere. A repo where you deliberately keep a
+  local patch branch on an
+  otherwise-`pull-only` repo just overrides that one repo to `report` — no
+  separate allowlist of branch names is needed.
 
 Defaults, chosen so the common case needs zero configuration and the exception is a
 one-line override:
@@ -238,8 +247,8 @@ one-line override:
 |-----------------------|----------|------------------|
 | `upstream-push`       | `manual` | `report`         |
 | `fork-pr`             | `auto`   | `auto`           |
-| `supply-chain-mirror` | `never`  | `disallow`       |
-| `vendor`              | `never`  | `disallow`       |
+| `supply-chain-mirror` | `never`  | `pull-only`      |
+| `vendor`              | `never`  | `pull-only`      |
 
 A mostly-solo fleet sets `[defaults] push = "auto"`, `task_branches = "auto"` once
 and overrides the few team `upstream-push` roots back to `manual`/`report`.
@@ -293,7 +302,7 @@ scan, not a single file.
 worktrees     = false
 branches      = ["main"]
 push          = "auto"      # auto | manual | never  (§3.6)
-task_branches = "auto"      # auto | report | disallow  (§3.6)
+task_branches = "auto"      # auto | report | pull-only  (§3.6)
 prune         = "auto"      # auto | report | manual  (§5.3)
 host          = "github"    # default host for bare-name clones
 fork_owner    = "github:michael-odell"   # forks derive here unless overridden
@@ -687,14 +696,22 @@ resolved before (and independently of) fork (§3.6). `supply-chain-mirror` uses 
 **A workflow is a named bundle of defaults over one shared settings surface, not a
 set of per-workflow-only switches (§3.6):** `push` (`auto`/`manual`/`never`, the
 important branch's ahead-only commits) and `task_branches` (`auto`/`report`/
-`disallow`, every other branch) are valid and overridable on *every* workflow;
+`pull-only`, every other branch) are valid and overridable on *every* workflow;
 only their default varies (`fork-pr` defaults both to `auto`; `upstream-push`
 defaults to `manual`/`report`; `vendor`/`supply-chain-mirror` default to
-`never`/`disallow` since those important branches aren't expected to accumulate
+`never`/`pull-only` since those important branches aren't expected to accumulate
 local-only commits — but a mirror repo you've decided to trust can still be set to
 `push = "auto"`, since that only touches local↔fork traffic and can't itself
-bypass the `untrusted` review gate, §5.4). `force_push`/`force_pull` are a
-symmetric pair of glob lists (§5.2) replacing the old repo-wide `on_rewrite`
+bypass the `untrusted` review gate, §5.4). `task_branches`'s third value is named
+`pull-only`, not `disallow`: a `vendor`/`supply-chain-mirror` clone may carry any
+number of local branches (whatever a plain `git clone`/`pin` leaves it with, plus
+any more you deliberately keep around to track read-only), and every one of them
+just stays fast-forwarded in place rather than flagged or removed — only a branch
+that picks up local commits of its own is still surfaced loudly, so the value
+names the behavior (branches here only ever move by pulling) instead of a stance
+on existence, or a count, that was never quite true.
+`force_push`/`force_pull` are a symmetric pair of glob lists (§5.2) replacing the
+old repo-wide `on_rewrite`
 toggle — empty by default (no forced overwrite either direction), naming exactly
 which branches may absorb a rewrite in which direction, which a single enum
 couldn't express per-branch. Drift detection now also covers untracked

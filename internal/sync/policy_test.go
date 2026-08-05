@@ -145,22 +145,63 @@ func TestTaskBranchesReportLeavesBranchUnpushed(t *testing.T) {
 	}
 }
 
-// TestTaskBranchesDisallowFlagsExistence: task_branches=disallow treats a task
-// branch's mere existence as an anomaly, even one already fully pushed — the
-// right stance for a repo like vendor/supply-chain-mirror that isn't expected
-// to carry local branches at all (DESIGN §3.6).
-func TestTaskBranchesDisallowFlagsExistence(t *testing.T) {
-	origin, clone, run := setupUpstreamRepo(t, `task_branches = "disallow"`)
+// revParse returns dir's SHA for ref.
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", ref).Output()
+	must(t, err)
+	return trim(string(out))
+}
+
+// TestTaskBranchesPullOnlyPullsBehindBranch: task_branches=pull-only fast-
+// forwards a task branch that's purely behind its own remote — no local
+// commits ever put on it, exactly what a plain `git clone` leaves checked out
+// on a vendor repo pinned elsewhere (DESIGN §3.6) — instead of flagging its
+// mere existence the way the old `disallow` value did.
+func TestTaskBranchesPullOnlyPullsBehindBranch(t *testing.T) {
+	origin, clone, run := setupUpstreamRepo(t, `task_branches = "pull-only"`)
+
 	git(t, clone, "checkout", "-q", "-b", "feature")
 	writeCommit(t, clone, "f", "wip\n", "wip")
-	git(t, clone, "push", "-q", "origin", "feature") // already in sync with origin
+	git(t, clone, "push", "-q", "origin", "feature")
+	git(t, clone, "checkout", "-q", "main")
+
+	// Advance origin's feature branch from a second clone, so the local
+	// "feature" branch is purely behind with no local commits of its own.
+	parent := t.TempDir()
+	other := filepath.Join(parent, "other")
+	git(t, parent, "clone", "-q", origin, other)
+	git(t, other, "checkout", "-q", "feature")
+	writeCommit(t, other, "g", "more\n", "more")
+	git(t, other, "push", "-q", "origin", "feature")
+
+	res := run()
+	wantSHA := revParse(t, origin, "feature")
+	if got := revParse(t, clone, "feature"); got != wantSHA {
+		t.Errorf("local feature = %s, want it fast-forwarded to match origin %s", got, wantSHA)
+	}
+	if !hasBranchNote(res, "feature", false) {
+		t.Errorf("no non-attention branch note for feature (should be silently pulled); branches=%+v", res.Branches)
+	}
+}
+
+// TestTaskBranchesPullOnlyFlagsLocalCommits: pull-only still surfaces a task
+// branch that carries local commits of its own — passive scaffolding is fine,
+// actual local work still gets attention and is still never pushed (DESIGN
+// §3.6).
+func TestTaskBranchesPullOnlyFlagsLocalCommits(t *testing.T) {
+	origin, clone, run := setupUpstreamRepo(t, `task_branches = "pull-only"`)
+	git(t, clone, "checkout", "-q", "-b", "feature")
+	writeCommit(t, clone, "f", "wip\n", "wip")
 	git(t, clone, "checkout", "-q", "main")
 
 	res := run()
-	if !hasBranchNote(res, "feature", true) {
-		t.Errorf("no attention branch note for feature (existence alone is the anomaly); branches=%+v", res.Branches)
+	if refExists(t, origin, "feature") {
+		t.Errorf("origin has feature branch: task_branches=pull-only must not push")
 	}
-	_ = origin
+	if !hasBranchNote(res, "feature", true) {
+		t.Errorf("no attention branch note for feature (local commits are still surfaced); branches=%+v", res.Branches)
+	}
 }
 
 // TestForcePushForcePushesMatchedDivergedFork builds a fork-pr repo whose fork

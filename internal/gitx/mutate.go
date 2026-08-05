@@ -141,6 +141,17 @@ func ForcePush(dir, remote, branch string) error {
 	return err
 }
 
+// FetchInto fast-forwards a local branch to match its remote counterpart
+// without checking it out — used to keep a task branch current under
+// task_branches=pull-only (DESIGN §3.6) when it isn't the unit being worked
+// on. Plain `git fetch <remote> <branch>:<branch>` is fast-forward-only by
+// construction (git itself refuses a non-FF into a plain refspec, and refuses
+// outright if branch is checked out elsewhere), so this can't clobber work.
+func FetchInto(dir, remote, branch string) error {
+	_, err := run(dir, "fetch", remote, branch+":"+branch)
+	return err
+}
+
 // Checkout switches the working tree to ref (a branch or, for a vendor tag pin,
 // a detached tag).
 func Checkout(dir, ref string) error {

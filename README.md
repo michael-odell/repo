@@ -43,7 +43,7 @@ branches   = ["main"]       # important branches, synced/worktree'd
 prune      = "auto"         # auto | report | manual  — stale-branch policy (§5.3)
 host       = "github"       # default host for bare-name clones
 fork_owner = "github:michael-odell"   # forks derive here unless overridden
-# push/task_branches (auto|manual|never, auto|report|disallow) default per
+# push/task_branches (auto|manual|never, auto|report|pull-only) default per
 # workflow (§3.6) — override here or per-root/repo when a default doesn't fit.
 # force_push/force_pull (branch-name globs, e.g. ["wip/*"]) default to [] —
 # never force in either direction unless a branch is explicitly listed (§5.2).
@@ -119,7 +119,7 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `branches`   | list of strings                                 | important branches (synced, given worktrees) |
 | `workflow`   | `upstream-push` \| `fork-pr` \| `supply-chain-mirror` \| `vendor` | remote contract (below) |
 | `push`       | `auto` \| `manual` \| `never`                   | important branch's ahead-only commits: push automatically, leave for you, or flag as unexpected — default varies per workflow (§3.6) |
-| `task_branches` | `auto` \| `report` \| `disallow`             | every other local branch: push automatically, defer to PR time, or treat existence itself as an anomaly — default varies per workflow (§3.6) |
+| `task_branches` | `auto` \| `report` \| `pull-only`             | every other local branch: push automatically, defer to PR time, or keep it passively pulled and flag only local commits — default varies per workflow (§3.6) |
 | `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `prune`      | `auto` \| `report` \| `manual`                  | stale local-branch handling |
@@ -198,6 +198,17 @@ Local, plain build:
 ```sh
 go build ./cmd/repo
 ```
+
+or `just build`. See the `justfile` for other targets:
+
+- `just check` — vet, build, test (same as CI)
+- `just release-build` — multi-platform goreleaser build into `dist/`, unpublished, for
+  testing the release artifacts locally (requires `goreleaser`, e.g. `brew install goreleaser`)
+- `just tag-minor` / `just tag-major` — tag a new minor or major version series off the
+  latest tag (e.g. `v0.2.5` -> `v0.3.0` or `v1.0.0`) and optionally push it
+- `just release` — real goreleaser release + publish to GitHub Releases; requires an
+  annotated `vX.Y.Z` tag on `HEAD` and `GITHUB_TOKEN`. This is also what CI runs on tag
+  push (`.github/workflows/release.yml`)
 
 Release builds (static, `CGO_ENABLED=0`, multi-platform) are produced only in CI
 via goreleaser and published to GitHub Releases.

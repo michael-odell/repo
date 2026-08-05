@@ -14,7 +14,7 @@ var (
 	validLayouts      = []string{model.LayoutFlat, model.LayoutOwner}
 	validWorkflows    = []string{model.UpstreamPush, model.ForkPR, model.SupplyChainMirror, model.Vendor}
 	validPush         = []string{"auto", "manual", "never"}
-	validTaskBranches = []string{"auto", "report", "disallow"}
+	validTaskBranches = []string{"auto", "report", "pull-only"}
 	validPrune        = []string{"auto", "report", "manual"}
 )
 

@@ -101,7 +101,7 @@ func WorkflowDefaults(workflow string) (push, taskBranches string) {
 	case model.ForkPR:
 		return "auto", "auto"
 	case model.SupplyChainMirror, model.Vendor:
-		return "never", "disallow"
+		return "never", "pull-only"
 	default: // upstream-push
 		return "manual", "report"
 	}

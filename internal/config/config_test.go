@@ -84,11 +84,11 @@ func TestInheritance(t *testing.T) {
 		t.Errorf("zsh-history push/task_branches = %q/%q, want manual/report (upstream-push default)", zh.Push, zh.TaskBranches)
 	}
 
-	// supply-chain-mirror defaults to never/disallow, but every setting stays
+	// supply-chain-mirror defaults to never/pull-only, but every setting stays
 	// overridable (DESIGN §3.6) — it's a default, not a hard rule.
 	p10k := repoByShort(t, reg, "powerlevel10k")
-	if p10k.Push != "never" || p10k.TaskBranches != "disallow" {
-		t.Errorf("powerlevel10k push/task_branches = %q/%q, want never/disallow (mirror default)", p10k.Push, p10k.TaskBranches)
+	if p10k.Push != "never" || p10k.TaskBranches != "pull-only" {
+		t.Errorf("powerlevel10k push/task_branches = %q/%q, want never/pull-only (mirror default)", p10k.Push, p10k.TaskBranches)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestWorkflowDefaults(t *testing.T) {
 	}{
 		{model.UpstreamPush, "manual", "report"},
 		{model.ForkPR, "auto", "auto"},
-		{model.SupplyChainMirror, "never", "disallow"},
-		{model.Vendor, "never", "disallow"},
+		{model.SupplyChainMirror, "never", "pull-only"},
+		{model.Vendor, "never", "pull-only"},
 	}
 	for _, c := range cases {
 		push, task := WorkflowDefaults(c.workflow)
@@ -114,7 +114,7 @@ func TestWorkflowDefaults(t *testing.T) {
 
 // TestPushTaskBranchesOverridable confirms a repo can override its workflow's
 // push/task_branches default in either direction (DESIGN §3.6) — including
-// overriding a mirror's "never"/"disallow" default to "auto", which only
+// overriding a mirror's "never"/"pull-only" default to "auto", which only
 // affects local↔fork traffic and can't itself bypass the review gate (§5.4).
 func TestPushTaskBranchesOverridable(t *testing.T) {
 	reg := load(t, "base.toml", "push_override.toml")

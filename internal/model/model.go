@@ -41,7 +41,7 @@ type Repo struct {
 	Worktrees    bool
 	Branches     []string
 	Push         string   // "auto" | "manual" | "never" (DESIGN §3.6)
-	TaskBranches string   // "auto" | "report" | "disallow" (DESIGN §3.6)
+	TaskBranches string   // "auto" | "report" | "pull-only" (DESIGN §3.6)
 	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
 	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
 	Prune        string   // "auto" | "report" | "manual"

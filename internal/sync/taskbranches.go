@@ -48,11 +48,6 @@ func (x *run) taskBranch(branch string) {
 		ahead, behind, _ = gitx.AheadBehindRefs(x.container, originRef, branch)
 	}
 
-	if x.r.TaskBranches == "disallow" {
-		x.branchNote(branch, "unexpected (task_branches=disallow)", true)
-		return
-	}
-
 	switch {
 	case !hasRemote:
 		x.taskBranchPush(branch, "never pushed")
@@ -62,13 +57,45 @@ func (x *run) taskBranch(branch string) {
 		x.taskBranchPush(branch, fmt.Sprintf("%d unpushed", ahead))
 	case ahead > 0 && behind > 0:
 		x.taskBranchDiverged(branch, ahead, behind)
-	default: // ahead == 0 && behind > 0
+	default: // ahead == 0 && behind > 0: trailing its own remote, no local intent
+		if x.r.TaskBranches == "pull-only" {
+			x.pullTaskBranch(branch, originRef, behind)
+			return
+		}
 		x.branchNote(branch, fmt.Sprintf("%d behind its own remote", behind), true)
 	}
 }
 
+// pullTaskBranch fast-forwards a purely-behind task branch to its own remote
+// in place, without checking it out — the pull-only case (DESIGN §3.6). Any
+// number of local branches with zero commits of their own (the one a plain
+// `git clone` leaves checked out, or others deliberately kept around purely
+// to track read-only) are treated the same way: kept current rather than
+// flagged, no allowlist of names or count needed. A branch that picks up
+// local commits later falls through to the ahead>0 cases above instead,
+// which still report loudly.
+func (x *run) pullTaskBranch(branch, originRef string, behind int) {
+	if x.opts.DryRun {
+		x.branchNote(branch, fmt.Sprintf("would pull +%d", behind), false)
+		return
+	}
+	if cur, _ := gitx.CurrentBranch(x.container); cur == branch {
+		// Checked out in this container after all (e.g. an aborted/misconfigured
+		// pin left it as HEAD) — leave it to the normal update path rather than
+		// risk a fetch into the current branch.
+		x.branchNote(branch, fmt.Sprintf("%d behind its own remote", behind), true)
+		return
+	}
+	if err := gitx.FetchInto(x.container, "origin", branch); err != nil {
+		x.branchNote(branch, fmt.Sprintf("pull failed: %v", err), true)
+		return
+	}
+	x.branchNote(branch, fmt.Sprintf("pulled +%d", behind), false)
+}
+
 // taskBranchPush pushes or reports a task branch's ahead-only (or brand new)
-// state per `task_branches` (auto/report — disallow is handled by the caller).
+// state per `task_branches` (auto pushes; report/pull-only both just report —
+// pull-only only differs from report in the behind-only case above).
 func (x *run) taskBranchPush(branch, detail string) {
 	if x.r.TaskBranches != "auto" {
 		x.branchNote(branch, detail, true)
