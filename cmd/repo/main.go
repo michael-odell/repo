@@ -29,7 +29,7 @@ var commands = []command{
 	{name: "version", summary: "print version information", run: cmdVersion,
 		help: "usage: repo version"},
 	{name: "list", summary: "enumerate known repos (for completion)", run: cmdList,
-		help: "usage: repo list\n\nPrint every declared repo with its id, workflow, and resolved physical URL."},
+		help: "usage: repo list\n\nPrint every repo — declared in the registry or discovered on disk — with its\nid, workflow, and resolved physical URL."},
 	{name: "resolve", summary: "resolve a repo id to its physical URL (debug)", run: cmdResolve,
 		help: "usage: repo resolve <id|name>\n\nResolve a logical id (github:owner/repo) or short name to the clone URL this\nmachine would use, applying any [resolve] overlay."},
 	{name: "status", summary: "report drift across repos (read-only)", run: cmdStatus,

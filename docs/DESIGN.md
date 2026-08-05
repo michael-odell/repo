@@ -102,9 +102,9 @@ of what the registry would state:
 
 So ordinary cloning stays toil-free: `git clone` (or `repo clone <url>`, a thin
 convenience that places it per root/owner defaults) and never edit config. `sync` /
-`status` operate over the union, so the operational list is complete without the
-config file being hand-maintained. `repo scan --record` reconciles disk→config on
-demand when an authoritative list is wanted.
+`status` / `list` operate over the union, so the operational list is complete
+without the config file being hand-maintained. `repo scan --record` reconciles
+disk→config on demand when an authoritative list is wanted.
 
 ### 3.3 Identity
 
@@ -688,7 +688,7 @@ CLI (initial):
 - `repo scan [--record]` — discover on-disk repos; optionally reconcile into config.
 - `repo home <name[@branch]>` / `repo path <name> <rel>` — navigation primitives.
 - `repo prune` — explicit/confirmation prune sweep.
-- `repo list` — enumerate for completion.
+- `repo list` — enumerate the declared ∪ discovered union for completion (§3.2).
 - `repo review <name>` — supply-chain-mirror review gate (§5.4).
 
 ## 8. Strangulation / migration order

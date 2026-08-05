@@ -53,7 +53,7 @@ func cmdList(_ context.Context, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repos, err := reg.Repos()
+	repos, err := unionRepos(reg)
 	if err != nil {
 		return err
 	}
