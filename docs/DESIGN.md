@@ -90,6 +90,15 @@ of what the registry would state:
 - **workflow** ← inferred from remotes (`origin` only → `upstream-push`;
   `origin`+`upstream` → `fork-pr`; `origin`+`untrusted` → `supply-chain-mirror`,
   §3.6). Config only *overrides* inference.
+- **important branch** ← `origin`'s actual default branch (its `HEAD` symref,
+  the same thing `git clone` records locally — no network round trip needed),
+  else a known mainline name (`main`/`master`/`develop`) found among its local
+  branches. **Never** whatever happens to be checked out — a task branch left
+  checked out is not a proxy for which branch is important, and inferring it
+  that way would silently swap the two: the real mainline reads as a task
+  branch, and someone's WIP reads as the branch sync tracks and pushes.
+  Neither signal resolving is reported (`can't tell which branch is
+  important`), not guessed — the repo needs an explicit `branches` override.
 
 So ordinary cloning stays toil-free: `git clone` (or `repo clone <url>`, a thin
 convenience that places it per root/owner defaults) and never edit config. `sync` /

@@ -52,10 +52,15 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 
 // discoveredRepo synthesizes the merged model for a repo found on disk. Its
 // container and origin come from disk (not the registry), and its lone important
-// branch is whatever is checked out — so sync targets that rather than assuming
-// "main" and flagging every repo on another branch. Everything else is inherited
-// from the root it sits under (DESIGN §3.2: config overrides remote inference),
-// falling back to what disk/remotes report where config is silent.
+// branch is inferred the same way a declared repo's default would be: origin's
+// actual default branch (its HEAD symref) first, else a known mainline name
+// (main/master/develop) among its local branches — never whatever happens to be
+// checked out, which is what a task branch left checked out would otherwise get
+// mistaken for. When neither signal resolves, Branches is left empty rather than
+// guessed; sync flags that repo for an explicit `branches` override instead of
+// silently treating some arbitrary branch as important. Everything else is
+// inherited from the root it sits under (DESIGN §3.2: config overrides remote
+// inference), falling back to what disk/remotes report where config is silent.
 func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 	inh := reg.InheritedFor(f.Roots)
 	workflow := strOrDefault(inh.Workflow, f.Workflow) // config wins over inference
@@ -82,10 +87,33 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 			break
 		}
 	}
-	if b, err := gitx.CurrentBranch(f.Dir); err == nil && b != "" {
+	if b, ok := gitx.DefaultBranch(f.Dir, "origin"); ok {
+		r.Branches = []string{b}
+	} else if b := mainlineBranch(f.Dir); b != "" {
 		r.Branches = []string{b}
 	}
 	return r
+}
+
+// mainlineBranch returns whichever of a small set of conventional names
+// (checked in order of how common each is) exists as a local branch, or ""
+// when none do — the fallback signal for a discovered repo whose clone
+// predates `git clone` recording origin's HEAD symref (see DefaultBranch).
+func mainlineBranch(dir string) string {
+	locals, err := gitx.LocalBranches(dir)
+	if err != nil {
+		return ""
+	}
+	have := map[string]bool{}
+	for _, b := range locals {
+		have[b] = true
+	}
+	for _, name := range []string{"main", "master", "develop"} {
+		if have[name] {
+			return name
+		}
+	}
+	return ""
 }
 
 func strOrDefault(s, def string) string {

@@ -94,6 +94,20 @@ func CurrentBranch(dir string) (string, error) {
 	return b, nil
 }
 
+// DefaultBranch returns remote's default branch (e.g. "main"), read from the
+// local refs/remotes/<remote>/HEAD symbolic ref that `git clone` sets up
+// automatically — no network round trip, so this is safe to call for every
+// repo during discovery. ok is false when that ref isn't present (pruned, or
+// the clone predates automatic HEAD tracking): the caller falls back to a
+// known mainline name, never to whatever happens to be checked out.
+func DefaultBranch(dir, remote string) (string, bool) {
+	out, err := run(dir, "symbolic-ref", "--short", "refs/remotes/"+remote+"/HEAD")
+	if err != nil || out == "" {
+		return "", false
+	}
+	return strings.TrimPrefix(out, remote+"/"), true
+}
+
 // IsDirty reports whether the working tree has uncommitted changes (ignoring
 // untracked files, matching the plugins-update dirty guard).
 func IsDirty(dir string) (bool, error) {

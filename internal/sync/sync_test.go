@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/michael-odell/repo/internal/config"
+	"github.com/michael-odell/repo/internal/model"
 )
 
 func git(t *testing.T, dir string, args ...string) {
@@ -84,6 +85,26 @@ branches = ["main"]
 	must(t, err)
 	if got := trim(string(out)); got != "1" {
 		t.Errorf("clone advanced to %s commits, want 1 (must not pass review)", got)
+	}
+}
+
+// TestDiscoveredRepoFlagsUnresolvedImportantBranch: a discovered repo (Dir
+// set) whose important branch couldn't be inferred — no origin default-branch
+// symref, no known mainline name — must be flagged for an explicit `branches`
+// override, never silently fall back to guessing (e.g. whatever happens to be
+// checked out).
+func TestDiscoveredRepoFlagsUnresolvedImportantBranch(t *testing.T) {
+	r := model.Repo{Dir: t.TempDir(), OriginURL: "https://example.com/x.git"}
+	results := Run(nil, []model.Repo{r}, Options{StateDir: t.TempDir(), Frequency: time.Hour})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	res := results[0]
+	if res.Outcome != Attention {
+		t.Fatalf("outcome = %v, want Attention; actions=%v", res.Outcome, res.Actions)
+	}
+	if want := "can't tell which branch is important — add `branches = [...]`"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }
 

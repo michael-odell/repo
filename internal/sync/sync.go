@@ -140,6 +140,17 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 	res := &Result{Name: repoName(r)}
 	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
 
+	// A discovered repo whose important branch couldn't be confidently inferred
+	// (no origin default-branch symref, no known mainline name — see
+	// discoveredRepo) is flagged rather than guessed from whatever's checked
+	// out: silently treating an arbitrary branch as important would get its
+	// task-branch findings (and push policy) wrong.
+	if r.Dir != "" && x.branch == "" {
+		res.Outcome, res.Detail = Attention, "can't tell which branch is important — add `branches = [...]`"
+		x.add("no origin default branch and no known mainline name (main/master/develop) among local branches")
+		return *res
+	}
+
 	if reason := deferredReason(r); reason != "" {
 		res.Outcome, res.Detail = Deferred, reason
 		x.add("deferred: %s", reason)
@@ -836,6 +847,9 @@ func (x *run) writeTimestamp() {
 func branch0(r model.Repo) string {
 	if len(r.Branches) > 0 {
 		return r.Branches[0]
+	}
+	if r.Dir != "" {
+		return "" // discovered repo: no confident important-branch signal (see discoveredRepo) — flagged by syncRepo, never guessed
 	}
 	return "main"
 }
