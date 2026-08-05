@@ -22,6 +22,16 @@ release-build:
 release:
     goreleaser release --clean
 
+# Tag a new patch off the latest tag (e.g. v0.2.5 -> v0.2.6)
+tag-patch: _clean-worktree
+    #!/usr/bin/env bash
+    set -euo pipefail
+    latest=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)
+    latest=${latest:-v0.0.0}
+    IFS='.' read -r major minor patch <<< "${latest#v}"
+    new="v${major}.${minor}.$((patch + 1))"
+    just _create-tag "${latest}" "${new}"
+
 # Tag a new minor version series off the latest tag (e.g. v0.2.5 -> v0.3.0)
 tag-minor: _clean-worktree
     #!/usr/bin/env bash

@@ -208,8 +208,9 @@ or `just build`. See the `justfile` for other targets:
 - `just check` — vet, build, test (same as CI)
 - `just release-build` — multi-platform goreleaser build into `dist/`, unpublished, for
   testing the release artifacts locally (requires `goreleaser`, e.g. `brew install goreleaser`)
-- `just tag-minor` / `just tag-major` — tag a new minor or major version series off the
-  latest tag (e.g. `v0.2.5` -> `v0.3.0` or `v1.0.0`) and optionally push it
+- `just tag-patch` / `just tag-minor` / `just tag-major` — tag a new patch, minor, or
+  major version off the latest tag (e.g. `v0.2.5` -> `v0.2.6`, `v0.3.0`, or `v1.0.0`)
+  and optionally push it
 - `just release` — real goreleaser release + publish to GitHub Releases; requires an
   annotated `vX.Y.Z` tag on `HEAD` and `GITHUB_TOKEN`. This is also what CI runs on tag
   push (`.github/workflows/release.yml`)
