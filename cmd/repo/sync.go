@@ -151,7 +151,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}
 			for _, b := range r.Branches {
-				fmt.Fprintf(w, "      %s %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
+				fmt.Fprintf(w, "    %s %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
 			}
 		}
 		fmt.Fprintln(w)
@@ -160,7 +160,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 		for _, r := range results {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\n", colorCell(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name, r.Detail)
 			for _, b := range r.Branches {
-				fmt.Fprintf(tw, "      %s\t  %s\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
+				fmt.Fprintf(tw, "    %s\t  %s\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
 			}
 		}
 		tw.Flush()
