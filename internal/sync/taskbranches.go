@@ -11,10 +11,10 @@ import (
 // not per worktree unit, against the container — which works whether the
 // container is a single working tree or a worktree-layout bare front-end,
 // since a task branch is never checked out either way and every check here is
-// a rev-list against refs, never the working tree. Findings are surfaced as
-// per-branch sub-bullets (BranchNote, DESIGN §5.6), never folded into the
-// repo's own Outcome/Detail — a messy task branch is informational, not a
-// reason to flag the whole repo.
+// a rev-list against refs, never the working tree. Findings are recorded via
+// branchMark, exactly like an important branch's own findings (DESIGN §5.6):
+// a messy task branch is just as capable of flagging the repo as a missing
+// or diverged important one.
 //
 // Scope note: unlike `prune`'s three-tier confirmed-merged detection (DESIGN
 // §5.3, not yet implemented as its own command), this only looks at
@@ -62,7 +62,7 @@ func (x *run) taskBranch(branch string) {
 			x.pullTaskBranch(branch, originRef, behind)
 			return
 		}
-		x.branchNote(branch, fmt.Sprintf("%d behind its own remote", behind), true)
+		x.branchMark(branch, Attention, fmt.Sprintf("%d behind its own remote", behind))
 	}
 }
 
@@ -76,21 +76,21 @@ func (x *run) taskBranch(branch string) {
 // which still report loudly.
 func (x *run) pullTaskBranch(branch, originRef string, behind int) {
 	if x.opts.DryRun {
-		x.branchNote(branch, fmt.Sprintf("would pull +%d", behind), false)
+		x.branchMark(branch, Updated, fmt.Sprintf("would pull +%d", behind))
 		return
 	}
 	if cur, _ := gitx.CurrentBranch(x.container); cur == branch {
 		// Checked out in this container after all (e.g. an aborted/misconfigured
 		// pin left it as HEAD) — leave it to the normal update path rather than
 		// risk a fetch into the current branch.
-		x.branchNote(branch, fmt.Sprintf("%d behind its own remote", behind), true)
+		x.branchMark(branch, Attention, fmt.Sprintf("%d behind its own remote", behind))
 		return
 	}
 	if err := gitx.FetchInto(x.container, "origin", branch); err != nil {
-		x.branchNote(branch, fmt.Sprintf("pull failed: %v", err), true)
+		x.branchMark(branch, Attention, fmt.Sprintf("pull failed: %v", err))
 		return
 	}
-	x.branchNote(branch, fmt.Sprintf("pulled +%d", behind), false)
+	x.branchMark(branch, Updated, fmt.Sprintf("pulled +%d", behind))
 }
 
 // taskBranchPush pushes or reports a task branch's ahead-only (or brand new)
@@ -98,18 +98,18 @@ func (x *run) pullTaskBranch(branch, originRef string, behind int) {
 // pull-only only differs from report in the behind-only case above).
 func (x *run) taskBranchPush(branch, detail string) {
 	if x.r.TaskBranches != "auto" {
-		x.branchNote(branch, detail, true)
+		x.branchMark(branch, Attention, detail)
 		return
 	}
 	if x.opts.DryRun {
-		x.branchNote(branch, "would push ("+detail+")", false)
+		x.branchMark(branch, Updated, "would push ("+detail+")")
 		return
 	}
 	if err := gitx.Push(x.container, "origin", branch); err != nil {
-		x.branchNote(branch, fmt.Sprintf("push failed: %v", err), true)
+		x.branchMark(branch, Attention, fmt.Sprintf("push failed: %v", err))
 		return
 	}
-	x.branchNote(branch, "pushed ("+detail+")", false)
+	x.branchMark(branch, Updated, "pushed ("+detail+")")
 }
 
 // taskBranchDiverged handles a task branch that has been locally rewritten
@@ -118,19 +118,19 @@ func (x *run) taskBranchPush(branch, detail string) {
 func (x *run) taskBranchDiverged(branch string, ahead, behind int) {
 	if x.r.TaskBranches == "auto" && matchesAny(x.r.ForcePush, branch) {
 		if x.opts.DryRun {
-			x.branchNote(branch, fmt.Sprintf("would force-push (+%d/-%d)", ahead, behind), false)
+			x.branchMark(branch, Updated, fmt.Sprintf("would force-push (+%d/-%d)", ahead, behind))
 			return
 		}
 		if err := gitx.ForcePush(x.container, "origin", branch); err != nil {
-			x.branchNote(branch, fmt.Sprintf("force-push failed: %v", err), true)
+			x.branchMark(branch, Attention, fmt.Sprintf("force-push failed: %v", err))
 			return
 		}
-		x.branchNote(branch, fmt.Sprintf("force-pushed (+%d/-%d)", ahead, behind), false)
+		x.branchMark(branch, Updated, fmt.Sprintf("force-pushed (+%d/-%d)", ahead, behind))
 		return
 	}
 	reason := "no force_push match"
 	if x.r.TaskBranches != "auto" {
 		reason = fmt.Sprintf("task_branches=%s", x.r.TaskBranches)
 	}
-	x.branchNote(branch, fmt.Sprintf("diverged (+%d/-%d): not force-pushing (%s)", ahead, behind, reason), true)
+	x.branchMark(branch, Attention, fmt.Sprintf("diverged (+%d/-%d): not force-pushing (%s)", ahead, behind, reason))
 }

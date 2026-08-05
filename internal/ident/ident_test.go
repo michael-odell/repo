@@ -4,9 +4,9 @@ import "testing"
 
 func TestParse(t *testing.T) {
 	cases := []struct {
-		in                 string
-		host, owner, name  string
-		wantErr            bool
+		in                string
+		host, owner, name string
+		wantErr           bool
 	}{
 		{in: "github:romkatv/powerlevel10k", host: "github", owner: "romkatv", name: "powerlevel10k"},
 		{in: "ghe:cban-ops/pt-helm", host: "ghe", owner: "cban-ops", name: "pt-helm"},

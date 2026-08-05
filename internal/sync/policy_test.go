@@ -93,10 +93,15 @@ func refExists(t *testing.T, dir, ref string) bool {
 }
 
 // hasBranchNote reports whether res carries a BranchNote for name with the
-// given attention flag.
+// given attention flag (true → Attention, false → Updated — the two Outcomes
+// task-branch findings actually use).
 func hasBranchNote(res Result, name string, attention bool) bool {
+	want := Updated
+	if attention {
+		want = Attention
+	}
 	for _, b := range res.Branches {
-		if b.Name == name && b.Attention == attention {
+		if b.Name == name && b.Outcome == want {
 			return true
 		}
 	}
@@ -117,8 +122,13 @@ func TestTaskBranchesAutoPushesNewBranch(t *testing.T) {
 	if !refExists(t, origin, "feature") {
 		t.Errorf("origin missing feature branch: task_branches=auto should have pushed it")
 	}
-	if !hasBranchNote(res, "feature", false) {
-		t.Errorf("no non-attention branch note for feature; branches=%+v", res.Branches)
+	// "feature" is the only notable branch (main is unaffected), so it folds
+	// onto the row, named, rather than getting its own bullet (DESIGN §5.6).
+	if res.Outcome != Updated {
+		t.Errorf("outcome = %v, want Updated", res.Outcome)
+	}
+	if want := "feature: pushed (never pushed)"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }
 
@@ -135,13 +145,16 @@ func TestTaskBranchesReportLeavesBranchUnpushed(t *testing.T) {
 	if refExists(t, origin, "feature") {
 		t.Errorf("origin has feature branch: task_branches=report must not push")
 	}
-	if !hasBranchNote(res, "feature", true) {
-		t.Errorf("no attention branch note for feature; branches=%+v", res.Branches)
+	// A task-branch finding elevates the repo's own outcome exactly like an
+	// important branch's would (DESIGN §5.6) — a stray unpushed branch is real,
+	// unreported work, not something the repo should read as clean over. As
+	// the only notable branch, it folds onto the row, named, rather than
+	// getting its own bullet.
+	if res.Outcome != Attention {
+		t.Errorf("outcome = %v, want Attention (task branch findings elevate the repo outcome)", res.Outcome)
 	}
-	// Task-branch findings are informational sub-bullets, never the repo's own
-	// headline (DESIGN §5.6) — the important branch is fine, so the repo is too.
-	if res.Outcome != UpToDate {
-		t.Errorf("outcome = %v, want UpToDate (task branches don't affect repo Outcome)", res.Outcome)
+	if want := "feature: never pushed"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }
 
@@ -180,8 +193,11 @@ func TestTaskBranchesPullOnlyPullsBehindBranch(t *testing.T) {
 	if got := revParse(t, clone, "feature"); got != wantSHA {
 		t.Errorf("local feature = %s, want it fast-forwarded to match origin %s", got, wantSHA)
 	}
-	if !hasBranchNote(res, "feature", false) {
-		t.Errorf("no non-attention branch note for feature (should be silently pulled); branches=%+v", res.Branches)
+	if res.Outcome != Updated {
+		t.Errorf("outcome = %v, want Updated (pulled silently, not flagged)", res.Outcome)
+	}
+	if want := "feature: pulled +1"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }
 
@@ -199,8 +215,11 @@ func TestTaskBranchesPullOnlyFlagsLocalCommits(t *testing.T) {
 	if refExists(t, origin, "feature") {
 		t.Errorf("origin has feature branch: task_branches=pull-only must not push")
 	}
-	if !hasBranchNote(res, "feature", true) {
-		t.Errorf("no attention branch note for feature (local commits are still surfaced); branches=%+v", res.Branches)
+	if res.Outcome != Attention {
+		t.Errorf("outcome = %v, want Attention (local commits are still surfaced)", res.Outcome)
+	}
+	if want := "feature: never pushed"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }
 

@@ -147,7 +147,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}
 			for _, b := range r.Branches {
-				fmt.Fprintf(w, "      %s %s: %s\n", branchGlyph(b.Attention), b.Name, b.Summary)
+				fmt.Fprintf(w, "      %s %s: %s\n", syncGlyph(b.Outcome), b.Name, b.Summary)
 			}
 		}
 		fmt.Fprintln(w)
@@ -156,7 +156,7 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 		for _, r := range results {
 			fmt.Fprintf(tw, "  %s\t%s\t%s\n", syncGlyph(r.Outcome), r.Name, r.Detail)
 			for _, b := range r.Branches {
-				fmt.Fprintf(tw, "      %s\t%s\t%s\n", branchGlyph(b.Attention), b.Name, b.Summary)
+				fmt.Fprintf(tw, "      %s\t%s\t%s\n", syncGlyph(b.Outcome), b.Name, b.Summary)
 			}
 		}
 		tw.Flush()
@@ -190,16 +190,6 @@ func syncGlyph(o syncpkg.Outcome) string {
 	default:
 		return "✓"
 	}
-}
-
-// branchGlyph marks a task-branch sub-bullet (DESIGN §5.6): a warning glyph
-// when it needs your attention, a neutral one when it was handled (pushed) or
-// is merely informational.
-func branchGlyph(attention bool) string {
-	if attention {
-		return "⚠"
-	}
-	return "⏸"
 }
 
 func countFailed(results []syncpkg.Result) int {

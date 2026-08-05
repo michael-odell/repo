@@ -46,14 +46,17 @@ type Result struct {
 	migrate *pendingMigration
 }
 
-// BranchNote is one task-branch finding, shown as an indented sub-bullet under
-// its repo (DESIGN §5.6) in both compact and --verbose output, and regardless
-// of dry-run vs a real sync. It never affects the repo's own Outcome/Detail —
-// a messy task branch is informational, not a reason to flag the whole repo.
+// BranchNote is one branch finding — important or task — shown as an indented
+// sub-bullet under its repo (DESIGN §5.6) in both compact and --verbose
+// output, and regardless of dry-run vs a real sync, whenever there is more
+// than one notable branch to report (a lone notable branch folds onto the
+// repo's own row instead; see finalizeBranches). Recorded via branchMark,
+// which also elevates the repo's own Outcome to match — a notable branch is
+// exactly as capable of flagging the repo as any other Outcome source.
 type BranchNote struct {
-	Name      string
-	Summary   string
-	Attention bool // true renders a warning glyph, false a neutral one
+	Name    string
+	Summary string
+	Outcome Outcome
 }
 
 type pendingMigration struct {
@@ -118,6 +121,18 @@ type run struct {
 	ub   string
 	unit string
 
+	// totalBranches is the repo's local branch count (important + task),
+	// fetched once before any branch is reconciled, so finalizeBranches can
+	// decide whether naming a lone notable branch (or counting the boring
+	// ones) adds information or just noise on a single-branch repo.
+	totalBranches int
+
+	// detailIsBranch is true when the last successful mark() call came from
+	// branchMark — i.e. a branch, not some other repo-level fact, currently
+	// owns res.Outcome/Detail. finalizeBranches uses it to avoid overwriting
+	// a non-branch fact that ties a branch's rank (see finalizeBranches).
+	detailIsBranch bool
+
 	res *Result
 }
 
@@ -138,6 +153,7 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 
 	x.provisionAndUpdate()
 	x.hooks()
+	x.finalizeBranches()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()
 	}
@@ -203,6 +219,7 @@ func (x *run) syncSingle() {
 		return
 	}
 	x.dir, x.ub = x.container, x.branch
+	x.totalBranches = countLocalBranches(x.container)
 	switch x.r.Workflow {
 	case model.Vendor:
 		x.updateVendor()
@@ -227,7 +244,15 @@ func (x *run) syncWorktree() {
 		if !x.provisionWorktree() {
 			return
 		}
+	} else if !x.fetchWorktreeRemotes() {
+		// provisionWorktree's own clone+fetch already leaves an absent
+		// container current; an already-provisioned one still needs this
+		// network step every sync, the same way provision() does for a
+		// single tree — without it, a worktree repo would only ever see the
+		// state it had at its first clone.
+		return
 	}
+	x.totalBranches = countLocalBranches(x.container)
 	for _, b := range x.r.Branches {
 		wt := filepath.Join(x.container, b)
 		if !gitx.IsRepo(wt) {
@@ -304,6 +329,39 @@ func (x *run) provisionWorktree() bool {
 		_ = gitx.Fetch(x.container, "upstream")
 	}
 	x.res.Cloned = true
+	return true
+}
+
+// fetchWorktreeRemotes ensures origin (and upstream, for a fork) are set and
+// fetched for an already-provisioned worktree container — the network step
+// every sync needs, mirroring provision()'s fetch for a single tree (dry-run
+// only reports intent). provisionWorktree covers this on an initial clone;
+// this covers every sync after.
+func (x *run) fetchWorktreeRemotes() bool {
+	origin, upstream, ok := x.resolveRemotes()
+	if !ok {
+		return false
+	}
+	if x.opts.DryRun {
+		x.add("would fetch origin%s", ifFork(x.r, " and upstream"))
+		return true
+	}
+	if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
+		x.add("set origin = %s", origin)
+	}
+	if err := gitx.Fetch(x.container, "origin"); err != nil {
+		x.fail(err)
+		return false
+	}
+	x.add("fetched origin")
+	if upstream != "" {
+		if changed, _ := gitx.EnsureRemote(x.container, "upstream", upstream); changed {
+			x.add("set upstream = %s", upstream)
+		}
+		if err := gitx.Fetch(x.container, "upstream"); err == nil {
+			x.add("fetched upstream")
+		}
+	}
 	return true
 }
 
@@ -457,7 +515,7 @@ func (x *run) onImportantBranch() bool {
 // upstream, then layers a fork push on top (updateForkPR).
 func (x *run) updateTracking(ref string) {
 	if _, ok := gitx.RevParse(x.dir, ref); !ok {
-		x.attention(ref + " missing")
+		x.branchMark(x.ub, Attention, "missing on origin")
 		x.add("no %s", ref)
 		return
 	}
@@ -469,7 +527,7 @@ func (x *run) updateTracking(ref string) {
 	case ahead == 0 && behind > 0:
 		if x.opts.DryRun {
 			x.add("would fast-forward %s +%d", x.ub, behind)
-			x.updated(fmt.Sprintf("+%d (dry-run)", behind))
+			x.branchMark(x.ub, Updated, fmt.Sprintf("would fast-forward +%d", behind))
 			return
 		}
 		if err := gitx.FastForwardCurrent(x.dir, ref); err != nil {
@@ -477,7 +535,7 @@ func (x *run) updateTracking(ref string) {
 			return
 		}
 		x.add("fast-forwarded %s +%d", x.ub, behind)
-		x.updated(fmt.Sprintf("+%d", behind))
+		x.branchMark(x.ub, Updated, fmt.Sprintf("fast-forwarded +%d", behind))
 	case ahead > 0 && behind == 0:
 		x.pushOrReport(ahead, "origin")
 	default:
@@ -493,10 +551,10 @@ func (x *run) pushOrReport(ahead int, remote string) {
 	case "auto":
 		x.pushAhead(ahead, remote)
 	case "never":
-		x.attention(fmt.Sprintf("%d unpushed (unexpected)", ahead))
+		x.branchMark(x.ub, Attention, fmt.Sprintf("%d unpushed (unexpected)", ahead))
 		x.add("%d local commit(s) on %s — consider changing workflow (push=never)", ahead, x.ub)
 	default: // "manual"
-		x.attention(fmt.Sprintf("%d unpushed", ahead))
+		x.branchMark(x.ub, Attention, fmt.Sprintf("%d unpushed", ahead))
 		x.add("%d unpushed commit(s) on %s", ahead, x.ub)
 	}
 }
@@ -507,16 +565,16 @@ func (x *run) pushOrReport(ahead int, remote string) {
 func (x *run) pushAhead(ahead int, remote string) {
 	if x.opts.DryRun {
 		x.add("would push %s +%d to %s", x.ub, ahead, remote)
-		x.updated(fmt.Sprintf("+%d (dry-run)", ahead))
+		x.branchMark(x.ub, Updated, fmt.Sprintf("would push +%d", ahead))
 		return
 	}
 	if err := gitx.Push(x.dir, remote, x.ub); err != nil {
-		x.attention(fmt.Sprintf("%d unpushed — push failed", ahead))
+		x.branchMark(x.ub, Attention, fmt.Sprintf("%d unpushed — push failed", ahead))
 		x.add("push %s to %s failed: %v", x.ub, remote, err)
 		return
 	}
 	x.add("pushed %s +%d to %s", x.ub, ahead, remote)
-	x.updated(fmt.Sprintf("pushed +%d", ahead))
+	x.branchMark(x.ub, Updated, fmt.Sprintf("pushed +%d", ahead))
 }
 
 // applyRewrite handles a non-fast-forward on an important branch per
@@ -526,13 +584,13 @@ func (x *run) applyRewrite(ref string) {
 	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
 	if matchesAny(x.r.ForcePull, x.ub) {
 		if ahead > 0 { // rail: never clobber local commits
-			x.attention(fmt.Sprintf("rewrite with %d local commit(s) — stopped", ahead))
+			x.branchMark(x.ub, Attention, fmt.Sprintf("rewrite with %d local commit(s) — stopped", ahead))
 			x.add("rewrite on %s but %d local commit(s) present: escalated to stop", ref, ahead)
 			return
 		}
 		if x.opts.DryRun {
 			x.add("would follow rewrite: reset %s to %s", x.ub, ref)
-			x.updated("would follow rewrite")
+			x.branchMark(x.ub, Updated, "would follow rewrite")
 			return
 		}
 		if err := gitx.ResetHardCurrent(x.dir, ref); err != nil {
@@ -540,10 +598,10 @@ func (x *run) applyRewrite(ref string) {
 			return
 		}
 		x.add("followed rewrite: reset %s to %s", x.ub, ref)
-		x.updated("followed rewrite")
+		x.branchMark(x.ub, Updated, "followed rewrite")
 		return
 	}
-	x.attention(fmt.Sprintf("rewritten/diverged (+%d/-%d) — stopped", ahead, behind))
+	x.branchMark(x.ub, Attention, fmt.Sprintf("rewritten/diverged (+%d/-%d) — stopped", ahead, behind))
 	x.add("non-fast-forward on %s (no force_pull match): stopped", ref)
 }
 
@@ -578,7 +636,7 @@ func (x *run) mirrorReview() {
 		return
 	}
 	x.add("upstream is %d commit(s) ahead of the reviewed mirror — review pending", n)
-	x.mark(ReviewPending, fmt.Sprintf("upstream +%d — review pending (repo review %s)", n, x.res.Name))
+	x.branchMark(x.ub, ReviewPending, fmt.Sprintf("upstream +%d — review pending (repo review %s)", n, x.res.Name))
 }
 
 func (x *run) hooks() {
@@ -616,19 +674,109 @@ func (x *run) add(format string, a ...any) {
 	x.res.Actions = append(x.res.Actions, msg)
 }
 
-// branchNote records a task-branch finding as a sub-bullet (DESIGN §5.6),
-// deliberately not touching Outcome/Detail — see BranchNote.
-func (x *run) branchNote(name, summary string, attention bool) {
-	x.res.Branches = append(x.res.Branches, BranchNote{Name: name, Summary: summary, Attention: attention})
+// branchMark records a per-branch finding — important or task — as a
+// candidate sub-bullet (DESIGN §5.6) and elevates the repo's own Outcome to
+// match, via mark()'s usual rank-max rule. Whether the finding actually
+// renders as a bullet or folds onto the repo's own row is decided later, once
+// every branch has reported in, by finalizeBranches. When this call wins the
+// row (mark reports true), detailIsBranch records that a branch — not some
+// other repo-level fact — is the current reason for the row, which is what
+// lets finalizeBranches tell the two apart on a rank tie.
+//
+// A branch already holding a finding gets it replaced, not duplicated: a
+// fork-pr branch that fast-forwards and then pushes, for instance, calls this
+// twice for the same name, and the second call is simply the fuller
+// description of where that branch ended up — same as mark() always let the
+// last call for a repo win.
+func (x *run) branchMark(name string, o Outcome, detail string) {
+	if o == Updated && x.res.Cloned {
+		detail = "cloned · " + detail
+	}
+	if x.mark(o, detail) {
+		x.detailIsBranch = true
+	}
+	if o == UpToDate {
+		return
+	}
+	for i, b := range x.res.Branches {
+		if b.Name == name {
+			x.res.Branches[i] = BranchNote{Name: name, Summary: detail, Outcome: o}
+			return
+		}
+	}
+	x.res.Branches = append(x.res.Branches, BranchNote{Name: name, Summary: detail, Outcome: o})
+}
+
+// finalizeBranches decides, once every important and task branch has
+// reported in, how the repo's own row represents them (DESIGN §5.6): a
+// single notable branch folds onto the row alone — no accompanying bullet —
+// named when the repo tracks more than one branch, so the reader isn't left
+// guessing which one; two or more roll up into a count, with every notable
+// branch still broken out as its own sub-bullet so nothing is lost; and a
+// repo with no notable branches at all reports how many were checked, when
+// that number is worth knowing.
+//
+// In both the one- and many-branch cases, a non-branch fact (a dirty tree, a
+// failed hook, a layout mismatch) that currently owns the row is left alone —
+// guarded by detailIsBranch rather than a rank comparison, since a same-rank
+// non-branch fact (hooks run after every branch, so it can tie) must still
+// win: branch findings are never lost either way, since the bullets list them
+// regardless of what the row says, but a non-branch fact has nowhere else to
+// go.
+func (x *run) finalizeBranches() {
+	switch len(x.res.Branches) {
+	case 0:
+		if x.res.Outcome == UpToDate && x.totalBranches > 1 {
+			x.res.Detail = fmt.Sprintf("%d branches up to date", x.totalBranches)
+		}
+	case 1:
+		if x.totalBranches > 1 && x.detailIsBranch {
+			b := x.res.Branches[0]
+			x.res.Detail = b.Name + ": " + b.Summary
+		}
+		x.res.Branches = nil
+	default:
+		if x.detailIsBranch {
+			x.res.Detail = fmt.Sprintf("%d branches %s", len(x.res.Branches), rollupWord(x.res.Outcome))
+		}
+	}
+}
+
+// rollupWord phrases finalizeBranches' multi-branch rollup by the worst
+// Outcome among the notable branches. Failed never reaches here — branch-
+// level failures stay repo-level (see fail()), not routed through branchMark.
+func rollupWord(o Outcome) string {
+	switch o {
+	case Attention:
+		return "need attention"
+	case ReviewPending:
+		return "pending review"
+	default: // Updated
+		return "updated"
+	}
+}
+
+// countLocalBranches is LocalBranches with a lenient zero on error — used
+// only to decide whether naming/counting branches adds information, so a
+// failure to list them should silently skip that polish rather than fail.
+func countLocalBranches(dir string) int {
+	branches, err := gitx.LocalBranches(dir)
+	if err != nil {
+		return 0
+	}
+	return len(branches)
 }
 
 // mark raises the repo outcome to o (with detail) when o is at least as severe
 // as the current outcome, so the most-notable of several worktrees governs the
 // summary line while every worktree still contributes to the trace.
-func (x *run) mark(o Outcome, detail string) {
+func (x *run) mark(o Outcome, detail string) bool {
 	if rank(o) >= rank(x.res.Outcome) {
 		x.res.Outcome, x.res.Detail = o, detail
+		x.detailIsBranch = false
+		return true
 	}
+	return false
 }
 func rank(o Outcome) int {
 	switch o {

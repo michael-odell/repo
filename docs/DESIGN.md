@@ -478,7 +478,8 @@ prune, tags) → **update important branches** (per workflow) → **run hooks** 
 | `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → per `push` (default `never`, *"consider changing workflow"*); pin moved on a diverged tag → `force_pull` decides |
 
 Task branches (any branch not in `branches`) are handled per `task_branches`
-(§3.6) uniformly across workflows, independent of the important-branch row above.
+(§3.6) uniformly across workflows. A task branch's findings are reported the
+same way an important branch's are — see §5.6 — not a separate, lesser path.
 
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
 dirty, and untracked (non-ignored) files — computed live via `git status`/`rev-list`,
@@ -553,22 +554,48 @@ syncing, `repo` regenerates the artifacts so drift between "registry changed" an
 
 ### 5.6 Report format
 
-Config/important branches on the repo's summary line; **task branches with unpushed
-commits, and pruned/deleted branches, break out into indented sub-bullets** so lost
-work and reclamations are obvious per repo:
+Every branch a repo carries — important or task — is reported the same way,
+by the same mechanism: whether it lands on the repo's own summary line or
+breaks out into an indented sub-bullet depends only on **how many branches
+are notable this run**, never on which kind of branch it is or which one
+happens to be checked out (the user has no reason to know or track that).
+
+- **Zero notable branches**: the summary line reports the repo's own outcome;
+  a repo tracking more than one local branch says how many were checked
+  (`17 branches up to date`), so a quiet repo still reads as *checked*, not
+  *skipped*.
+- **One notable branch**: it folds onto the summary line, named when the repo
+  tracks more than one branch (unnamed in the overwhelmingly common
+  single-branch case, exactly as before).
+- **Two or more notable branches**: the summary line rolls up to a count
+  (`3 branches need attention`) and **every** notable branch — important or
+  task — breaks out into its own indented sub-bullet, so nothing is lost to
+  however many branches a repo happens to have (worktree repos routinely
+  track several important branches at once; this is what keeps a second
+  broken one from being silently overwritten by the first).
+
+A notable branch's finding also sets the repo's own outcome (rank-max against
+every other source of outcome for that repo — a dirty tree, a failed hook, a
+fetch failure — so the worst thing wins the glyph regardless of source). A
+repo is no longer allowed to read `✓ up to date` while one of its branches
+carries real, unreported work.
 
 ```
-repo sync — 12 repos, 3 due
+repo sync — 14 repos, 4 due
   ✓ powerlevel10k    up to date
-  ⏸ pt-helm          main ff +4 · pushed fork · helm dep update ok
+  ⏸ pt-helm          main: ff +4
+  ⚠ gitops-infra     2 branches need attention
+      ⚠ main         origin ref missing
+      ⚠ release      diverged (+2/-1): not force-pushing (no force_push match)
+  ⚠ noodle           3 branches need attention
       ⚠ fix-login    2 unpushed
-      ⚠ spike-auth   1 unpushed, unmerged · 3 weeks stale
-      🗑 old-poc      deleted upstream, clean+merged — pruned
-      ? hotfix-2      deleted upstream, merge unconfirmed — confirm? (repo prune)
+      ⚠ spike-auth   1 unpushed, unmerged
+      ⏸ hotfix        would push (never pushed)
   ⚠ charts           main rewritten (a1b→9f3) — stopped (no force_pull match)
   ⚠ handwritten      3 untracked file(s)
   ⏸ prometheus       vendor v2.50.1 → v2.51.0
   ⚑ fast-syntax-hl   untrusted +2 — review pending (repo review fast-syntax-hl)
+  ✓ zsh-plugins      17 branches up to date
   ✗ idx-svc          fetch failed: host unreachable
 ```
 

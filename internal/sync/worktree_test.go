@@ -81,6 +81,31 @@ branches = ["main", "release"]
 	}
 }
 
+// TestWorktreeRefetchesOnRepeatSync: a worktrees=true repo must pick up new
+// upstream commits on every sync, not just its initial clone. syncWorktree
+// used to fetch only as part of provisionWorktree's initial clone — an
+// already-provisioned worktree container had no fetch step at all, so a
+// repeat sync could never see anything pushed after the first one
+// (fetchWorktreeRemotes fixes this, mirroring provision()'s fetch for a
+// single tree).
+func TestWorktreeRefetchesOnRepeatSync(t *testing.T) {
+	origin, container, run := setupWorktreeUpstreamRepo(t, "")
+
+	other := t.TempDir()
+	otherClone := filepath.Join(other, "seed2")
+	git(t, other, "clone", "-q", origin, otherClone)
+	writeCommit(t, otherClone, "b", "two\n", "two")
+	git(t, otherClone, "push", "-q", "origin", "main")
+
+	res := run()
+	if res.Outcome != Updated {
+		t.Fatalf("outcome = %v, want Updated (repeat sync must fetch and fast-forward); actions=%v", res.Outcome, res.Actions)
+	}
+	if got := headCount(t, filepath.Join(container, "main")); got != "2" {
+		t.Errorf("main worktree at %s commits, want 2 (repeat sync never fetched the new upstream commit)", got)
+	}
+}
+
 // TestLayoutMismatchSurfacesWithoutReorganizing verifies that a config wanting
 // worktrees over an existing single clone is reconciled as a single tree (data
 // still syncs) and flagged for sync --fix-layout, never grafted into worktrees.

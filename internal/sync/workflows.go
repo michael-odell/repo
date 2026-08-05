@@ -28,18 +28,18 @@ func (x *run) updateForkPR() {
 	case ahead == 0 && behind > 0:
 		if x.opts.DryRun {
 			x.add("would fast-forward %s +%d to %s", x.ub, behind, upRef)
-			x.updated(fmt.Sprintf("+%d (dry-run)", behind))
+			x.branchMark(x.ub, Updated, fmt.Sprintf("would fast-forward +%d (dry-run)", behind))
 		} else {
 			if err := gitx.FastForwardCurrent(x.dir, upRef); err != nil {
 				x.applyRewrite(upRef)
 				return
 			}
 			x.add("fast-forwarded %s +%d to %s", x.ub, behind, upRef)
-			x.updated(fmt.Sprintf("+%d", behind))
+			x.branchMark(x.ub, Updated, fmt.Sprintf("fast-forwarded +%d", behind))
 		}
 	case ahead > 0 && behind == 0:
 		// Local commits not yet upstream — your work to PR; never clobbered.
-		x.attention(fmt.Sprintf("%d to PR", ahead))
+		x.branchMark(x.ub, Attention, fmt.Sprintf("%d to PR", ahead))
 		x.add("%d local commit(s) on %s ahead of upstream — open a PR", ahead, x.ub)
 	default:
 		x.applyRewrite(upRef) // diverged from upstream
@@ -67,7 +67,7 @@ func (x *run) pushFork() {
 			return
 		case ahead > 0 && behind > 0:
 			if !matchesAny(x.r.ForcePush, x.ub) {
-				x.attention("fork diverged — push skipped")
+				x.branchMark(x.ub, Attention, "fork diverged — push skipped")
 				x.add("fork and local diverged on %s (+%d/-%d): not force-pushing (no force_push match)", x.ub, ahead, behind)
 				return
 			}
@@ -86,16 +86,14 @@ func (x *run) pushFork() {
 			return
 		}
 		if err := gitx.Push(x.dir, "origin", x.ub); err != nil {
-			x.attention("fork push failed")
+			x.branchMark(x.ub, Attention, "fork push failed")
 			x.add("push %s to fork failed: %v", x.ub, err)
 			return
 		}
 		x.add("pushed %s to fork", x.ub)
-		if x.res.Outcome == UpToDate {
-			x.updated("pushed fork")
-		}
+		x.branchMark(x.ub, Updated, "pushed fork")
 	default:
-		x.attention("not yet on fork")
+		x.branchMark(x.ub, Attention, "not yet on fork")
 		x.add("%s not yet pushed to fork (push=%s)", x.ub, x.r.Push)
 	}
 }
@@ -107,16 +105,16 @@ func (x *run) pushFork() {
 func (x *run) forcePush(ahead, behind int, remote, label string) {
 	if x.opts.DryRun {
 		x.add("would force-push %s to %s (+%d/-%d)", x.ub, label, ahead, behind)
-		x.updated(fmt.Sprintf("would force-push (+%d/-%d)", ahead, behind))
+		x.branchMark(x.ub, Updated, fmt.Sprintf("would force-push (+%d/-%d)", ahead, behind))
 		return
 	}
 	if err := gitx.ForcePush(x.dir, remote, x.ub); err != nil {
-		x.attention("force-push failed")
+		x.branchMark(x.ub, Attention, "force-push failed")
 		x.add("force-push %s to %s failed: %v", x.ub, label, err)
 		return
 	}
 	x.add("force-pushed %s to %s (+%d/-%d)", x.ub, label, ahead, behind)
-	x.updated(fmt.Sprintf("force-pushed (+%d/-%d)", ahead, behind))
+	x.branchMark(x.ub, Updated, fmt.Sprintf("force-pushed (+%d/-%d)", ahead, behind))
 }
 
 // updateVendor reconciles a vendored, read-only repo to its pin: a branch
@@ -131,7 +129,7 @@ func (x *run) updateVendor() {
 	if pin == "latest-tag" {
 		target := highestSemver(mustTags(x.dir))
 		if target == "" {
-			x.attention("no tags to pin")
+			x.branchMark(x.ub, Attention, "no tags to pin")
 			x.add("pin=latest-tag but the repo has no semver tags")
 			return
 		}
@@ -147,7 +145,7 @@ func (x *run) updateVendor() {
 	// A branch pin: fast-forward to origin/<pin> (never pushed).
 	originRef := "origin/" + pin
 	if _, ok := gitx.RevParse(x.dir, originRef); !ok {
-		x.attention("pin " + pin + " not found")
+		x.branchMark(x.ub, Attention, "pin "+pin+" not found")
 		x.add("pin %q is neither a tag nor an origin branch", pin)
 		return
 	}
@@ -181,7 +179,7 @@ func (x *run) onVendorBranch(branch string) bool {
 func (x *run) vendorCheckoutTag(tag string) {
 	tagCommit, ok := gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
 	if !ok {
-		x.attention("tag " + tag + " missing")
+		x.branchMark(x.ub, Attention, "tag "+tag+" missing")
 		x.add("pinned tag %s not present after fetch", tag)
 		return
 	}
@@ -192,7 +190,7 @@ func (x *run) vendorCheckoutTag(tag string) {
 	if localTag, ok := gitx.RevParse(x.dir, "refs/tags/"+tag); ok {
 		if remoteTag, ok := gitx.RemoteTagSHA(x.dir, "origin", tag); ok && remoteTag != localTag {
 			if !matchesAny(x.r.ForcePull, tag) {
-				x.attention(fmt.Sprintf("tag %s moved upstream — stopped", tag))
+				x.branchMark(x.ub, Attention, fmt.Sprintf("tag %s moved upstream — stopped", tag))
 				x.add("tag %s content moved (no force_pull match): staying at the reviewed tag", tag)
 				return
 			}
@@ -216,7 +214,7 @@ func (x *run) vendorCheckoutTag(tag string) {
 	prev := gitx.TagAtHead(x.dir)
 	if x.opts.DryRun {
 		x.add("would checkout %s", tag)
-		x.updated(vendorBump(prev, tag))
+		x.branchMark(x.ub, Updated, vendorBump(prev, tag))
 		return
 	}
 	if err := gitx.Checkout(x.dir, "refs/tags/"+tag); err != nil {
@@ -224,7 +222,7 @@ func (x *run) vendorCheckoutTag(tag string) {
 		return
 	}
 	x.add("checked out %s", tag)
-	x.updated(vendorBump(prev, tag))
+	x.branchMark(x.ub, Updated, vendorBump(prev, tag))
 }
 
 func vendorBump(prev, tag string) string {
