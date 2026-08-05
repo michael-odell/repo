@@ -188,8 +188,11 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   configured layout (single ↔ worktree, data-safe) after history is pushed. Takes
   positional root/path/name selectors.
 - `apply` — regenerate the shell navigation/completion artifacts into `$REPO_OUT`
+  from the declared ∪ discovered union
 - `list` — enumerate the declared ∪ discovered union (for completion)
-- `resolve` / `version` — debug helpers
+- `resolve` — resolve a declared or discovered repo's name to its physical URL
+  (debug)
+- `version` — print version information
 - `clone`, `prune`, `home`, `path`, `review` — planned, not yet implemented
 
 ## Build

@@ -9,9 +9,9 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
-// unionRepos returns the operational set status, sync, and list all act on:
-// every declared repo, plus every repo discovered on disk that the registry
-// does not already declare (DESIGN §3.2). Identity dedupes the two — a declared entry
+// unionRepos returns the operational set status, sync, list, resolve, and apply
+// all act on: every declared repo, plus every repo discovered on disk that the
+// registry does not already declare (DESIGN §3.2). Identity dedupes the two — a declared entry
 // wins, so its metadata (branches, hooks, workflow) governs — and repeat clones
 // of one id collapse to the first found. Discovered-only repos are synthesized
 // with their real location and existing remote so both commands see one set.

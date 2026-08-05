@@ -19,7 +19,7 @@ func TestPluginsUseFork(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if _, err := Generate(dir, reg, repos, nil); err != nil {
+	if _, err := Generate(dir, reg, repos); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "plugins.zsh"))

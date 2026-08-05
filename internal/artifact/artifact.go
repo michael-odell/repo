@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/michael-odell/repo/internal/config"
-	"github.com/michael-odell/repo/internal/discover"
 	"github.com/michael-odell/repo/internal/ident"
 	"github.com/michael-odell/repo/internal/model"
 )
@@ -31,8 +30,11 @@ type entry struct {
 }
 
 // Generate writes the three artifacts into outDir and returns their paths.
-func Generate(outDir string, reg *config.Registry, repos []model.Repo, found []discover.Found) ([]string, error) {
-	entries := build(reg, repos, found)
+// repos is the declared ∪ discovered union (DESIGN §3.2) — callers pass the
+// same set status/sync/list act on, so a repo apply emits for is exactly one
+// a repo home/cs entry can navigate to.
+func Generate(outDir string, reg *config.Registry, repos []model.Repo) ([]string, error) {
+	entries := build(reg, repos)
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -53,20 +55,16 @@ func Generate(outDir string, reg *config.Registry, repos []model.Repo, found []d
 	return written, nil
 }
 
-func build(reg *config.Registry, repos []model.Repo, found []discover.Found) []entry {
-	byID := map[string]*entry{}
-	var order []string
-
-	add := func(id ident.ID, e *entry) {
-		if _, ok := byID[id.String()]; ok {
-			return // declared wins over discovered; first discovered wins over later
-		}
-		byID[id.String()] = e
-		order = append(order, id.String())
-	}
-
+// build converts the union into emission entries. repos is already deduped by
+// identity and by directory (unionRepos), so no merge logic is needed here — a
+// discovered-only repo (no id) is skipped since it isn't addressable by name.
+func build(reg *config.Registry, repos []model.Repo) []entry {
+	entries := make([]entry, 0, len(repos))
 	for _, r := range repos {
-		e := &entry{id: r.ID, primary: r.PrimaryTree()}
+		if r.ID.Zero() {
+			continue
+		}
+		e := entry{id: r.ID, primary: r.PrimaryTree()}
 		if r.Worktrees {
 			e.worktrees = map[string]string{}
 			for _, b := range r.Branches {
@@ -82,22 +80,13 @@ func build(reg *config.Registry, repos []model.Repo, found []discover.Found) []e
 			}
 			if url, err := reg.Physical(origin); err == nil {
 				e.pluginURL = url
+			} else if r.OriginURL != "" {
+				e.pluginURL = r.OriginURL // discovered, undeclared: use the real origin verbatim
 			}
 		}
-		add(r.ID, e)
+		entries = append(entries, e)
 	}
-	for _, f := range found {
-		if f.ID.Zero() {
-			continue
-		}
-		add(f.ID, &entry{id: f.ID, primary: f.Dir})
-	}
-
-	out := make([]entry, 0, len(order))
-	for _, k := range order {
-		out = append(out, *byID[k])
-	}
-	return out
+	return entries
 }
 
 func prjpath(entries []entry) string {

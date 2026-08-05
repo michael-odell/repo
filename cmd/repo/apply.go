@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/michael-odell/repo/internal/artifact"
-	"github.com/michael-odell/repo/internal/discover"
 )
 
 // outDir is where generated artifacts live: $REPO_OUT, else ~/.local/repo
@@ -25,15 +24,11 @@ func cmdApply(_ context.Context, _ []string) error {
 	if err != nil {
 		return err
 	}
-	repos, err := reg.Repos()
+	repos, err := unionRepos(reg)
 	if err != nil {
 		return err
 	}
-	found, err := discover.Discover(resolveRoots(reg), reg)
-	if err != nil {
-		return err
-	}
-	written, err := artifact.Generate(outDir(), reg, repos, found)
+	written, err := artifact.Generate(outDir(), reg, repos)
 	if err != nil {
 		return err
 	}
