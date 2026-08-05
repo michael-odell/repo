@@ -37,7 +37,7 @@ type Result struct {
 	Cloned   bool
 	Outcome  Outcome
 	Detail   string
-	Branches []BranchNote // task-branch findings, rendered as sub-bullets (DESIGN §5.6)
+	Branches []BranchNote // notable branch findings, rendered as sub-bullets (DESIGN §5.6)
 	Actions  []string
 	Err      error
 
@@ -741,7 +741,15 @@ func (x *run) finalizeBranches() {
 			x.res.Detail = fmt.Sprintf("%d branches up to date", x.totalBranches)
 		}
 	case 1:
-		if x.totalBranches > 1 && x.detailIsBranch {
+		if !x.detailIsBranch {
+			// A worse non-branch fact owns the row (e.g. "on wip, expected
+			// main"): the branch can't fold into Detail, but it must still
+			// surface as a sub-bullet — same principle as the 2+ case below,
+			// just for the one-branch count where there's no rollup line to
+			// carry it.
+			return
+		}
+		if x.totalBranches > 1 {
 			b := x.res.Branches[0]
 			x.res.Detail = b.Name + ": " + b.Summary
 		}

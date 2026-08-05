@@ -221,3 +221,30 @@ func TestReportWorseRepoLevelFactOwnsRowWithBranchesStillListed(t *testing.T) {
 		t.Errorf("branch findings missing despite a worse repo-level fact; branches=%+v", res.Branches)
 	}
 }
+
+// TestReportWorseRepoLevelFactOwnsRowWithSoleBranchStillListed: the single-
+// branch counterpart to the test above. A worse non-branch fact (here, being
+// on the wrong checked-out branch) owns the row, and the one notable task
+// branch must still surface as a sub-bullet rather than being dropped —
+// finalizeBranches' case-1 path used to unconditionally clear res.Branches
+// regardless of who owned the row, silently discarding the branch's own
+// finding (e.g. "push this new branch") whenever some other, worse fact
+// happened to own the row too (DESIGN §5.6).
+func TestReportWorseRepoLevelFactOwnsRowWithSoleBranchStillListed(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `task_branches = "auto"`)
+	git(t, clone, "checkout", "-q", "-b", "other")
+	git(t, clone, "checkout", "-q", "-b", "feature")
+	writeCommit(t, clone, "f", "wip\n", "wip")
+	git(t, clone, "checkout", "-q", "other")
+
+	res := run()
+	if res.Outcome != Attention {
+		t.Fatalf("outcome = %v, want Attention; actions=%v", res.Outcome, res.Actions)
+	}
+	if want := "on other, expected main"; res.Detail != want {
+		t.Errorf("detail = %q, want %q (branch mismatch must own the row)", res.Detail, want)
+	}
+	if !hasBranchNote(res, "feature", false) {
+		t.Errorf("feature's push finding missing despite a worse repo-level fact; branches=%+v", res.Branches)
+	}
+}
