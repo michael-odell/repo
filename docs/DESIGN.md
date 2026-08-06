@@ -695,28 +695,71 @@ syncing, `repo` regenerates the artifacts so drift between "registry changed" an
 
 ### 5.6 Report format
 
-Every branch a repo carries — important or task — is reported the same way,
-by the same mechanism: whether it lands on the repo's own summary line or
-breaks out into an indented sub-bullet depends only on **how many branches
-are notable this run**, never on which kind of branch it is or which one
-happens to be checked out (the user has no reason to know or track that —
-§5.1 holds the update side of the same rule).
+Every branch a repo carries — important or task — is reported the same way, by
+the same mechanism, never according to which kind of branch it is or which one
+happens to be checked out (the user has no reason to know or track that — §5.1
+holds the update side of the same rule).
 
-- **Zero notable branches**: the summary line reports the repo's own outcome;
-  a repo tracking more than one local branch says how many were checked
-  (`17 branches up to date`), so a quiet repo still reads as *checked*, not
-  *skipped*.
-- **One notable branch**: it folds onto the summary line, named when the repo
-  tracks more than one branch (unnamed in the overwhelmingly common
-  single-branch case, exactly as before).
-- **Two or more notable branches**: the summary line rolls up to a count
-  (`3 branches need attention`) and **every** notable branch — important or
-  task — breaks out into its own indented sub-bullet, so nothing is lost to
-  however many branches a repo happens to have (worktree repos routinely
-  track several important branches at once; this is what keeps a second
-  broken one from being silently overwritten by the first).
+Two independent questions decide a branch's line, and conflating them is the
+mistake this section exists to prevent:
 
-A notable branch's finding also sets the repo's own outcome (rank-max against
+- **Severity** — is this a *finding* (something happened, or needs to) or an
+  *observation* (worth naming, needs nothing)? Severity alone sets the repo's
+  glyph.
+- **Visibility** — does it get enumerated at all? Set per repo by
+  `show_branches`, and it never touches the glyph.
+
+Findings are not configurable. An observation is: it exists only to be read.
+
+**`show_branches`** is one dial with four positions, ordered by how much of the
+inventory it enumerates — `none ⊂ notable ⊂ unmerged ⊂ all`:
+
+| value | enumerates | default for |
+|---|---|---|
+| `none` | nothing; the repo row is the whole report | — |
+| `notable` | branches with a finding this run | `vendor`, `supply-chain-mirror` |
+| `unmerged` | …plus task branches holding commits the important branch lacks | `upstream-push`, `fork-pr` |
+| `all` | …plus every remaining branch, important ones included | — |
+
+`none` never suppresses a *finding*, only its line: the repo row still carries
+the worst outcome and its count, and `--verbose` still has the full trace. And
+the read-only workflows default to `notable`, not `none` — a vendored repo has
+no parked work to nudge you about, but it is exactly where a surprise most needs
+surfacing.
+
+An **observation** measures a task branch against the repo's primary important
+branch, not against its own remote: "work that hasn't landed" is a claim about
+the mainline. That is also why important branches need no exclusion rule — they
+are the *reference*, and a branch cannot be unmerged relative to itself. The
+comparison is §5.3's cheap tier, so it under-reports merged-ness (a
+squash-merged branch still reads as ahead) and never over-reports it; erring
+toward "you may have unfinished work here" is the right direction for a nudge.
+
+Given those, the layout follows one rule: **a finding folds onto the repo's row
+only when it is the only thing being shown.**
+
+- **Nothing to show**: the row reports the repo's own outcome; a repo tracking
+  more than one local branch says how many were checked (`17 branches up to
+  date`), so a quiet repo reads as *checked*, not *skipped*.
+- **Exactly one line**: it folds onto the row, named when the repo tracks more
+  than one branch (unnamed in the overwhelmingly common single-branch case).
+  Naming is honest here precisely because nothing else is listed — no other
+  branch had anything to say.
+- **Two or more**: the row rolls up to a count of *findings* (`3 branches need
+  attention`) and **every** line — finding or observation, important or task —
+  breaks out into its own indented sub-bullet. Observations are excluded from
+  that count: rolling them in would turn parked work into an alarm.
+
+The middle case is why the rule is stated as "the only thing being shown"
+rather than "the only finding". A named branch on the row reads as a promise
+that the others are fine. That promise is sound when the row is the entire
+report, and false the moment anything else is listed beside it — so the name
+gives way to a count exactly when it would start to mislead. `none` is the same
+rule at its limit: with lines suppressed, a lone finding on a multi-branch repo
+rolls up rather than naming one branch and implying the rest were checked and
+clean.
+
+A finding also sets the repo's own outcome (rank-max against
 every other source of outcome for that repo — a failed hook, a fetch failure, a
 layout mismatch — so the worst thing wins the glyph regardless of source). A
 repo is no longer allowed to read `✓ up to date` while one of its branches
@@ -745,6 +788,9 @@ repo sync — 14 repos, 4 due
   ↻ acme/prometheus          vendor v2.50.1 → v2.51.0
   ⚑ acme/fast-syntax-hl      untrusted +2 — review pending (repo review fast-syntax-hl)
   ✓ acme/zsh-plugins         17 branches up to date
+  ✓ acme/noodle-notes        7 branches up to date
+      ◦ craft                  1 ahead of main
+      ◦ textbundle             3 ahead of main
   ✗ acme/idx-svc             fetch failed: host unreachable
 ```
 

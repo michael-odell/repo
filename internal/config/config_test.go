@@ -92,22 +92,27 @@ func TestInheritance(t *testing.T) {
 	}
 }
 
-// TestWorkflowDefaults locks in the per-workflow push/task_branches defaults
-// (DESIGN §3.6): a workflow is a named bundle of defaults over one shared
-// settings surface, not a set of per-workflow-only switches.
+// TestWorkflowDefaults locks in the per-workflow push/task_branches/show_branches
+// defaults (DESIGN §3.6): a workflow is a named bundle of defaults over one
+// shared settings surface, not a set of per-workflow-only switches.
+//
+// show_branches is "notable" — never "none" — for the read-only workflows: a
+// vendored or mirrored repo has no parked work to nudge you about, but it is
+// exactly where a finding most needs to surface.
 func TestWorkflowDefaults(t *testing.T) {
 	cases := []struct {
-		workflow, push, task string
+		workflow, push, task, show string
 	}{
-		{model.UpstreamPush, "manual", "report"},
-		{model.ForkPR, "auto", "auto"},
-		{model.SupplyChainMirror, "never", "pull-only"},
-		{model.Vendor, "never", "pull-only"},
+		{model.UpstreamPush, "manual", "report", "unmerged"},
+		{model.ForkPR, "auto", "auto", "unmerged"},
+		{model.SupplyChainMirror, "never", "pull-only", "notable"},
+		{model.Vendor, "never", "pull-only", "notable"},
 	}
 	for _, c := range cases {
-		push, task := WorkflowDefaults(c.workflow)
-		if push != c.push || task != c.task {
-			t.Errorf("WorkflowDefaults(%q) = %q, %q; want %q, %q", c.workflow, push, task, c.push, c.task)
+		push, task, show := WorkflowDefaults(c.workflow)
+		if push != c.push || task != c.task || show != c.show {
+			t.Errorf("WorkflowDefaults(%q) = %q, %q, %q; want %q, %q, %q",
+				c.workflow, push, task, show, c.push, c.task, c.show)
 		}
 	}
 }

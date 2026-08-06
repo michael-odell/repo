@@ -42,6 +42,7 @@ type Repo struct {
 	Branches     []string
 	Push         string   // "auto" | "manual" | "never" (DESIGN §3.6)
 	TaskBranches string   // "auto" | "report" | "pull-only" (DESIGN §3.6)
+	ShowBranches string   // "none" | "notable" | "unmerged" | "all" (DESIGN §5.6)
 	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
 	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
 

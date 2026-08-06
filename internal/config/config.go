@@ -28,6 +28,7 @@ type Settings struct {
 	Branches     []string `toml:"branches"`
 	Push         *string  `toml:"push"`
 	TaskBranches *string  `toml:"task_branches"`
+	ShowBranches *string  `toml:"show_branches"`
 	ForcePush    []string `toml:"force_push"`
 	ForcePull    []string `toml:"force_pull"`
 	// Path globs naming local residue that is expected rather than notable
@@ -101,14 +102,17 @@ var builtinDefaults = model.Repo{
 // (DESIGN §3.6): every workflow shares the same settings surface, and every
 // value remains overridable — only the default varies, chosen so the common
 // case per workflow needs zero configuration.
-func WorkflowDefaults(workflow string) (push, taskBranches string) {
+func WorkflowDefaults(workflow string) (push, taskBranches, showBranches string) {
 	switch workflow {
 	case model.ForkPR:
-		return "auto", "auto"
+		return "auto", "auto", "unmerged"
 	case model.SupplyChainMirror, model.Vendor:
-		return "never", "pull-only"
+		// A vendored or mirrored repo's local branches are scaffolding, not
+		// parked work, so there is nothing there to nudge you about — but a
+		// finding still has to surface.
+		return "never", "pull-only", "notable"
 	default: // upstream-push
-		return "manual", "report"
+		return "manual", "report", "unmerged"
 	}
 }
 
@@ -285,6 +289,7 @@ type Inherited struct {
 	Worktrees           *bool    // nil when unset
 	Push                string   // "" when unset by config → caller applies WorkflowDefaults
 	TaskBranches        string   // "" when unset by config → caller applies WorkflowDefaults
+	ShowBranches        string   // "" when unset by config → caller applies WorkflowDefaults
 	ForcePush           []string // nil when unset
 	ForcePull           []string // nil when unset
 	ExpectedUntracked   []string // nil when unset
@@ -307,6 +312,7 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		Worktrees:           s.Worktrees,
 		Push:                strOr(s.Push, ""),
 		TaskBranches:        strOr(s.TaskBranches, ""),
+		ShowBranches:        strOr(s.ShowBranches, ""),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
 		ExpectedUntracked:   s.ExpectedUntracked,
@@ -343,9 +349,10 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		workflow = builtinDefaults.Workflow
 	}
 
-	// push/task_branches defaults are workflow-dependent (DESIGN §3.6), so they
-	// need the resolved workflow above, unlike every other field here.
-	pushDefault, taskDefault := WorkflowDefaults(workflow)
+	// push/task_branches/show_branches defaults are workflow-dependent (DESIGN
+	// §3.6), so they need the resolved workflow above, unlike every other field
+	// here.
+	pushDefault, taskDefault, showDefault := WorkflowDefaults(workflow)
 	r := model.Repo{
 		ID:                  id,
 		Roots:               chain,
@@ -356,6 +363,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		Branches:            sliceOr(s.Branches, builtinDefaults.Branches),
 		Push:                strOr(s.Push, pushDefault),
 		TaskBranches:        strOr(s.TaskBranches, taskDefault),
+		ShowBranches:        strOr(s.ShowBranches, showDefault),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
 		ExpectedUntracked:   s.ExpectedUntracked,
@@ -462,6 +470,9 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.TaskBranches != nil {
 		base.TaskBranches = over.TaskBranches
+	}
+	if over.ShowBranches != nil {
+		base.ShowBranches = over.ShowBranches
 	}
 	if over.ForcePush != nil {
 		base.ForcePush = over.ForcePush

@@ -64,7 +64,7 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 	inh := reg.InheritedFor(f.Roots)
 	workflow := strOrDefault(inh.Workflow, f.Workflow) // config wins over inference
-	pushDefault, taskDefault := config.WorkflowDefaults(workflow)
+	pushDefault, taskDefault, showDefault := config.WorkflowDefaults(workflow)
 	r := model.Repo{
 		ID:                  f.ID,
 		Roots:               f.Roots,
@@ -75,6 +75,7 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 		Worktrees:           inh.Worktrees != nil && *inh.Worktrees,
 		Push:                strOrDefault(inh.Push, pushDefault),
 		TaskBranches:        strOrDefault(inh.TaskBranches, taskDefault),
+		ShowBranches:        strOrDefault(inh.ShowBranches, showDefault),
 		ForcePush:           inh.ForcePush,
 		ForcePull:           inh.ForcePull,
 		ExpectedUntracked:   inh.ExpectedUntracked,

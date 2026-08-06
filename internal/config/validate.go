@@ -15,6 +15,7 @@ var (
 	validWorkflows    = []string{model.UpstreamPush, model.ForkPR, model.SupplyChainMirror, model.Vendor}
 	validPush         = []string{"auto", "manual", "never"}
 	validTaskBranches = []string{"auto", "report", "pull-only"}
+	validShowBranches = []string{"none", "notable", "unmerged", "all"}
 	validPrune        = []string{"auto", "report", "manual"}
 )
 
@@ -73,6 +74,7 @@ func settingsOf(r model.Repo) Settings {
 		Layout:       &r.Layout,
 		Push:         &r.Push,
 		TaskBranches: &r.TaskBranches,
+		ShowBranches: &r.ShowBranches,
 		Prune:        &r.Prune,
 		Workflow:     &r.Workflow,
 	}
@@ -88,6 +90,7 @@ func checkEnums(add func(string, ...any), where string, s Settings) {
 	check("workflow", s.Workflow, validWorkflows)
 	check("push", s.Push, validPush)
 	check("task_branches", s.TaskBranches, validTaskBranches)
+	check("show_branches", s.ShowBranches, validShowBranches)
 	check("prune", s.Prune, validPrune)
 }
 

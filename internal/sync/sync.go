@@ -29,6 +29,13 @@ const (
 	ReviewPending
 	Deferred
 	Failed
+
+	// Info is an observation, not a finding: something worth naming but not
+	// worth acting on, such as a task branch carrying work that hasn't landed
+	// (DESIGN §5.6). It ranks *below* UpToDate, so mark()'s rank-max rule can
+	// never let one reach a repo's own row — an observation must never change a
+	// repo's glyph. Nothing but a branch note is ever Info.
+	Info
 )
 
 // Result is the per-repo outcome plus an ordered reasoning trace (--verbose).
@@ -164,6 +171,7 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 
 	x.provisionAndUpdate()
 	x.hooks()
+	x.observe()
 	x.finalizeBranches()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()
@@ -749,6 +757,9 @@ func (x *run) branchMark(name string, o Outcome, detail string) {
 	if x.mark(o, detail) {
 		x.detailIsBranch = true
 	}
+	// UpToDate is the absence of a finding, so it earns no line. Info is a
+	// deliberate observation, so it does — the two are not the same "nothing
+	// happened".
 	if o == UpToDate {
 		return
 	}
@@ -780,18 +791,43 @@ func (x *run) branchMark(name string, o Outcome, detail string) {
 // regardless of what the row says, but a non-branch fact has nowhere else to
 // go.
 func (x *run) finalizeBranches() {
-	switch len(x.res.Branches) {
-	case 0:
+	findings := 0
+	for _, b := range x.res.Branches {
+		if rank(b.Outcome) > rank(UpToDate) {
+			findings++
+		}
+	}
+
+	// show_branches = none: the repo row is the entire report. The findings
+	// still set the row's outcome and glyph — only the enumeration goes away —
+	// so a repo can no more read ✓ over a broken branch here than anywhere else.
+	// A lone finding rolls up to a count rather than naming its branch: on a
+	// multi-branch repo a bare name would read as "and the others are fine",
+	// which is precisely what this mode cannot promise.
+	if x.r.ShowBranches == showNone {
+		x.res.Branches = nil
+		if findings > 0 && x.detailIsBranch && x.totalBranches > 1 {
+			x.res.Detail = rollup(findings, x.res.Outcome)
+		}
+		return
+	}
+
+	switch {
+	case len(x.res.Branches) == 0:
 		if x.res.Outcome == UpToDate && x.totalBranches > 1 {
 			x.res.Detail = fmt.Sprintf("%d branches up to date", x.totalBranches)
 		}
-	case 1:
+
+	case findings == 1 && len(x.res.Branches) == 1:
+		// The one thing there is to show. Fold it onto the row — named when the
+		// repo tracks more than one branch, so the reader isn't left guessing
+		// which — and drop the redundant bullet. This is the *only* case where a
+		// branch name reaches the row, and it is sound precisely because nothing
+		// else is being listed: no other branch has anything to say.
 		if !x.detailIsBranch {
-			// A worse non-branch fact owns the row (e.g. "on wip, expected
-			// main"): the branch can't fold into Detail, but it must still
-			// surface as a sub-bullet — same principle as the 2+ case below,
-			// just for the one-branch count where there's no rollup line to
-			// carry it.
+			// A non-branch fact owns the row (a failed hook, a layout
+			// mismatch). It can't be displaced, so the branch keeps its bullet
+			// rather than being silently dropped.
 			return
 		}
 		if x.totalBranches > 1 {
@@ -799,10 +835,40 @@ func (x *run) finalizeBranches() {
 			x.res.Detail = b.Name + ": " + b.Summary
 		}
 		x.res.Branches = nil
+
 	default:
-		if x.detailIsBranch {
-			x.res.Detail = fmt.Sprintf("%d branches %s", len(x.res.Branches), rollupWord(x.res.Outcome))
+		// Two or more lines to show. Everything becomes a bullet and the row
+		// rolls up, counting *findings* only — observations are not things that
+		// need attention, and folding them into that count would turn parked
+		// work into an alarm. A repo whose only lines are observations keeps
+		// whatever its own row already said.
+		if findings > 0 && x.detailIsBranch {
+			x.res.Detail = rollup(findings, x.res.Outcome)
+		} else if findings == 0 && x.res.Outcome == UpToDate && x.totalBranches > 1 {
+			x.res.Detail = fmt.Sprintf("%d branches up to date", x.totalBranches)
 		}
+	}
+}
+
+// rollup phrases the repo row's count of notable branches by the worst Outcome
+// among them.
+func rollup(n int, o Outcome) string {
+	if n == 1 {
+		return "1 branch " + rollupVerb(o)
+	}
+	return fmt.Sprintf("%d branches %s", n, rollupWord(o))
+}
+
+// rollupVerb is rollupWord in the singular, so a count of one reads as English
+// ("1 branch needs attention", not "1 branches need attention").
+func rollupVerb(o Outcome) string {
+	switch o {
+	case Attention:
+		return "needs attention"
+	case ReviewPending:
+		return "pending review"
+	default: // Updated
+		return "updated"
 	}
 }
 
@@ -844,6 +910,8 @@ func (x *run) mark(o Outcome, detail string) bool {
 }
 func rank(o Outcome) int {
 	switch o {
+	case Info:
+		return 0 // below UpToDate: an observation never elevates anything
 	case Failed:
 		return 6
 	case Attention:

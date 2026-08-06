@@ -191,6 +191,11 @@ func syncGlyph(o syncpkg.Outcome) string {
 		return "⋯"
 	case syncpkg.Failed:
 		return "✗"
+	case syncpkg.Info:
+		// An observation, not an outcome — visually quieter than every glyph
+		// that means something happened or needs to (DESIGN §5.6). Distinct
+		// from the "·" that prefixes --verbose trace lines.
+		return "◦"
 	default:
 		return "✓"
 	}
@@ -211,6 +216,8 @@ func outcomeColor(o syncpkg.Outcome) string {
 		return ansiGray
 	case syncpkg.Failed:
 		return ansiBoldRed
+	case syncpkg.Info:
+		return ansiGray
 	default:
 		return ansiGreen
 	}
