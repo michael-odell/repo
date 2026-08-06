@@ -537,6 +537,26 @@ so leaving the tree elsewhere while advancing the ref would defeat the point.
 Every other workflow moves whatever branch needs moving and leaves you where you
 were.
 
+**Working-tree state is checked per tree, not per repo.** Principle 4 ("never
+touch a dirty tree") is enforced where the tree is, which means once per *unit* —
+a worktree repo has one tree per important branch, and a single clone is the
+one-unit case (§4). For each:
+
+- **Uncommitted changes to tracked files** stop that unit's branch from moving.
+  Advancing a branch drags its working tree along, over work that exists nowhere
+  else; unlike a commit there is nothing to recover from. Refuse and report.
+- **Untracked (non-ignored) files** are reported the same way but block nothing —
+  a fast-forward never writes over them.
+
+Both are scoped to the tree they describe. A dirty `main` worktree says nothing
+about whether `release` can advance, so `release` still syncs and each tree gets
+its own line in the report. It equally says nothing about branches with no
+working tree at all: a task branch that isn't checked out anywhere is still
+pushed, since pushing a commit cannot endanger uncommitted work. What a dirty
+tree blocks is exactly the set of moves that would disturb *it* — including a
+task branch's `pull-only` fast-forward, when that branch is the one checked out
+there.
+
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
 dirty, and untracked (non-ignored) files — computed live via `git status`/`rev-list`,
 never persisted.
@@ -640,10 +660,17 @@ happens to be checked out (the user has no reason to know or track that —
   broken one from being silently overwritten by the first).
 
 A notable branch's finding also sets the repo's own outcome (rank-max against
-every other source of outcome for that repo — a dirty tree, a failed hook, a
-fetch failure — so the worst thing wins the glyph regardless of source). A
+every other source of outcome for that repo — a failed hook, a fetch failure, a
+layout mismatch — so the worst thing wins the glyph regardless of source). A
 repo is no longer allowed to read `✓ up to date` while one of its branches
 carries real, unreported work.
+
+Rank-max also governs a *single* branch's successive findings: a later, milder
+one never erases a worse one already recorded for that branch. A tree carrying
+untracked files (Attention) that then fast-forwards (Updated) reports the
+warning, not the fast-forward — otherwise the row and its bullet would disagree,
+the row having kept the worse fact. Equal ranks still replace, which is what
+lets a fork-pr branch's "fast-forwarded, then pushed" read as one final state.
 
 ```
 repo sync — 14 repos, 4 due

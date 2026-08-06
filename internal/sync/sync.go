@@ -285,6 +285,9 @@ func (x *run) syncWorktree() {
 func (x *run) updateUnit(dir, branch, unit string) {
 	x.dir, x.ub, x.unit = dir, branch, unit
 	defer func() { x.unit = "" }()
+	if !x.treeGuard() {
+		return
+	}
 	switch x.r.Workflow {
 	case model.Vendor:
 		x.updateVendor()
@@ -481,21 +484,42 @@ func (x *run) provision() bool {
 		}
 	}
 
-	// Dirty guard: uncommitted tracked changes block updates (a merge could
-	// conflict with them). Untracked files are reported the same way but never
-	// block — a plain fast-forward doesn't touch them (DESIGN §5.1, principle 3).
-	dirty, _ := gitx.IsDirty(x.container)
-	untracked, _ := gitx.UntrackedFiles(x.container)
-	if len(untracked) > 0 {
-		x.attention(fmt.Sprintf("%d untracked file(s)", len(untracked)))
-		x.add("%d untracked file(s) present", len(untracked))
-	}
-	if dirty {
-		x.attention("dirty — updates skipped")
-		x.add("dirty working tree: skipping updates")
-		return false
-	}
 	return true
+}
+
+// treeGuard reports the state of the unit's working tree and decides whether its
+// branch may be moved (DESIGN §5.1, principle 4). Uncommitted changes to tracked
+// files block: advancing the branch drags this tree along with it, over work that
+// exists nowhere else and — unlike a commit — could not be recovered. Untracked
+// files are surfaced the same way but never block, since nothing here writes over
+// them.
+//
+// Called once per unit rather than once per repo, so every working tree gets
+// checked and reported: a worktree-layout repo has one per important branch, and
+// a dirty `main` is no reason to leave `release` un-synced. The finding is
+// attributed to the unit's branch, which is how §5.6 names units — so several
+// dirty worktrees each get their own line instead of overwriting one another.
+func (x *run) treeGuard() bool {
+	dirty, _ := gitx.IsDirty(x.dir)
+	untracked, _ := gitx.UntrackedFiles(x.dir)
+
+	var parts []string
+	if dirty {
+		parts = append(parts, "uncommitted changes")
+	}
+	if n := len(untracked); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d untracked file(s)", n))
+	}
+	if len(parts) == 0 {
+		return true
+	}
+	detail := strings.Join(parts, ", ")
+	if dirty {
+		detail += " — update skipped"
+	}
+	x.branchMark(x.ub, Attention, detail)
+	x.add("%s", detail)
+	return !dirty
 }
 
 // updateTracking reconciles the unit's important branch against ref: the shared
@@ -591,17 +615,15 @@ func (x *run) applyRewrite(ref string) {
 			x.add("rewrite on %s but %d local commit(s) present: escalated to stop", ref, ahead)
 			return
 		}
-		// Same rail, for work that isn't committed yet: a dirty working tree is
-		// how an ordinary fast-forward ends up here at all (merge --ff-only
-		// refuses to overwrite the edit), and reset --hard would then discard
-		// it with nothing to recover from. Uncommitted work outranks following
-		// a rewrite, exactly as local commits do.
-		if wt := gitx.WorktreeFor(x.dir, x.ub); wt != "" {
-			if dirty, _ := gitx.IsDirty(wt); dirty {
-				x.branchMark(x.ub, Attention, "uncommitted changes — stopped")
-				x.add("rewrite on %s but %s has uncommitted changes: escalated to stop", ref, shorten(wt))
-				return
-			}
+		// Same rail for work that isn't committed yet, which is even less
+		// recoverable than a local commit. treeGuard already turned this unit
+		// back before any of its branches were touched, so this is a backstop
+		// rather than the primary check — worth its four lines on the one
+		// operation here that destroys work outright.
+		if wt := dirtyTree(x.dir, x.ub); wt != "" {
+			x.branchMark(x.ub, Attention, "uncommitted changes — stopped")
+			x.add("rewrite on %s but %s has uncommitted changes: escalated to stop", ref, shorten(wt))
+			return
 		}
 		if x.opts.DryRun {
 			x.add("would follow rewrite: reset %s to %s", x.ub, ref)
@@ -701,8 +723,15 @@ func (x *run) add(format string, a ...any) {
 // A branch already holding a finding gets it replaced, not duplicated: a
 // fork-pr branch that fast-forwards and then pushes, for instance, calls this
 // twice for the same name, and the second call is simply the fuller
-// description of where that branch ended up — same as mark() always let the
-// last call for a repo win.
+// description of where that branch ended up.
+//
+// Replacement is rank-max, matching mark()'s rule for the repo's own row: a
+// later, *milder* finding never erases a worse one already recorded for that
+// branch. Without this, a branch whose tree carries untracked files (Attention)
+// and then fast-forwards (Updated) would report only the fast-forward, quietly
+// dropping the warning — the sub-bullet and the row would then disagree, since
+// mark() kept the Attention. Equal ranks still replace, which is what makes the
+// fork-pr case above read as the fuller description rather than the first step.
 func (x *run) branchMark(name string, o Outcome, detail string) {
 	if o == Updated && x.res.Cloned {
 		detail = "cloned · " + detail
@@ -715,7 +744,9 @@ func (x *run) branchMark(name string, o Outcome, detail string) {
 	}
 	for i, b := range x.res.Branches {
 		if b.Name == name {
-			x.res.Branches[i] = BranchNote{Name: name, Summary: detail, Outcome: o}
+			if rank(o) >= rank(b.Outcome) {
+				x.res.Branches[i] = BranchNote{Name: name, Summary: detail, Outcome: o}
+			}
 			return
 		}
 	}

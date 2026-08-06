@@ -38,6 +38,23 @@ func fastForward(dir, branch, ref string) error {
 	return gitx.FastForwardRef(dir, branch, ref)
 }
 
+// dirtyTree returns the working tree holding branch when that tree has
+// uncommitted changes, else "". This is the state in which no update may move
+// branch (principle 4, "never touch a dirty tree"): moving the branch would drag
+// its working tree along, over changes that exist nowhere else. A branch with no
+// working tree has nothing to disturb, so it is never dirty in this sense — the
+// same asymmetry fastForward and forceReset are built on.
+func dirtyTree(dir, branch string) string {
+	wt := gitx.WorktreeFor(dir, branch)
+	if wt == "" {
+		return ""
+	}
+	if dirty, _ := gitx.IsDirty(wt); dirty {
+		return wt
+	}
+	return ""
+}
+
 // forceReset moves branch to ref even when the move is not a fast-forward — the
 // force_pull path (DESIGN §5.2), whose callers have already established that no
 // local commits are being discarded. Same working-tree rule as fastForward.
