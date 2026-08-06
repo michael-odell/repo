@@ -38,7 +38,7 @@ func TestWorktreeDirtyTreeReportedAndBlocksItsBranch(t *testing.T) {
 	if res.Outcome != Attention {
 		t.Fatalf("outcome = %v, want Attention; actions=%v", res.Outcome, res.Actions)
 	}
-	if want := "main: uncommitted changes — update skipped"; res.Detail != want {
+	if want := "main: 1 uncommitted change(s) — update skipped"; res.Detail != want {
 		t.Errorf("detail = %q, want %q", res.Detail, want)
 	}
 }

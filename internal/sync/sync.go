@@ -500,12 +500,11 @@ func (x *run) provision() bool {
 // attributed to the unit's branch, which is how §5.6 names units — so several
 // dirty worktrees each get their own line instead of overwriting one another.
 func (x *run) treeGuard() bool {
-	dirty, _ := gitx.IsDirty(x.dir)
-	untracked, _ := gitx.UntrackedFiles(x.dir)
+	uncommitted, untracked := x.treeMods(x.dir)
 
 	var parts []string
-	if dirty {
-		parts = append(parts, "uncommitted changes")
+	if n := len(uncommitted); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d uncommitted change(s)", n))
 	}
 	if n := len(untracked); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d untracked file(s)", n))
@@ -514,12 +513,12 @@ func (x *run) treeGuard() bool {
 		return true
 	}
 	detail := strings.Join(parts, ", ")
-	if dirty {
+	if len(uncommitted) > 0 {
 		detail += " — update skipped"
 	}
 	x.branchMark(x.ub, Attention, detail)
 	x.add("%s", detail)
-	return !dirty
+	return len(uncommitted) == 0
 }
 
 // updateTracking reconciles the unit's important branch against ref: the shared
@@ -562,6 +561,17 @@ func (x *run) fastForwardTo(ref string, behind int) bool {
 		return true
 	}
 	if err := fastForward(x.dir, x.ub, ref); err != nil {
+		// Behind-only means a fast-forward is possible ref-wise, so a failure
+		// here is the working tree declining it — the case `expected_uncommitted`
+		// creates by letting the attempt happen at all, where this particular
+		// advance turns out to touch one of those files after all. Say so,
+		// rather than routing a dirty tree into the rewrite path and reporting
+		// a divergence that didn't happen.
+		if wt := dirtyTree(x.dir, x.ub); wt != "" {
+			x.branchMark(x.ub, Attention, "uncommitted changes in the way — update skipped")
+			x.add("fast-forward of %s to %s declined: uncommitted changes in %s would be overwritten", x.ub, ref, shorten(wt))
+			return false
+		}
 		x.applyRewrite(ref)
 		return false
 	}

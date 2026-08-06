@@ -38,10 +38,10 @@ func (reg *Registry) Validate() error {
 			add("root %q: missing `dir`", n)
 		}
 		checkEnums(add, fmt.Sprintf("root %q", n), r.Settings)
-		checkGlobs(add, fmt.Sprintf("root %q", n), r.Settings.ForcePush, r.Settings.ForcePull)
+		checkGlobs(add, fmt.Sprintf("root %q", n), globsOfSettings(r.Settings))
 	}
 	checkEnums(add, "defaults", reg.defaults)
-	checkGlobs(add, "defaults", reg.defaults.ForcePush, reg.defaults.ForcePull)
+	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
 
 	// effective() surfaces id/fork parse errors and undervable forks; resolving
 	// Physical additionally catches unknown hosts. Report the first structural
@@ -52,7 +52,7 @@ func (reg *Registry) Validate() error {
 	} else {
 		for _, r := range repos {
 			checkEnums(add, r.ID.String(), settingsOf(r))
-			checkGlobs(add, r.ID.String(), r.ForcePush, r.ForcePull)
+			checkGlobs(add, r.ID.String(), globsOfRepo(r))
 			if _, err := reg.Physical(r); err != nil {
 				add("%v", err)
 			}
@@ -94,7 +94,7 @@ func checkEnums(add func(string, ...any), where string, s Settings) {
 // checkGlobs validates force_push/force_pull entries compile as glob patterns
 // (DESIGN §5.2) — an "*" is special-cased elsewhere to mean every branch, but
 // still must round-trip through path.Match without error here.
-func checkGlobs(add func(string, ...any), where string, forcePush, forcePull []string) {
+func checkGlobs(add func(string, ...any), where string, s globSettings) {
 	check := func(field string, patterns []string) {
 		for _, p := range patterns {
 			if _, err := path.Match(p, "x"); err != nil {
@@ -102,8 +102,38 @@ func checkGlobs(add func(string, ...any), where string, forcePush, forcePull []s
 			}
 		}
 	}
-	check("force_push", forcePush)
-	check("force_pull", forcePull)
+	check("force_push", s.ForcePush)
+	check("force_pull", s.ForcePull)
+	check("expected_untracked", s.ExpectedUntracked)
+	check("expected_uncommitted", s.ExpectedUncommitted)
+}
+
+// globSettings is the set of glob-bearing fields checkGlobs validates, so adding
+// a new pattern list is one field here rather than another parameter at every
+// call site.
+type globSettings struct {
+	ForcePush           []string
+	ForcePull           []string
+	ExpectedUntracked   []string
+	ExpectedUncommitted []string
+}
+
+func globsOfSettings(s Settings) globSettings {
+	return globSettings{
+		ForcePush:           s.ForcePush,
+		ForcePull:           s.ForcePull,
+		ExpectedUntracked:   s.ExpectedUntracked,
+		ExpectedUncommitted: s.ExpectedUncommitted,
+	}
+}
+
+func globsOfRepo(r model.Repo) globSettings {
+	return globSettings{
+		ForcePush:           r.ForcePush,
+		ForcePull:           r.ForcePull,
+		ExpectedUntracked:   r.ExpectedUntracked,
+		ExpectedUncommitted: r.ExpectedUncommitted,
+	}
 }
 
 func contains(ss []string, want string) bool {

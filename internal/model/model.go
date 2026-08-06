@@ -44,9 +44,15 @@ type Repo struct {
 	TaskBranches string   // "auto" | "report" | "pull-only" (DESIGN §3.6)
 	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
 	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
-	Prune        string   // "auto" | "report" | "manual"
-	Pin          string   // vendor only
-	Hooks        []Hook
+
+	// Path globs for local residue that is expected rather than notable: files
+	// something regenerates, that you have no intention of committing (DESIGN
+	// §3.6). They suppress the report, never the data-safety rules.
+	ExpectedUntracked   []string
+	ExpectedUncommitted []string
+	Prune               string // "auto" | "report" | "manual"
+	Pin                 string // vendor only
+	Hooks               []Hook
 
 	// Discovered-only: a repo found on disk that the registry does not declare
 	// (DESIGN §3.2). Dir is its actual container (authoritative over the computed

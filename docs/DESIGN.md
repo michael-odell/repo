@@ -280,6 +280,39 @@ Both default to empty, everywhere: no forced overwrite in either direction is ev
 attempted without an explicit, per-branch opt-in. Full mechanics, including the
 never-clobber-unpushed-work rail, are in §5.2.
 
+**`expected_untracked`** and **`expected_uncommitted`** are glob lists of *file
+paths* — not branch names — naming local residue that is expected rather than
+notable: files something outside the repo regenerates and that you have no
+intention of committing. The motivating case is a vendored repo whose upstream
+will never `.gitignore` your tooling's artifacts for you:
+
+```toml
+[root.plugins]
+dir                = "~/.zsh/plugins"
+expected_untracked = ["*.plugin.zsh"]   # symlink shims a plugin loader creates
+```
+
+Patterns use the same globs as `force_push`/`force_pull`, tested against a path's
+base name as well as its full path (`path.Match` doesn't cross `/`), so a pattern
+names the file wherever its generator puts it. Both inherit like every other
+setting, so one line on a root covers every repo under it.
+
+They are deliberately **lists, not switches.** "Untracked files don't matter in
+this repo" would also hide the next untracked file, which might be work; naming
+the file you already know about keeps the signal for everything else.
+
+`repo` implements these itself and writes nothing to the repository — no
+`.gitignore`, no `.git/info/exclude`. Making git agree would be one shared
+definition of "noise" rather than two, but it would also mean `repo` silently
+changing git's behaviour inside repos it doesn't own, in a file (`info/exclude`)
+that isn't in the working tree and is easy to miss when auditing what a repo
+actually ignores. Suppressing your own tool's output is the smaller, more
+reversible thing; keeping `git status` honest is worth the duplication. Excluding
+a file from git as well stays a deliberate, per-clone act by the user.
+
+What they do *not* do is in §5.1: they change what `sync` calls to your
+attention, never what it protects.
+
 ### 3.7 Registry composition (and keeping private repos private)
 
 The registry is **merged from a path-style list of fragments** (`REPO_REGISTRY_PATH`)
@@ -556,6 +589,30 @@ pushed, since pushing a commit cannot endanger uncommitted work. What a dirty
 tree blocks is exactly the set of moves that would disturb *it* — including a
 task branch's `pull-only` fast-forward, when that branch is the one checked out
 there.
+
+**`expected_*` changes attention, not protection.** Residue matching
+`expected_untracked` / `expected_uncommitted` (§3.6) drops out of both bullets
+above: it isn't reported, and it doesn't hold the branch back. The two options
+are not quite symmetric, because the states aren't: untracked files only ever
+warn, so suppressing the warning is the whole feature. Uncommitted changes also
+*block*, so suppressing only their report would leave the branch silently stalled
+forever — strictly worse than the warning it removed. Declaring a modification
+expected therefore has to let the fast-forward be **attempted**, and git
+arbitrates from there: it advances the tree if the incoming commits don't touch
+those files, and refuses if they do, which `sync` reports as what it is rather
+than mistaking it for a divergence.
+
+What an `expected_*` declaration never does is authorise destroying the file:
+
+| operation | honours `expected_*`? | why |
+|---|---|---|
+| the ⚠ report (§5.6) | yes | that is the point |
+| deciding whether to attempt a fast-forward | yes | git still refuses if the move would overwrite the file |
+| `force_pull`'s `reset --hard` (§5.2) | **no** | discards the file outright, with nothing to recover from |
+| a layout conversion's residue rules (§4.1) | **no** | carrying work across a conversion is a data-safety rule, not a report |
+
+So the worst an over-broad pattern can do is make `sync` quieter and let it try a
+move git would have refused anyway. It cannot turn into consent to lose the file.
 
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
 dirty, and untracked (non-ignored) files — computed live via `git status`/`rev-list`,

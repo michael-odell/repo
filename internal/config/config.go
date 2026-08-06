@@ -23,19 +23,24 @@ import (
 // [[root.*.repo]] entry. Pointers/slices distinguish "unset" (inherit) from a set
 // value. `home_root` is gone — a root's `dir` is its home (DESIGN §3.4).
 type Settings struct {
-	Layout       *string      `toml:"layout"`
-	Worktrees    *bool        `toml:"worktrees"`
-	Branches     []string     `toml:"branches"`
-	Push         *string      `toml:"push"`
-	TaskBranches *string      `toml:"task_branches"`
-	ForcePush    []string     `toml:"force_push"`
-	ForcePull    []string     `toml:"force_pull"`
-	Prune        *string      `toml:"prune"`
-	Host         *string      `toml:"host"`
-	Workflow     *string      `toml:"workflow"`
-	ForkOwner    *string      `toml:"fork_owner"`
-	Pin          *string      `toml:"pin"`
-	Hooks        []model.Hook `toml:"hooks"`
+	Layout       *string  `toml:"layout"`
+	Worktrees    *bool    `toml:"worktrees"`
+	Branches     []string `toml:"branches"`
+	Push         *string  `toml:"push"`
+	TaskBranches *string  `toml:"task_branches"`
+	ForcePush    []string `toml:"force_push"`
+	ForcePull    []string `toml:"force_pull"`
+	// Path globs naming local residue that is expected rather than notable
+	// (DESIGN §3.6). They change what sync calls to your attention; they never
+	// change what it protects.
+	ExpectedUntracked   []string     `toml:"expected_untracked"`
+	ExpectedUncommitted []string     `toml:"expected_uncommitted"`
+	Prune               *string      `toml:"prune"`
+	Host                *string      `toml:"host"`
+	Workflow            *string      `toml:"workflow"`
+	ForkOwner           *string      `toml:"fork_owner"`
+	Pin                 *string      `toml:"pin"`
+	Hooks               []model.Hook `toml:"hooks"`
 }
 
 // Host is a [hosts.*] entry.
@@ -275,16 +280,18 @@ func (reg *Registry) chain(name string) []string {
 // config leaves unset are returned zero/"" so the caller falls back to what it
 // reads from disk and remotes.
 type Inherited struct {
-	Workflow     string   // "" when unset by config → caller keeps its inference
-	Layout       string   // "" when unset
-	Worktrees    *bool    // nil when unset
-	Push         string   // "" when unset by config → caller applies WorkflowDefaults
-	TaskBranches string   // "" when unset by config → caller applies WorkflowDefaults
-	ForcePush    []string // nil when unset
-	ForcePull    []string // nil when unset
-	Prune        string   // "" when unset
-	Pin          string   // "" when unset
-	Hooks        []model.Hook
+	Workflow            string   // "" when unset by config → caller keeps its inference
+	Layout              string   // "" when unset
+	Worktrees           *bool    // nil when unset
+	Push                string   // "" when unset by config → caller applies WorkflowDefaults
+	TaskBranches        string   // "" when unset by config → caller applies WorkflowDefaults
+	ForcePush           []string // nil when unset
+	ForcePull           []string // nil when unset
+	ExpectedUntracked   []string // nil when unset
+	ExpectedUncommitted []string // nil when unset
+	Prune               string   // "" when unset
+	Pin                 string   // "" when unset
+	Hooks               []model.Hook
 }
 
 // InheritedFor overlays [defaults] with each root in the chain and returns the
@@ -295,16 +302,18 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		s = overlay(s, reg.roots[n].Settings)
 	}
 	return Inherited{
-		Workflow:     strOr(s.Workflow, ""),
-		Layout:       strOr(s.Layout, ""),
-		Worktrees:    s.Worktrees,
-		Push:         strOr(s.Push, ""),
-		TaskBranches: strOr(s.TaskBranches, ""),
-		ForcePush:    s.ForcePush,
-		ForcePull:    s.ForcePull,
-		Prune:        strOr(s.Prune, ""),
-		Pin:          strOr(s.Pin, ""),
-		Hooks:        s.Hooks,
+		Workflow:            strOr(s.Workflow, ""),
+		Layout:              strOr(s.Layout, ""),
+		Worktrees:           s.Worktrees,
+		Push:                strOr(s.Push, ""),
+		TaskBranches:        strOr(s.TaskBranches, ""),
+		ForcePush:           s.ForcePush,
+		ForcePull:           s.ForcePull,
+		ExpectedUntracked:   s.ExpectedUntracked,
+		ExpectedUncommitted: s.ExpectedUncommitted,
+		Prune:               strOr(s.Prune, ""),
+		Pin:                 strOr(s.Pin, ""),
+		Hooks:               s.Hooks,
 	}
 }
 
@@ -338,20 +347,22 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 	// need the resolved workflow above, unlike every other field here.
 	pushDefault, taskDefault := WorkflowDefaults(workflow)
 	r := model.Repo{
-		ID:           id,
-		Roots:        chain,
-		HomeRoot:     reg.roots[m.root].Dir,
-		Workflow:     workflow,
-		Layout:       strOr(s.Layout, builtinDefaults.Layout),
-		Worktrees:    boolOr(s.Worktrees, builtinDefaults.Worktrees),
-		Branches:     sliceOr(s.Branches, builtinDefaults.Branches),
-		Push:         strOr(s.Push, pushDefault),
-		TaskBranches: strOr(s.TaskBranches, taskDefault),
-		ForcePush:    s.ForcePush,
-		ForcePull:    s.ForcePull,
-		Prune:        strOr(s.Prune, builtinDefaults.Prune),
-		Pin:          strOr(s.Pin, ""),
-		Hooks:        s.Hooks,
+		ID:                  id,
+		Roots:               chain,
+		HomeRoot:            reg.roots[m.root].Dir,
+		Workflow:            workflow,
+		Layout:              strOr(s.Layout, builtinDefaults.Layout),
+		Worktrees:           boolOr(s.Worktrees, builtinDefaults.Worktrees),
+		Branches:            sliceOr(s.Branches, builtinDefaults.Branches),
+		Push:                strOr(s.Push, pushDefault),
+		TaskBranches:        strOr(s.TaskBranches, taskDefault),
+		ForcePush:           s.ForcePush,
+		ForcePull:           s.ForcePull,
+		ExpectedUntracked:   s.ExpectedUntracked,
+		ExpectedUncommitted: s.ExpectedUncommitted,
+		Prune:               strOr(s.Prune, builtinDefaults.Prune),
+		Pin:                 strOr(s.Pin, ""),
+		Hooks:               s.Hooks,
 	}
 
 	// Fork is resolved only after the workflow is known, and only when the
@@ -457,6 +468,12 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.ForcePull != nil {
 		base.ForcePull = over.ForcePull
+	}
+	if over.ExpectedUntracked != nil {
+		base.ExpectedUntracked = over.ExpectedUntracked
+	}
+	if over.ExpectedUncommitted != nil {
+		base.ExpectedUncommitted = over.ExpectedUncommitted
 	}
 	if over.Prune != nil {
 		base.Prune = over.Prune

@@ -41,6 +41,19 @@ func TestMatchesAny(t *testing.T) {
 // subsequent syncs.
 func setupUpstreamRepo(t *testing.T, extra string) (origin, clone string, run func() Result) {
 	t.Helper()
+	return setupUpstreamRepoWith(t, "", extra)
+}
+
+// setupUpstreamRepoWithRootSettings is setupUpstreamRepo with the settings on
+// the *root* rather than the repo entry, for testing that a declaration
+// inherits down (DESIGN §3.4).
+func setupUpstreamRepoWithRootSettings(t *testing.T, rootExtra string) (origin, clone string, run func() Result) {
+	t.Helper()
+	return setupUpstreamRepoWith(t, rootExtra, "")
+}
+
+func setupUpstreamRepoWith(t *testing.T, rootExtra, repoExtra string) (origin, clone string, run func() Result) {
+	t.Helper()
 	T := t.TempDir()
 	remotes := filepath.Join(T, "remotes")
 	origin = filepath.Join(remotes, "acme", "proj")
@@ -59,11 +72,12 @@ func setupUpstreamRepo(t *testing.T, extra string) (origin, clone string, run fu
 base = "`+remotes+`/"
 [root.clones]
 dir = "`+filepath.Join(T, "clones")+`"
+`+rootExtra+`
 [[root.clones.repo]]
 id = "local:acme/proj"
 workflow = "upstream-push"
 branches = ["main"]
-`+extra+`
+`+repoExtra+`
 `), 0o644))
 
 	reg, err := config.Load([]string{regPath})

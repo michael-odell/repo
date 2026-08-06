@@ -86,7 +86,7 @@ func (x *run) pullTaskBranch(branch, originRef string, behind int) {
 	// Either way its tree gets the same protection an important branch's does:
 	// report, don't move it (principle 4). Units are guarded by treeGuard before
 	// their own update; this covers the trees no unit owns.
-	if wt := dirtyTree(x.container, branch); wt != "" {
+	if wt := x.blockedTree(x.container, branch); wt != "" {
 		x.branchMark(branch, Attention, fmt.Sprintf("%d behind — uncommitted changes, pull skipped", behind))
 		x.add("%s is %d behind but %s has uncommitted changes: skipping pull", branch, behind, shorten(wt))
 		return

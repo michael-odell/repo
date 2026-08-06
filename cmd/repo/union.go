@@ -66,20 +66,22 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 	workflow := strOrDefault(inh.Workflow, f.Workflow) // config wins over inference
 	pushDefault, taskDefault := config.WorkflowDefaults(workflow)
 	r := model.Repo{
-		ID:           f.ID,
-		Roots:        f.Roots,
-		Dir:          f.Dir,
-		OriginURL:    f.Remotes["origin"],
-		Workflow:     workflow,
-		Layout:       strOrDefault(inh.Layout, model.LayoutFlat),
-		Worktrees:    inh.Worktrees != nil && *inh.Worktrees,
-		Push:         strOrDefault(inh.Push, pushDefault),
-		TaskBranches: strOrDefault(inh.TaskBranches, taskDefault),
-		ForcePush:    inh.ForcePush,
-		ForcePull:    inh.ForcePull,
-		Prune:        strOrDefault(inh.Prune, builtinPrune),
-		Pin:          inh.Pin,
-		Hooks:        inh.Hooks,
+		ID:                  f.ID,
+		Roots:               f.Roots,
+		Dir:                 f.Dir,
+		OriginURL:           f.Remotes["origin"],
+		Workflow:            workflow,
+		Layout:              strOrDefault(inh.Layout, model.LayoutFlat),
+		Worktrees:           inh.Worktrees != nil && *inh.Worktrees,
+		Push:                strOrDefault(inh.Push, pushDefault),
+		TaskBranches:        strOrDefault(inh.TaskBranches, taskDefault),
+		ForcePush:           inh.ForcePush,
+		ForcePull:           inh.ForcePull,
+		ExpectedUntracked:   inh.ExpectedUntracked,
+		ExpectedUncommitted: inh.ExpectedUncommitted,
+		Prune:               strOrDefault(inh.Prune, builtinPrune),
+		Pin:                 inh.Pin,
+		Hooks:               inh.Hooks,
 	}
 	if r.OriginURL == "" {
 		for _, u := range f.Remotes {

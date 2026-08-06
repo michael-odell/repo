@@ -9,6 +9,42 @@ func UntrackedFiles(dir string) ([]string, error) {
 	return splitLines(out), err
 }
 
+// DirtyFiles lists the tracked files a working tree has modified — the detail
+// behind IsDirty's boolean, needed to test them against `expected_uncommitted`
+// (DESIGN §3.6). It runs the same command IsDirty does, so the two can never
+// disagree about whether a tree is dirty.
+//
+// `-z` is what makes this parseable: it emits raw NUL-terminated paths instead
+// of quoting the awkward ones. A rename or copy entry carries a second path (the
+// original), which is consumed and reported too — a pattern naming either side
+// should match.
+func DirtyFiles(dir string) ([]string, error) {
+	out, err := runRaw(dir, "status", "--porcelain", "-z", "--untracked-files=no")
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	fields := strings.Split(strings.TrimRight(out, "\x00"), "\x00")
+	var files []string
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		if len(f) < 4 { // "XY path" — anything shorter is padding, not an entry
+			continue
+		}
+		status, path := f[:2], f[3:]
+		files = append(files, path)
+		if status[0] == 'R' || status[0] == 'C' {
+			if i+1 < len(fields) {
+				i++
+				files = append(files, fields[i])
+			}
+		}
+	}
+	return files, nil
+}
+
 // IgnoredFiles lists ignored files present in a working tree (discardable only
 // with consent: DESIGN §4.1).
 func IgnoredFiles(dir string) ([]string, error) {

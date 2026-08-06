@@ -13,6 +13,14 @@ import (
 
 // run executes `git -C dir args...` and returns trimmed stdout.
 func run(dir string, args ...string) (string, error) {
+	out, err := runRaw(dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// runRaw is run without the trim, for output whose leading or trailing bytes are
+// significant — `status --porcelain`, whose first column is a space for a
+// modified-but-unstaged file, and `-z` output, whose NUL terminators matter.
+func runRaw(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -21,7 +29,7 @@ func run(dir string, args ...string) (string, error) {
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
 
 // oneLine collapses git's (often multi-line, blank-line-padded) stderr into a
