@@ -225,25 +225,15 @@ func layoutName(k gitx.LayoutKind) string {
 }
 
 // syncSingle provisions and updates a single working tree (worktrees = false).
+// A single tree is just the one-unit case of the worktree layout — the same
+// updateUnit reconciles it — except that its one unit carries no report label,
+// there being no sibling unit to distinguish it from.
 func (x *run) syncSingle() {
 	if !x.provision() {
 		return
 	}
-	x.dir, x.ub = x.container, x.branch
 	x.totalBranches = countLocalBranches(x.container)
-	switch x.r.Workflow {
-	case model.Vendor:
-		x.updateVendor()
-	case model.ForkPR:
-		if x.onImportantBranch() {
-			x.updateForkPR()
-		}
-	default: // upstream-push, supply-chain-mirror (both track origin)
-		if x.onImportantBranch() {
-			x.updateTracking("origin/" + x.ub)
-			x.mirrorReview()
-		}
-	}
+	x.updateUnit(x.container, x.branch, "")
 	x.taskBranches()
 }
 
@@ -278,7 +268,7 @@ func (x *run) syncWorktree() {
 			}
 			x.add("added worktree %s", b)
 		}
-		x.updateUnit(wt, b)
+		x.updateUnit(wt, b, b)
 	}
 	// Once per repo, not per worktree — task branches live in the shared bare
 	// repo, not any one worktree.
@@ -286,9 +276,14 @@ func (x *run) syncWorktree() {
 }
 
 // updateUnit reconciles one working tree (a worktree, or the single tree) to its
-// branch per workflow.
-func (x *run) updateUnit(dir, branch string) {
-	x.dir, x.ub, x.unit = dir, branch, branch
+// branch per workflow. unit is the branch's label in the report trace, empty for
+// a single tree whose lines need no disambiguating prefix.
+//
+// Nothing here checks what dir has checked out: branch is reconciled whether or
+// not it is HEAD (DESIGN §5.1). vendor is the one workflow that does check, and
+// for a reason that isn't about branches at all — see updateVendor.
+func (x *run) updateUnit(dir, branch, unit string) {
+	x.dir, x.ub, x.unit = dir, branch, unit
 	defer func() { x.unit = "" }()
 	switch x.r.Workflow {
 	case model.Vendor:
@@ -503,26 +498,9 @@ func (x *run) provision() bool {
 	return true
 }
 
-// onImportantBranch reports whether the checked-out branch is the primary
-// important branch (the single-tree precondition for a branch-tracking update).
-func (x *run) onImportantBranch() bool {
-	cur, _ := gitx.CurrentBranch(x.container)
-	switch {
-	case cur == "":
-		x.attention("detached HEAD")
-		x.add("detached HEAD: skipping update")
-		return false
-	case cur != x.branch:
-		x.attention(fmt.Sprintf("on %s, expected %s", cur, x.branch))
-		x.add("on branch %s, expected %s: skipping update", cur, x.branch)
-		return false
-	}
-	return true
-}
-
-// updateTracking fast-forwards the checked-out important branch to ref: the
-// shared body for upstream-push and supply-chain-mirror (which track origin),
-// and a vendor branch pin. fork-pr reuses the same fast-forward logic against
+// updateTracking reconciles the unit's important branch against ref: the shared
+// body for upstream-push and supply-chain-mirror (which track origin), and a
+// vendor branch pin. fork-pr reuses the same fast-forward logic against
 // upstream, then layers a fork push on top (updateForkPR).
 func (x *run) updateTracking(ref string) {
 	if _, ok := gitx.RevParse(x.dir, ref); !ok {
@@ -530,28 +508,42 @@ func (x *run) updateTracking(ref string) {
 		x.add("no %s", ref)
 		return
 	}
-	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
+	ahead, behind := aheadBehind(x.dir, x.ub, ref)
 	switch {
 	case ahead == 0 && behind == 0:
 		x.add("%s up to date with %s", x.ub, ref)
 		x.ok()
 	case ahead == 0 && behind > 0:
-		if x.opts.DryRun {
-			x.add("would fast-forward %s +%d", x.ub, behind)
-			x.branchMark(x.ub, Updated, fmt.Sprintf("would fast-forward +%d", behind))
-			return
-		}
-		if err := gitx.FastForwardCurrent(x.dir, ref); err != nil {
-			x.applyRewrite(ref) // behind-only but non-FF ⇒ upstream rewrite
-			return
-		}
-		x.add("fast-forwarded %s +%d", x.ub, behind)
-		x.branchMark(x.ub, Updated, fmt.Sprintf("fast-forwarded +%d", behind))
+		x.fastForwardTo(ref, behind)
 	case ahead > 0 && behind == 0:
 		x.pushOrReport(ahead, "origin")
 	default:
 		x.applyRewrite(ref)
 	}
+}
+
+// fastForwardTo advances the unit's important branch to ref, which is known to
+// be strictly ahead of it. Shared by every workflow that tracks something:
+// updateTracking against origin (or a vendor pin) and updateForkPR against
+// upstream. A fast-forward that fails anyway means ref moved non-linearly since
+// the ahead/behind count, i.e. a rewrite, and is handed to applyRewrite.
+//
+// Reports whether the branch ended up at ref, so a caller with further work to
+// do on an advanced branch (updateForkPR, which pushes it to the fork
+// afterwards) can stand down when the rewrite path took over instead.
+func (x *run) fastForwardTo(ref string, behind int) bool {
+	if x.opts.DryRun {
+		x.add("would fast-forward %s +%d to %s", x.ub, behind, ref)
+		x.branchMark(x.ub, Updated, fmt.Sprintf("would fast-forward +%d", behind))
+		return true
+	}
+	if err := fastForward(x.dir, x.ub, ref); err != nil {
+		x.applyRewrite(ref)
+		return false
+	}
+	x.add("fast-forwarded %s +%d to %s", x.ub, behind, ref)
+	x.branchMark(x.ub, Updated, fmt.Sprintf("fast-forwarded +%d", behind))
+	return true
 }
 
 // pushOrReport handles the important branch's ahead-only (clean fast-forward)
@@ -592,7 +584,7 @@ func (x *run) pushAhead(ahead int, remote string) {
 // force_pull (DESIGN §5.2): the remote rewrote; a listed branch follows
 // automatically, an unmatched one stops and reports.
 func (x *run) applyRewrite(ref string) {
-	ahead, behind, _ := gitx.AheadBehind(x.dir, ref)
+	ahead, behind := aheadBehind(x.dir, x.ub, ref)
 	if matchesAny(x.r.ForcePull, x.ub) {
 		if ahead > 0 { // rail: never clobber local commits
 			x.branchMark(x.ub, Attention, fmt.Sprintf("rewrite with %d local commit(s) — stopped", ahead))
@@ -604,7 +596,7 @@ func (x *run) applyRewrite(ref string) {
 			x.branchMark(x.ub, Updated, "would follow rewrite")
 			return
 		}
-		if err := gitx.ResetHardCurrent(x.dir, ref); err != nil {
+		if err := forceReset(x.dir, x.ub, ref); err != nil {
 			x.fail(err)
 			return
 		}

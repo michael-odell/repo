@@ -75,6 +75,24 @@ func Worktrees(container string) ([]Worktree, error) {
 	return wts, nil
 }
 
+// WorktreeFor returns the path of the working tree that currently has branch
+// checked out, or "" when no tree does. dir may be any working tree or the
+// container of a bare+worktree repo — `git worktree list` reports every tree of
+// the repo either way, so this answers the same question in both layouts
+// (DESIGN §5.1): a single clone is simply a repo with exactly one worktree.
+func WorktreeFor(dir, branch string) string {
+	wts, err := Worktrees(dir)
+	if err != nil {
+		return ""
+	}
+	for _, w := range wts {
+		if w.Branch == branch {
+			return w.Path
+		}
+	}
+	return ""
+}
+
 func splitLines(s string) []string {
 	if s == "" {
 		return nil

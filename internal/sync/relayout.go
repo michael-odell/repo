@@ -134,7 +134,7 @@ func (x *run) relayoutToWorktree() {
 	}
 	x.add("relayout: single → worktree (residue on %s)", residueBranch)
 	for _, b := range x.r.Branches {
-		x.updateUnit(filepath.Join(container, b), b)
+		x.updateUnit(filepath.Join(container, b), b, b)
 	}
 	if rank(x.res.Outcome) < rank(Updated) {
 		x.mark(Updated, "relayout: single → worktree")

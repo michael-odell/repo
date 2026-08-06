@@ -417,6 +417,12 @@ with the source of truth; work happens on ad-hoc worktrees. `repo home pt-helm` 
 `main/` (worktree of `branches[0]`). `worktrees = false` collapses to a single
 working tree at the container path.
 
+The two layouts are **not two kinds of repo**. A single clone is a repo with
+exactly one worktree, and `sync` reconciles both through the same per-unit path
+(§5.1) — one unit per important branch, the single tree being the one-unit case.
+The only thing the single tree does differently is omit the branch label from its
+report lines, there being no sibling unit to distinguish it from.
+
 ### 4.1 Config↔disk mismatch and `sync --fix`
 
 A container can disagree with its config three ways, and `--fix` reconciles all
@@ -474,10 +480,21 @@ ignored-files prompt.
 ## 5. `sync` engine
 
 Per repo, in order: **provision** (clone/remotes/worktrees) → **fetch** (all remotes,
-prune, tags) → **update important branches** (per workflow) → **run hooks** →
-**detect + report drift**.
+prune, tags) → **update branches** (important ones per workflow, task branches per
+`task_branches`) → **run hooks** → **detect + report drift**.
 
 ### 5.1 Per-workflow update
+
+Two independent questions decide what happens to a branch. Keeping them apart is
+most of what this section is for:
+
+- **What the branch is** — *important* (named in `branches`) or *task*
+  (every other local branch) — decides **policy**: which remote it tracks,
+  whether it may be pushed, what a divergence does.
+- **Where the branch is** — checked out in some working tree, or existing only
+  as a ref — decides **mechanism**: whether the update carries a working tree
+  along with it. Nothing else. In particular it never decides *whether* the
+  update happens.
 
 | workflow              | important branch tracks | update action | strayed warnings |
 |-----------------------|-------------------------|---------------|------------------|
@@ -489,6 +506,36 @@ prune, tags) → **update important branches** (per workflow) → **run hooks** 
 Task branches (any branch not in `branches`) are handled per `task_branches`
 (§3.6) uniformly across workflows. A task branch's findings are reported the
 same way an important branch's are — see §5.6 — not a separate, lesser path.
+
+**Which branch is checked out is never an input.** `sync` reconciles every
+branch the repo is responsible for whichever one HEAD happens to point at, and
+leaves the checkout exactly where it found it. A repo parked on a feature branch
+still gets its `main` fast-forwarded; a detached HEAD (mid-bisect, parked on a
+tag) blocks nothing. The user's checkout is their business — a tool that refused
+to sync `main` until you switched to it would be both an obstacle and a liar,
+since "you're on the wrong branch" reports nothing about where `main` actually
+stands. §5.6 says the same thing about the *report*; this is the update half.
+
+That leaves position deciding one thing only — how a branch moves:
+
+| the branch is…               | fast-forward it                                       | follow a rewrite (`force_pull`, §5.2) |
+|------------------------------|-------------------------------------------------------|---------------------------------------|
+| checked out in a working tree | `git merge --ff-only <ref>` **in that tree**, so its files advance with the branch | `git reset --hard <ref>` in that tree |
+| not checked out anywhere      | `git fetch . <ref>:<branch>` — the ref moves, no working tree is touched | `git fetch . +<ref>:<branch>` |
+
+Both rows are safe by construction, and git supplies the rails rather than
+`repo` re-deriving them: a plain (no `+`) refspec rejects a non-fast-forward,
+and `git fetch` refuses outright to write a branch that is checked out in *any*
+worktree. So picking a row on a simple "is it checked out" test cannot race a
+worktree the caller didn't know about — the worst case is a refusal, never a
+silently stale working tree. The same two rows serve important and task branches
+alike; only the policy above them differs.
+
+**The one real exception is `vendor`**, which checks out its pin. That is not
+about branches — a vendored repo exists so that something can *read its files*,
+so leaving the tree elsewhere while advancing the ref would defeat the point.
+Every other workflow moves whatever branch needs moving and leaves you where you
+were.
 
 Drift detection runs on **all** workflows (vendor included): unpushed, unmerged,
 dirty, and untracked (non-ignored) files — computed live via `git status`/`rev-list`,
@@ -567,7 +614,8 @@ Every branch a repo carries — important or task — is reported the same way,
 by the same mechanism: whether it lands on the repo's own summary line or
 breaks out into an indented sub-bullet depends only on **how many branches
 are notable this run**, never on which kind of branch it is or which one
-happens to be checked out (the user has no reason to know or track that).
+happens to be checked out (the user has no reason to know or track that —
+§5.1 holds the update side of the same rule).
 
 - **Zero notable branches**: the summary line reports the repo's own outcome;
   a repo tracking more than one local branch says how many were checked

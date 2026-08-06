@@ -223,28 +223,26 @@ func TestReportWorseRepoLevelFactOwnsRowWithBranchesStillListed(t *testing.T) {
 }
 
 // TestReportWorseRepoLevelFactOwnsRowWithSoleBranchStillListed: the single-
-// branch counterpart to the test above. A worse non-branch fact (here, being
-// on the wrong checked-out branch) owns the row, and the one notable task
-// branch must still surface as a sub-bullet rather than being dropped —
-// finalizeBranches' case-1 path used to unconditionally clear res.Branches
-// regardless of who owned the row, silently discarding the branch's own
-// finding (e.g. "push this new branch") whenever some other, worse fact
-// happened to own the row too (DESIGN §5.6).
+// branch counterpart to the test above. A non-branch fact (here, a failed
+// hook) owns the row, and the one notable task branch must still surface as a
+// sub-bullet rather than being dropped — finalizeBranches' case-1 path used to
+// unconditionally clear res.Branches regardless of who owned the row, silently
+// discarding the branch's own finding (e.g. "push this new branch") whenever
+// some other fact happened to own the row too (DESIGN §5.6).
 func TestReportWorseRepoLevelFactOwnsRowWithSoleBranchStillListed(t *testing.T) {
-	_, clone, run := setupUpstreamRepo(t, `task_branches = "auto"`)
-	git(t, clone, "checkout", "-q", "-b", "other")
+	_, clone, run := setupUpstreamRepo(t, `hooks = [ { after = "fetch", run = "exit 1" } ]`)
 	git(t, clone, "checkout", "-q", "-b", "feature")
 	writeCommit(t, clone, "f", "wip\n", "wip")
-	git(t, clone, "checkout", "-q", "other")
+	git(t, clone, "checkout", "-q", "main")
 
 	res := run()
 	if res.Outcome != Attention {
 		t.Fatalf("outcome = %v, want Attention; actions=%v", res.Outcome, res.Actions)
 	}
-	if want := "on other, expected main"; res.Detail != want {
-		t.Errorf("detail = %q, want %q (branch mismatch must own the row)", res.Detail, want)
+	if want := "hook failed"; res.Detail != want {
+		t.Errorf("detail = %q, want %q (the non-branch fact must own the row)", res.Detail, want)
 	}
-	if !hasBranchNote(res, "feature", false) {
-		t.Errorf("feature's push finding missing despite a worse repo-level fact; branches=%+v", res.Branches)
+	if !hasBranchNote(res, "feature", true) {
+		t.Errorf("feature's finding missing despite a worse repo-level fact; branches=%+v", res.Branches)
 	}
 }

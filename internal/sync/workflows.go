@@ -20,22 +20,14 @@ func (x *run) updateForkPR() {
 		x.updateTracking("origin/" + x.ub)
 		return
 	}
-	ahead, behind, _ := gitx.AheadBehind(x.dir, upRef)
+	ahead, behind := aheadBehind(x.dir, x.ub, upRef)
 	switch {
 	case ahead == 0 && behind == 0:
 		x.add("%s up to date with %s", x.ub, upRef)
 		x.ok()
 	case ahead == 0 && behind > 0:
-		if x.opts.DryRun {
-			x.add("would fast-forward %s +%d to %s", x.ub, behind, upRef)
-			x.branchMark(x.ub, Updated, fmt.Sprintf("would fast-forward +%d (dry-run)", behind))
-		} else {
-			if err := gitx.FastForwardCurrent(x.dir, upRef); err != nil {
-				x.applyRewrite(upRef)
-				return
-			}
-			x.add("fast-forwarded %s +%d to %s", x.ub, behind, upRef)
-			x.branchMark(x.ub, Updated, fmt.Sprintf("fast-forwarded +%d", behind))
+		if !x.fastForwardTo(upRef, behind) {
+			return // rewrite path took over; the fork push has nothing clean to send
 		}
 	case ahead > 0 && behind == 0:
 		// Local commits not yet upstream — your work to PR; never clobbered.
@@ -58,7 +50,7 @@ func (x *run) pushFork() {
 	}
 	forkRef := "origin/" + x.ub
 	if _, ok := gitx.RevParse(x.dir, forkRef); ok {
-		ahead, behind, _ := gitx.AheadBehind(x.dir, forkRef)
+		ahead, behind := aheadBehind(x.dir, x.ub, forkRef)
 		switch {
 		case ahead == 0 && behind == 0:
 			return // fork already matches local
@@ -142,7 +134,11 @@ func (x *run) updateVendor() {
 		return
 	}
 
-	// A branch pin: fast-forward to origin/<pin> (never pushed).
+	// A branch pin: fast-forward to origin/<pin> (never pushed). The pin is the
+	// branch this unit reconciles, which need not be branches[0] — everything
+	// downstream (ahead/behind, the fast-forward, the report) is about the
+	// pinned branch, not the nominal first important one.
+	x.ub = pin
 	originRef := "origin/" + pin
 	if _, ok := gitx.RevParse(x.dir, originRef); !ok {
 		x.branchMark(x.ub, Attention, "pin "+pin+" not found")
@@ -157,6 +153,13 @@ func (x *run) updateVendor() {
 // onVendorBranch ensures the pinned branch is checked out, creating a local
 // tracking branch on first checkout. Returns false (having recorded intent or a
 // failure) when the caller must not proceed.
+//
+// This is the one place a checkout is a genuine precondition rather than an
+// artifact of how the update is implemented (DESIGN §5.1): a vendored repo
+// exists to have its *files* on disk at the pinned version — something is
+// reading them — so leaving the working tree on another branch while quietly
+// moving the ref would defeat the point. Everywhere else, sync moves whatever
+// branch needs moving and leaves your checkout alone.
 func (x *run) onVendorBranch(branch string) bool {
 	if cur, _ := gitx.CurrentBranch(x.dir); cur == branch {
 		return true

@@ -93,16 +93,42 @@ func Fetch(dir, remote string) error {
 }
 
 // FastForwardCurrent fast-forwards the checked-out branch to ref, failing (not
-// merging) when the move would not be a fast-forward.
+// merging) when the move would not be a fast-forward. Use this only for a
+// branch that is HEAD of dir — it moves the working tree along with the branch.
+// For any other branch, use FastForwardRef.
 func FastForwardCurrent(dir, ref string) error {
 	_, err := run(dir, "merge", "--ff-only", ref)
 	return err
 }
 
+// FastForwardRef fast-forwards a branch that is *not* checked out anywhere to
+// ref, without touching any working tree — the counterpart to
+// FastForwardCurrent (DESIGN §5.1). `git fetch . <ref>:<branch>` is the whole
+// implementation, and git supplies both rails for free: it rejects a
+// non-fast-forward (no plus in the refspec), and it refuses outright if branch
+// is checked out in *any* worktree of the repo, which is why callers can pick
+// between the two functions on a simple "is it checked out" test without
+// racing a worktree they didn't know about.
+func FastForwardRef(dir, branch, ref string) error {
+	_, err := run(dir, "fetch", ".", ref+":"+branch)
+	return err
+}
+
 // ResetHardCurrent resets the checked-out branch to ref (used when force_pull
-// matches, DESIGN §5.2).
+// matches, DESIGN §5.2). Like FastForwardCurrent, this is the HEAD-of-dir
+// variant: it discards working-tree state along with the ref, so it is only
+// ever called for a branch that is actually checked out there.
 func ResetHardCurrent(dir, ref string) error {
 	_, err := run(dir, "reset", "--hard", ref)
+	return err
+}
+
+// ForceSetRef moves a branch that is not checked out anywhere to ref even when
+// the move is not a fast-forward — the no-working-tree counterpart to
+// ResetHardCurrent (DESIGN §5.2, force_pull). The leading "+" is the only
+// difference from FastForwardRef; git still refuses if branch is checked out.
+func ForceSetRef(dir, branch, ref string) error {
+	_, err := run(dir, "fetch", ".", "+"+ref+":"+branch)
 	return err
 }
 
@@ -138,17 +164,6 @@ func Push(dir, remote, branch string) error {
 // `force_push` (DESIGN §5.2).
 func ForcePush(dir, remote, branch string) error {
 	_, err := run(dir, "push", "--force-with-lease", remote, branch)
-	return err
-}
-
-// FetchInto fast-forwards a local branch to match its remote counterpart
-// without checking it out — used to keep a task branch current under
-// task_branches=pull-only (DESIGN §3.6) when it isn't the unit being worked
-// on. Plain `git fetch <remote> <branch>:<branch>` is fast-forward-only by
-// construction (git itself refuses a non-FF into a plain refspec, and refuses
-// outright if branch is checked out elsewhere), so this can't clobber work.
-func FetchInto(dir, remote, branch string) error {
-	_, err := run(dir, "fetch", remote, branch+":"+branch)
 	return err
 }
 

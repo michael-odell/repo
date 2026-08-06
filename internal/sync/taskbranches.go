@@ -45,7 +45,7 @@ func (x *run) taskBranch(branch string) {
 	_, hasRemote := gitx.RevParse(x.container, originRef)
 	var ahead, behind int
 	if hasRemote {
-		ahead, behind, _ = gitx.AheadBehindRefs(x.container, originRef, branch)
+		ahead, behind = aheadBehind(x.container, branch, originRef)
 	}
 
 	switch {
@@ -66,27 +66,23 @@ func (x *run) taskBranch(branch string) {
 	}
 }
 
-// pullTaskBranch fast-forwards a purely-behind task branch to its own remote
-// in place, without checking it out — the pull-only case (DESIGN §3.6). Any
-// number of local branches with zero commits of their own (the one a plain
-// `git clone` leaves checked out, or others deliberately kept around purely
-// to track read-only) are treated the same way: kept current rather than
-// flagged, no allowlist of names or count needed. A branch that picks up
-// local commits later falls through to the ahead>0 cases above instead,
-// which still report loudly.
+// pullTaskBranch fast-forwards a purely-behind task branch to its own remote —
+// the pull-only case (DESIGN §3.6). Any number of local branches with zero
+// commits of their own (the one a plain `git clone` leaves checked out, or
+// others deliberately kept around purely to track read-only) are treated the
+// same way: kept current rather than flagged, no allowlist of names or count
+// needed. A branch that picks up local commits later falls through to the
+// ahead>0 cases above instead, which still report loudly.
+//
+// This goes through the same fastForward as an important branch does, so a task
+// branch that happens to be the checked-out one is pulled like any other rather
+// than being singled out — it just advances that working tree along with it.
 func (x *run) pullTaskBranch(branch, originRef string, behind int) {
 	if x.opts.DryRun {
 		x.branchMark(branch, Updated, fmt.Sprintf("would pull +%d", behind))
 		return
 	}
-	if cur, _ := gitx.CurrentBranch(x.container); cur == branch {
-		// Checked out in this container after all (e.g. an aborted/misconfigured
-		// pin left it as HEAD) — leave it to the normal update path rather than
-		// risk a fetch into the current branch.
-		x.branchMark(branch, Attention, fmt.Sprintf("%d behind its own remote", behind))
-		return
-	}
-	if err := gitx.FetchInto(x.container, "origin", branch); err != nil {
+	if err := fastForward(x.container, branch, originRef); err != nil {
 		x.branchMark(branch, Attention, fmt.Sprintf("pull failed: %v", err))
 		return
 	}
