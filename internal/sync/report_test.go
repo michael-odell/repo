@@ -65,6 +65,18 @@ branches = ["main", "release"]
 	return origin, container, run
 }
 
+// unpushedBranch creates a task branch in container carrying one commit of its
+// own, using a throwaway worktree so no existing tree changes branch. The
+// worktree is removed again, leaving the branch checked out nowhere — the
+// ordinary shape of a side branch someone left behind.
+func unpushedBranch(t *testing.T, container, branch string) {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), branch)
+	git(t, container, "worktree", "add", "-q", "-b", branch, tmp)
+	writeCommit(t, tmp, branch+".txt", "wip\n", "wip on "+branch)
+	git(t, container, "worktree", "remove", "--force", tmp)
+}
+
 // TestReportFoldsSingleNotableTaskBranchWithName: a repo with more than one
 // local branch, but only one of them notable, folds that branch's finding
 // onto the repo's own row — named, so a multi-branch repo doesn't leave the
@@ -131,9 +143,10 @@ func TestReportRollsUpMultipleNotableBranches(t *testing.T) {
 	writeCommit(t, otherClone, "b", "two\n", "two")
 	git(t, otherClone, "push", "-q", "origin", "main")
 
-	// A never-pushed task branch (Attention), created against the shared bare
-	// repo via one of the worktrees.
-	git(t, filepath.Join(container, "main"), "branch", "wip")
+	// A never-pushed task branch carrying work of its own (Attention). The
+	// commit matters: a branch with nothing outstanding is not unpushed work,
+	// it is an empty branch, and sync says so rather than flagging it.
+	unpushedBranch(t, container, "wip")
 
 	res := run()
 	if res.Outcome != Attention {
@@ -205,7 +218,7 @@ func TestReportWorseRepoLevelFactOwnsRowWithBranchesStillListed(t *testing.T) {
 	git(t, other, "clone", "-q", origin, otherClone)
 	writeCommit(t, otherClone, "b", "two\n", "two")
 	git(t, otherClone, "push", "-q", "origin", "main")
-	git(t, filepath.Join(container, "main"), "branch", "wip")
+	unpushedBranch(t, container, "wip")
 
 	res := run()
 	// A hook failure and a branch Attention both rank Attention; the hook ran

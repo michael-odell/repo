@@ -656,16 +656,61 @@ pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).
 
 ### 5.3 Prune — three tiers (rebase/squash aware)
 
-`git branch --merged` is unreliable where the merge strategy is squash or rebase, so
-prune is tiered. Per repo/root/global `prune`:
+`git branch --merged` answers only "is this branch an ancestor", so a branch that
+landed by squash or rebase looks like unfinished work forever. Detection is
+therefore tiered — cheapest first, stopping at the first that confirms, so only a
+genuinely unmerged branch pays for all three:
 
-- **confirmed merged** (true ancestor / patch-id match) **and clean** → auto-pruned
-  (`auto` default). Reclaims branches that went nowhere.
-- **upstream-deleted but merge-unconfirmable** (the squash/rebase case) →
-  **confirmation queue**: neither silently deleted nor silently kept. `repo prune`
-  prompts *"branch X deleted upstream; couldn't confirm it landed — delete local?
-  [y/N]"*; `sync` surfaces it as a pending item.
-- **has unpushed/unmerged work** → never auto-pruned; always reported.
+| tier | evidence | catches | defeated by |
+|------|----------|---------|-------------|
+| ancestor | `rev-list <base>..<branch>` is empty | merges, fast-forwards | any replay |
+| same patches | `git cherry` finds every commit's patch already in base | rebase, cherry-pick — new SHAs, same patches | squashing several commits into one |
+| squashed | the branch rebuilt as **one** commit against the merge base has its patch in base | squash merges | genuinely outstanding work |
+
+The tiers name the **evidence**, not the merge style, and the two don't map
+one-to-one: squashing a *single-commit* branch yields that commit's exact patch,
+so it is found at the "same patches" tier and never reaches the squash tier.
+That is not a misdetection — the operations are indistinguishable on the object
+graph, and the decision is identical either way.
+
+The squash tier is the only one needing a scratch object (`commit-tree` for the
+rebuilt commit). It is unreferenced and gc reclaims it; no ref, config, or
+working tree is touched.
+
+Cost is bounded and local — no network. Measured on a 13-branch repo with one
+branch 72 commits deep and another whose base had moved 189 commits: **0.26s**
+for the whole repo.
+
+**Which tier confirmed a merge decides how it can be removed.** Git's own `-d`
+safety check is an ancestry test, so it refuses exactly the branches the second
+and third tiers exist to identify. `repo prune` uses `-d` wherever it can, so two
+independent judgements must agree before a branch goes, and `-D` only where git's
+check cannot see the merge.
+
+A branch is **prunable** when its work has landed by any tier and nothing else
+stands in the way. Important branches are never candidates — they are the
+*reference*, and a branch cannot have landed relative to itself. A branch checked
+out in any worktree is blocked regardless of merge state.
+
+`repo prune` is **report-only** unless `--delete` is given, and on a terminal
+`--delete` still confirms per repo (`--yes` skips it; with no TTY it declines
+rather than proceeding). The same verdicts appear during ordinary sweeps under
+`show_branches = "all"` (§5.6) — the same call, so the line watched during a
+sweep is the decision prune would act on, not a lookalike that might disagree.
+
+Merge state is also what keeps `sync` from **resurrecting a merged branch**.
+After a branch is merged and deleted upstream, `fetch --prune` removes its
+remote-tracking ref; treating that absence as "never pushed" would push the
+branch straight back under `task_branches = "auto"`. Tracking config cannot tell
+the cases apart — a branch pushed without `-u` has a remote ref and no config —
+but merge state can: a branch carrying nothing the important branch lacks has
+nothing to push. Why the ref is absent (deleted after merging, or never pushed)
+is not knowable, so nothing claims to know it.
+
+Still deliberately **not** here: auto-pruning, and the confirmation queue for
+branches deleted upstream that no tier can confirm landed. Both wait until the
+classification has been watched being right on real repos, which is what putting
+it in the sweep is for.
 
 `report` / `manual` modes exist for look-first repos. Whole-repo removal is
 **report-only**, never automatic. New important branch in registry → `sync` adds its
@@ -719,7 +764,7 @@ inventory it enumerates — `none ⊂ notable ⊂ unmerged ⊂ all`:
 | `none` | nothing; the repo row is the whole report | — |
 | `notable` | branches with a finding this run | `vendor`, `supply-chain-mirror` |
 | `unmerged` | …plus task branches holding commits the important branch lacks | `upstream-push`, `fork-pr` |
-| `all` | …plus every remaining branch, important ones included | — |
+| `all` | …plus every remaining branch, important ones included, each with the verdict `repo prune` would act on | — |
 
 `none` never suppresses a *finding*, only its line: the repo row still carries
 the worst outcome and its count, and `--verbose` still has the full trace. And
@@ -731,9 +776,10 @@ An **observation** measures a task branch against the repo's primary important
 branch, not against its own remote: "work that hasn't landed" is a claim about
 the mainline. That is also why important branches need no exclusion rule — they
 are the *reference*, and a branch cannot be unmerged relative to itself. The
-comparison is §5.3's cheap tier, so it under-reports merged-ness (a
-squash-merged branch still reads as ahead) and never over-reports it; erring
-toward "you may have unfinished work here" is the right direction for a nudge.
+comparison is §5.3's full tier ladder, so a squash- or rebase-merged branch is
+recognised as landed rather than nagged about forever, and `all` shows the same
+prune verdict the command would act on — a decision you can watch being right
+during ordinary sweeps instead of having to remember to go looking for it.
 
 Given those, the layout follows one rule: **a finding folds onto the repo's row
 only when it is the only thing being shown.**

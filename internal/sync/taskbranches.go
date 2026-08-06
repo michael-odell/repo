@@ -50,6 +50,25 @@ func (x *run) taskBranch(branch string) {
 
 	switch {
 	case !hasRemote:
+		// No remote branch is two very different situations, and telling them
+		// apart by tracking config does not work: a branch pushed without `-u`
+		// has a remote ref and no config, so config-absence would call it
+		// "never pushed" the moment its remote went away. Merge state is the
+		// reliable signal. If everything this branch carries is already on the
+		// important branch, the remote ref is gone because the work landed and
+		// the branch was deleted upstream — pushing would resurrect it, and
+		// call the resurrection "never pushed" (DESIGN §5.3).
+		if state, err := gitx.MergedState(x.container, branch, x.branch); err == nil && state.Merged() {
+			// Why the remote ref is absent is unknowable — deleted after the
+			// merge, or never pushed at all — and guessing would put a history
+			// in the report that may never have happened. What matters is
+			// decidable and the same either way: the branch has nothing the
+			// important branch lacks, so there is nothing to push. Record the
+			// reason in the trace and leave the branch's line to observe, which
+			// reports it as the prune candidate it is (DESIGN §5.3).
+			x.add("%s is %s and absent from origin: nothing to push", branch, state)
+			return
+		}
 		x.taskBranchPush(branch, "never pushed")
 	case ahead == 0 && behind == 0:
 		// fully in sync with its own remote — nothing to report

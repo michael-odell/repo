@@ -1,11 +1,5 @@
 package sync
 
-import (
-	"fmt"
-
-	"github.com/michael-odell/repo/internal/gitx"
-)
-
 // show_branches values (DESIGN §5.6), ordered by how much of the branch
 // inventory each enumerates: none ⊂ notable ⊂ unmerged ⊂ all.
 const (
@@ -41,30 +35,27 @@ func (x *run) observe() {
 		return // no reference branch to measure against
 	}
 
-	important := map[string]bool{}
-	for _, b := range x.r.Branches {
-		important[b] = true
-	}
-	branches, err := gitx.LocalBranches(x.container)
+	verdicts, err := Classify(x.container, x.r)
 	if err != nil {
 		return
 	}
-	for _, b := range branches {
-		if x.hasNote(b) {
+	for _, v := range verdicts {
+		if x.hasNote(v.Name) {
 			continue
 		}
-		if important[b] {
-			if x.r.ShowBranches == showAll {
+		// `unmerged` shows only outstanding work. `all` additionally shows the
+		// landed branches with the verdict prune would act on, so the decision
+		// can be watched during ordinary sweeps rather than only when someone
+		// remembers to go looking for it.
+		if !v.State.Merged() || x.r.ShowBranches == showAll {
+			x.branchMark(v.Name, Info, v.Summary(x.branch))
+		}
+	}
+	if x.r.ShowBranches == showAll {
+		for _, b := range x.r.Branches {
+			if !x.hasNote(b) {
 				x.branchMark(b, Info, "up to date")
 			}
-			continue
-		}
-		ahead, _ := aheadBehind(x.container, b, x.branch)
-		switch {
-		case ahead > 0:
-			x.branchMark(b, Info, fmt.Sprintf("%d ahead of %s", ahead, x.branch))
-		case x.r.ShowBranches == showAll:
-			x.branchMark(b, Info, "merged")
 		}
 	}
 }

@@ -103,7 +103,7 @@ func TestAllListsEveryBranch(t *testing.T) {
 	for name, want := range map[string]string{
 		"main":   "up to date",
 		"spike":  "1 ahead of main",
-		"landed": "merged",
+		"landed": "merged — prunable",
 	} {
 		b, ok := note(res, name)
 		if !ok {

@@ -791,6 +791,20 @@ func (x *run) branchMark(name string, o Outcome, detail string) {
 // regardless of what the row says, but a non-branch fact has nowhere else to
 // go.
 func (x *run) finalizeBranches() {
+	// Enforce visibility here rather than at each site that might record an
+	// observation: `show_branches` is a statement about the report, so the
+	// report is where it holds. Anything upstream is free to observe whatever
+	// it notices without also knowing whether this repo wants to hear it.
+	if x.r.ShowBranches == showNone || x.r.ShowBranches == showNotable {
+		kept := x.res.Branches[:0]
+		for _, b := range x.res.Branches {
+			if b.Outcome != Info {
+				kept = append(kept, b)
+			}
+		}
+		x.res.Branches = kept
+	}
+
 	findings := 0
 	for _, b := range x.res.Branches {
 		if rank(b.Outcome) > rank(UpToDate) {
