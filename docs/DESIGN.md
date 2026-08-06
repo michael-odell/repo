@@ -562,9 +562,17 @@ lists, which is strictly more expressive: `force_pull = ["main"]` alone lets `ma
 absorb upstream rewrites while a `release` branch still stops and waits for you,
 something one repo-wide enum couldn't express.
 
-Rails on `force_pull`: if the branch carries local unpushed/unmerged commits, a
-rewrite escalates back to *stop + surface* regardless of the glob match — never
-clobber work you haven't pushed anywhere. The notice fires on *detection*, so
+Rails on `force_pull`, both escalating back to *stop + surface* regardless of the
+glob match — never clobber work you haven't pushed anywhere:
+
+- the branch carries **local unpushed/unmerged commits**; or
+- the branch is checked out in a **working tree with uncommitted changes**.
+  A dirty tree is in fact how an ordinary fast-forward reaches this path at all
+  (`merge --ff-only` refuses to overwrite the edit), and the `reset --hard` that
+  would follow discards it with nothing to recover from — uncommitted work is
+  strictly *less* recoverable than a commit, so it gets the same protection.
+
+The notice fires on *detection*, so
 blessed branches still report every rewrite; you just needn't act. Applies to tags
 too — a `vendor` pinned tag whose content moves is a rewrite matched against the
 pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).

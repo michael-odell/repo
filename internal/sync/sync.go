@@ -591,6 +591,18 @@ func (x *run) applyRewrite(ref string) {
 			x.add("rewrite on %s but %d local commit(s) present: escalated to stop", ref, ahead)
 			return
 		}
+		// Same rail, for work that isn't committed yet: a dirty working tree is
+		// how an ordinary fast-forward ends up here at all (merge --ff-only
+		// refuses to overwrite the edit), and reset --hard would then discard
+		// it with nothing to recover from. Uncommitted work outranks following
+		// a rewrite, exactly as local commits do.
+		if wt := gitx.WorktreeFor(x.dir, x.ub); wt != "" {
+			if dirty, _ := gitx.IsDirty(wt); dirty {
+				x.branchMark(x.ub, Attention, "uncommitted changes — stopped")
+				x.add("rewrite on %s but %s has uncommitted changes: escalated to stop", ref, shorten(wt))
+				return
+			}
+		}
 		if x.opts.DryRun {
 			x.add("would follow rewrite: reset %s to %s", x.ub, ref)
 			x.branchMark(x.ub, Updated, "would follow rewrite")

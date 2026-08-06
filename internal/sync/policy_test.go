@@ -329,3 +329,31 @@ func TestUntrackedFilesReported(t *testing.T) {
 		t.Errorf("untracked file was lost")
 	}
 }
+
+// TestForcePullDoesNotClobberUncommittedChanges: force_pull's rail protects
+// local *commits* (applyRewrite stops when ahead > 0), but uncommitted work is
+// just as unrecoverable. A dirty worktree turns an ordinary fast-forward into
+// the rewrite path — merge --ff-only refuses to overwrite the edit — and a
+// matched force_pull would then reset --hard straight over it. Stop instead.
+func TestForcePullDoesNotClobberUncommittedChanges(t *testing.T) {
+	origin, container, run := setupWorktreeUpstreamRepo(t, `force_pull = ["main"]`)
+	wt := filepath.Join(container, "main")
+	must(t, os.WriteFile(filepath.Join(wt, "a"), []byte("my uncommitted edit\n"), 0o644))
+
+	// Advance origin's main, touching the same file the worktree has edited.
+	parent := t.TempDir()
+	other := filepath.Join(parent, "other")
+	git(t, parent, "clone", "-q", origin, other)
+	writeCommit(t, other, "a", "upstream change\n", "upstream change")
+	git(t, other, "push", "-q", "origin", "main")
+
+	res := run()
+	body, err := os.ReadFile(filepath.Join(wt, "a"))
+	must(t, err)
+	if string(body) != "my uncommitted edit\n" {
+		t.Errorf("working tree file = %q, want the uncommitted edit preserved", body)
+	}
+	if res.Outcome != Attention {
+		t.Errorf("outcome = %v, want Attention (a blocked update must be surfaced); actions=%v", res.Outcome, res.Actions)
+	}
+}
