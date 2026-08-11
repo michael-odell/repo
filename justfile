@@ -22,7 +22,7 @@ release-build:
 release:
     goreleaser release --clean
 
-# Tag a new patch off the latest tag (e.g. v0.2.5 -> v0.2.6)
+# Tag a new patch off the latest tag (e.g. v0.2.5 -> v0.2.6); runs `check` first
 tag-patch: _clean-worktree
     #!/usr/bin/env bash
     set -euo pipefail
@@ -32,7 +32,7 @@ tag-patch: _clean-worktree
     new="v${major}.${minor}.$((patch + 1))"
     just _create-tag "${latest}" "${new}"
 
-# Tag a new minor version series off the latest tag (e.g. v0.2.5 -> v0.3.0)
+# Tag a new minor version series off the latest tag (e.g. v0.2.5 -> v0.3.0); runs `check` first
 tag-minor: _clean-worktree
     #!/usr/bin/env bash
     set -euo pipefail
@@ -42,7 +42,7 @@ tag-minor: _clean-worktree
     new="v${major}.$((minor + 1)).0"
     just _create-tag "${latest}" "${new}"
 
-# Tag a new major version series off the latest tag (e.g. v0.2.5 -> v1.0.0)
+# Tag a new major version series off the latest tag (e.g. v0.2.5 -> v1.0.0); runs `check` first
 tag-major: _clean-worktree
     #!/usr/bin/env bash
     set -euo pipefail
@@ -52,8 +52,17 @@ tag-major: _clean-worktree
     new="v$((major + 1)).0.0"
     just _create-tag "${latest}" "${new}"
 
-# Internal: create an annotated tag and offer to push it
-_create-tag latest new:
+# Internal: create an annotated tag and offer to push it. Gated on `check` — the
+# same commands CI runs — because tagging is the one action here that publishes:
+# release.yml builds from the tag, so an untested tag ships an untested binary.
+# v0.4.0 shipped that way, from a commit that was never pushed to a branch and so
+# never ran through CI at all.
+#
+# A local gate only catches what the tests themselves pin. Anything that varies
+# with the machine — git identity, git version, hostname — can still pass here
+# and fail on a runner, which is why this supplements CI rather than replacing
+# it: push the branch, watch it go green, then tag.
+_create-tag latest new: check
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Latest tag: {{ latest }}"
