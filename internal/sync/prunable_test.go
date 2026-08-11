@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -132,6 +134,50 @@ func TestClassifyVerdicts(t *testing.T) {
 	}
 	if want := "merged (squashed) — prunable"; b.Summary != want {
 		t.Errorf("landed summary = %q, want %q", b.Summary, want)
+	}
+}
+
+// TestClassifyKeepsBranchesItCannotAnswerFor: a branch whose standing git can't
+// determine must appear, marked and never prunable. Skipping it made a
+// classifier that failed on everything look exactly like a repo with nothing to
+// report — which is how a broken squash tier emptied the branch report on every
+// machine without a configured git identity instead of erroring loudly.
+//
+// `repo prune` is where this surfaces: it classifies without fetching. A sync
+// over a repo damaged this badly fails at the fetch and never reaches the
+// branch report, which is its own honest answer.
+func TestClassifyKeepsBranchesItCannotAnswerFor(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "unmerged"`)
+	git(t, clone, "checkout", "-q", "-b", "parked")
+	writeCommit(t, clone, "p", "parked\n", "parked work")
+	git(t, clone, "checkout", "-q", "main")
+	// A ref naming an object that isn't there: a branch by name, unanswerable by
+	// any tier. Written as a file because git's own plumbing declines to create
+	// one — which is the point, this is the shape a damaged repo arrives in.
+	must(t, os.WriteFile(filepath.Join(clone, ".git", "refs", "heads", "broken"),
+		[]byte("0000000000000000000000000000000000000001\n"), 0o644))
+
+	verdicts, err := Classify(clone, mainRepo())
+	must(t, err)
+	var got *Verdict
+	for i := range verdicts {
+		if verdicts[i].Name == "broken" {
+			got = &verdicts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("broken branch dropped from the verdicts: %+v", verdicts)
+	}
+	if !got.Unknown || got.Prunable {
+		t.Errorf("broken = %+v, want Unknown and not prunable", *got)
+	}
+	if !strings.Contains(got.Summary("main"), "can't classify") {
+		t.Errorf("summary = %q, want it to say the branch couldn't be classified", got.Summary("main"))
+	}
+	// The healthy branches around it must still be classified normally — one bad
+	// branch is not a reason to stop answering for the rest.
+	if len(verdicts) < 2 {
+		t.Errorf("only %d verdicts; a bad branch must not take its siblings with it: %+v", len(verdicts), verdicts)
 	}
 }
 

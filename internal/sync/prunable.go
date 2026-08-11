@@ -19,10 +19,17 @@ type Verdict struct {
 	Worktree string // the tree holding this branch, "" when none does
 	Prunable bool
 	Blocker  string // why not, when !Prunable
+	// Unknown marks a branch git could not answer for at all, as distinct from
+	// one answered "unmerged". Never prunable, and reported as a finding rather
+	// than an observation: not knowing is something wrong, not something parked.
+	Unknown bool
 }
 
 // Summary is the verdict as one report line.
 func (v Verdict) Summary(base string) string {
+	if v.Unknown {
+		return v.Blocker // "N ahead of base" would be a number we don't have
+	}
 	if !v.State.Merged() {
 		s := fmt.Sprintf("%d ahead of %s", v.Ahead, base)
 		if v.Blocker != "" && v.Blocker != "unmerged" {
@@ -66,7 +73,19 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		}
 		state, err := gitx.MergedState(container, b, base)
 		if err != nil {
-			continue // a branch we can't classify is one we never act on
+			// A branch whose standing can't be determined is never prunable —
+			// nothing here can claim its work landed — but it still has to
+			// appear. Dropping it made a broken classifier indistinguishable
+			// from a repo with nothing to say, which is how a squash tier that
+			// failed on every branch (see gitx.runAsProbe) emptied the report
+			// instead of filling it with errors.
+			out = append(out, Verdict{
+				Name:     b,
+				Unknown:  true,
+				Worktree: gitx.WorktreeFor(container, b),
+				Blocker:  "can't classify: " + err.Error(),
+			})
+			continue
 		}
 		ahead, _ := aheadBehind(container, b, base)
 		v := Verdict{Name: b, State: state, Ahead: ahead, Worktree: gitx.WorktreeFor(container, b)}

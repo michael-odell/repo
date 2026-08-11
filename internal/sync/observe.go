@@ -43,6 +43,17 @@ func (x *run) observe() {
 		if x.hasNote(v.Name) {
 			continue
 		}
+		// A branch git couldn't answer for is a finding, not an observation:
+		// "I don't know" is a state someone has to look at, so it lifts the
+		// repo's glyph rather than sitting quietly among the parked work.
+		// Rarely reached here — a repo damaged enough to defeat classification
+		// usually fails at the fetch first, and the run ends there — but `repo
+		// prune` classifies without fetching, and this keeps the two agreeing
+		// about what an unanswerable branch means.
+		if v.Unknown {
+			x.branchMark(v.Name, Attention, v.Summary(x.branch))
+			continue
+		}
 		// `unmerged` shows only outstanding work. `all` additionally shows the
 		// landed branches with the verdict prune would act on, so the decision
 		// can be watched during ordinary sweeps rather than only when someone
