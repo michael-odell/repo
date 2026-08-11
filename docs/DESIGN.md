@@ -723,6 +723,18 @@ Cost is bounded and local — no network. Measured on a 13-branch repo with one
 branch 72 commits deep and another whose base had moved 189 commits: **0.26s**
 for the whole repo.
 
+That measurement is the ordinary case, and the ordinary case is not the one that
+hurts. Both patch tiers run `git cherry`, which generates and hashes a diff for
+every commit on *both* sides of the divergence, so their cost tracks how far the
+two have drifted rather than how big the branch is. A branch abandoned on a busy
+trunk years ago is thousands of diffs, and six repos are classified at once.
+Past `REPO_MERGE_SCAN_LIMIT` commits apart (default 1000, both sides combined)
+the patch tiers are therefore **declined rather than attempted**, and the branch
+is reported as unclassified — never as unmerged, and never as prunable. The
+ancestry tier runs before the guard, so branches that plainly landed are still
+recognised however far apart the two have drifted; what is given up is only the
+ability to spot a *replayed* merge on a branch nobody has touched in years.
+
 **Which tier confirmed a merge decides how it can be removed.** Git's own `-d`
 safety check is an ancestry test, so it refuses exactly the branches the second
 and third tiers exist to identify. `repo prune` uses `-d` wherever it can, so two

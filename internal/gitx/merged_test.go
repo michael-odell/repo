@@ -1,9 +1,11 @@
 package gitx
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -143,6 +145,47 @@ func TestSquashTierWorksWithoutAConfiguredIdentity(t *testing.T) {
 	commitAs("later", "later\n", "later main work")
 
 	assertState(t, dir, "feature", "main", MergedSquash)
+}
+
+// TestScanLimitDeclinesFarDivergence: the patch-id tiers walk every commit on
+// both sides of the divergence, generating and hashing a diff for each, so an
+// abandoned branch on an old repo can cost thousands of diffs — six of those in
+// parallel is enough to exhaust a machine. Past the limit the tiers are declined
+// rather than attempted, and the branch is reported as unclassified.
+func TestScanLimitDeclinesFarDivergence(t *testing.T) {
+	t.Setenv(scanLimitEnv, "2") // feature is 2 ahead / 2 behind: 4 apart
+	dir := newRepo(t)
+	gitT(t, dir, "merge", "-q", "--squash", "feature")
+	gitT(t, dir, "commit", "-q", "-m", "squashed feature")
+	commit(t, dir, "later", "later\n", "later main work")
+
+	state, err := MergedState(dir, "feature", "main")
+	if !errors.Is(err, ErrTooFarDiverged) {
+		t.Fatalf("MergedState = %v, %v; want ErrTooFarDiverged", state, err)
+	}
+	if state.Merged() {
+		t.Errorf("state = %v; a declined branch must never read as merged", state)
+	}
+	if !strings.Contains(err.Error(), scanLimitEnv) {
+		t.Errorf("error = %q, want it to name %s so the limit can be raised", err, scanLimitEnv)
+	}
+
+	// Raising the limit gets the real answer back: the guard is about cost, not
+	// about the branch being unclassifiable.
+	t.Setenv(scanLimitEnv, "1000")
+	assertState(t, dir, "feature", "main", MergedSquash)
+}
+
+// TestScanLimitKeepsTheAncestryTier: the cheap tier runs before the guard, so
+// the ordinary case — a branch whose commits are literally in the base — is
+// still recognised however far the two have drifted. Only the expensive tiers
+// are given up, which is what keeps the guard from turning landed branches into
+// permanent unknowns.
+func TestScanLimitKeepsTheAncestryTier(t *testing.T) {
+	t.Setenv(scanLimitEnv, "1")
+	dir := newRepo(t)
+	gitT(t, dir, "merge", "-q", "--ff-only", "feature")
+	assertState(t, dir, "feature", "main", MergedAncestor)
 }
 
 // TestDeleteBranchForceNeededForSquash pins why the tiers matter operationally:

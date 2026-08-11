@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/michael-odell/repo/internal/gitx"
@@ -73,6 +74,14 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		}
 		state, err := gitx.MergedState(container, b, base)
 		if err != nil {
+			// "Declined to look" and "tried and failed" are both unknown, and
+			// both unprunable, but only one of them is a fault — so the reason
+			// travels with the verdict rather than being flattened into one
+			// message someone would have to go and interpret.
+			why := "can't classify: " + err.Error()
+			if errors.Is(err, gitx.ErrTooFarDiverged) {
+				why = err.Error()
+			}
 			// A branch whose standing can't be determined is never prunable —
 			// nothing here can claim its work landed — but it still has to
 			// appear. Dropping it made a broken classifier indistinguishable
@@ -83,7 +92,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 				Name:     b,
 				Unknown:  true,
 				Worktree: gitx.WorktreeFor(container, b),
-				Blocker:  "can't classify: " + err.Error(),
+				Blocker:  why,
 			})
 			continue
 		}
