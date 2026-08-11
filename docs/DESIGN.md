@@ -840,33 +840,46 @@ lets a fork-pr branch's "fast-forwarded, then pushed" read as one final state.
 
 ```
 repo sync — 14 repos, 4 due
-  ✓ romkatv/powerlevel10k    up to date
-  ↻ cban-ops/pt-helm         main: ff +4
-  ⚠ acme/gitops-infra        2 branches need attention
-      ⚠ main                  origin ref missing
-      ⚠ release               diverged (+2/-1): not force-pushing (no force_push match)
-  ⚠ acme/noodle              3 branches need attention
-      ⚠ fix-login              2 unpushed
-      ⚠ spike-auth             1 unpushed, unmerged
-      ↻ hotfix                 would push (never pushed)
-  ⚠ acme/charts              main rewritten (a1b→9f3) — stopped (no force_pull match)
-  ⚠ acme/handwritten         3 untracked file(s)
-  ↻ acme/prometheus          vendor v2.50.1 → v2.51.0
-  ⚑ acme/fast-syntax-hl      untrusted +2 — review pending (repo review fast-syntax-hl)
-  ✓ acme/zsh-plugins         17 branches up to date
-  ✓ acme/noodle-notes        7 branches up to date
-      ◦ craft                  1 ahead of main
-      ◦ textbundle             3 ahead of main
-  ✗ acme/idx-svc             fetch failed: host unreachable
+  ✓  romkatv/powerlevel10k  supply-chain-mirror  up to date
+  ↻  cban-ops/pt-helm       fork-pr              main: ff +4
+  ⚠  acme/gitops-infra      upstream-push        2 branches need attention
+    ⚠    main                                      origin ref missing
+    ⚠    release                                   diverged (+2/-1): not force-pushing (no force_push match)
+  ⚠  acme/noodle            upstream-push        3 branches need attention
+    ⚠    fix-login                                 2 unpushed
+    ⚠    spike-auth                                1 unpushed, unmerged
+    ↻    hotfix                                    would push (never pushed)
+  ⚠  acme/charts            upstream-push        main rewritten (a1b→9f3) — stopped (no force_pull match)
+  ⚠  acme/handwritten       upstream-push        3 untracked file(s)
+  ↻  acme/prometheus        vendor               vendor v2.50.1 → v2.51.0
+  ⚑  acme/fast-syntax-hl    supply-chain-mirror  untrusted +2 — review pending (repo review fast-syntax-hl)
+  ✓  acme/zsh-plugins       upstream-push        17 branches up to date
+  ✓  acme/noodle-notes      upstream-push        7 branches up to date
+    ◦    craft                                     1 ahead of main
+    ◦    textbundle                                3 ahead of main
+  ✗  acme/idx-svc           upstream-push        fetch failed: host unreachable
 ```
 
 The report is definitive-identity-first (owner/repo), not just the short name —
 the same repo name recurring across different owners (a common fork/mirror
 shape) must never read as one line in the table. A branch sub-bullet's glyph
 is itself indented past its repo's, not just its name, so nesting reads
-clearly at a glance. Names/branches are always plain text; only the leading
-glyph carries color (bold red for ✗ specifically, since a plain ✗/✓ pair reads
-as too similar without it), and only when stdout is an actual terminal —
+clearly at a glance.
+
+Each repo row names its **workflow**, between the name and the detail. The
+workflow decides what the rest of the row means — whether "2 unpushed" is
+waiting on you or is the normal resting state, whether a rewrite would be
+followed or refused — and it is as often inferred from the repo's remotes
+(§3.2) as it is written in config, so a report that omitted it would routinely
+send you to `repo list` to interpret it. A branch sub-bullet leaves the column
+empty: it inherits its repo's workflow, and repeating it would say nothing
+while pushing the summary out of the column it elaborates.
+
+Names, branches, and details are plain text; the leading glyph carries color
+(bold red for ✗ specifically, since a plain ✗/✓ pair reads as too similar
+without it) and the workflow is greyed — it qualifies the row rather than
+reporting anything, so it should be findable without competing with the
+finding. All color is conditional on stdout being an actual terminal;
 `NO_COLOR` or piping/redirecting turns it off.
 
 ## 6. Emitted artifacts (shell contract)

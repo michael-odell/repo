@@ -40,7 +40,12 @@ const (
 
 // Result is the per-repo outcome plus an ordered reasoning trace (--verbose).
 type Result struct {
-	Name     string
+	Name string
+	// Workflow is reported alongside the outcome because it is what decides the
+	// outcome — how a repo is pushed, whether task branches are carried, whether
+	// a review gate applies — and it is as often inferred from a clone's remotes
+	// as it is stated in config, so it cannot be read off the registry.
+	Workflow string
 	Cloned   bool
 	Outcome  Outcome
 	Detail   string
@@ -144,7 +149,7 @@ type run struct {
 }
 
 func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
-	res := &Result{Name: repoName(r)}
+	res := &Result{Name: repoName(r), Workflow: r.Workflow}
 	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
 
 	// A repo whose important branch couldn't be settled — config states none and

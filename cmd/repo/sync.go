@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -137,16 +138,19 @@ func expandPath(p string) string {
 	return p
 }
 
-func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
+func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 
 	// A branch row's glyph is itself indented past the repo row's (not just
 	// its name) so a nested branch reads as clearly indented at a glance,
 	// rather than every glyph — repo or branch — landing in one flat column
-	// (DESIGN §5.6).
+	// (DESIGN §5.6). The workflow sits between the name and the detail, greyed:
+	// it explains the row rather than being news, so it should be findable
+	// without competing with the finding.
 	if opts.Verbose {
 		for _, r := range results {
-			fmt.Fprintf(w, "  %s %s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name)
+			fmt.Fprintf(w, "  %s %s %s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
+				color(ansiGray, "("+r.Workflow+")"))
 			for _, a := range r.Actions {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}
@@ -158,9 +162,12 @@ func renderSync(w *os.File, results []syncpkg.Result, opts syncpkg.Options) {
 	} else {
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 		for _, r := range results {
-			fmt.Fprintf(tw, "  %s\t%s\t%s\n", colorCell(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name, r.Detail)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", colorCell(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
+				colorCell(ansiGray, r.Workflow), r.Detail)
+			// The empty workflow cell keeps a branch's summary under the repo
+			// details it elaborates, rather than under the workflow column.
 			for _, b := range r.Branches {
-				fmt.Fprintf(tw, "    %s\t  %s\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
+				fmt.Fprintf(tw, "    %s\t  %s\t\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
 			}
 		}
 		tw.Flush()
