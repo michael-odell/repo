@@ -152,8 +152,17 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	// without competing with the finding.
 	if opts.Verbose {
 		for _, r := range results {
-			fmt.Fprintf(w, "  %s %s %s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
-				color(ansiGray, "("+r.Workflow+", "+r.Elapsed.Round(time.Millisecond).String()+")"))
+			// The repo's own outcome belongs on its line here exactly as it does
+			// in the table. Leaving it to the trace below assumed every outcome
+			// had left a trace line, and a failure records its reason as the
+			// outcome itself — so --verbose, the mode you reach for *because*
+			// something failed, was the one that showed a bare ✗ and a name.
+			detail := ""
+			if r.Detail != "" {
+				detail = "  " + r.Detail
+			}
+			fmt.Fprintf(w, "  %s %s %s%s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
+				color(ansiGray, "("+r.Workflow+", "+r.Elapsed.Round(time.Millisecond).String()+")"), detail)
 			for _, a := range r.Actions {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}

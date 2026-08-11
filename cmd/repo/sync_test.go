@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,31 @@ func TestRenderSyncShowsWorkflow(t *testing.T) {
 	verbose := renderedLines(t, syncpkg.Options{Verbose: true})
 	if l := lineWith(t, verbose, "romkatv/powerlevel10k"); !strings.Contains(l, "("+model.SupplyChainMirror+", ") {
 		t.Errorf("verbose row %q should name its workflow", l)
+	}
+}
+
+// TestRenderSyncVerboseShowsWhyItFailed: a failure records its reason as the
+// repo's outcome detail, not as a trace line, so a --verbose report that only
+// printed the trace showed a red ✗ and a name — nothing about what went wrong,
+// in the mode you run precisely because something went wrong.
+func TestRenderSyncVerboseShowsWhyItFailed(t *testing.T) {
+	results := []syncpkg.Result{{
+		Name:     "acme/broken",
+		Workflow: model.ForkPR,
+		Outcome:  syncpkg.Failed,
+		Detail:   "git fetch --prune --tags origin: fatal: repository not found",
+		Err:      errors.New("git fetch --prune --tags origin: fatal: repository not found"),
+		Elapsed:  2*time.Minute + 40*time.Second,
+	}}
+	var buf bytes.Buffer
+	renderSync(&buf, results, syncpkg.Options{Verbose: true})
+
+	line := lineWith(t, strings.Split(buf.String(), "\n"), "acme/broken")
+	if !strings.Contains(line, "repository not found") {
+		t.Errorf("verbose failure row = %q, want the reason it failed", line)
+	}
+	if !strings.Contains(line, "fork-pr") || !strings.Contains(line, "2m40s") {
+		t.Errorf("verbose failure row = %q, should still carry workflow and duration", line)
 	}
 }
 
