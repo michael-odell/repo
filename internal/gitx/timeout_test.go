@@ -58,7 +58,12 @@ func TestRunTimesOut(t *testing.T) {
 func TestRunKillsTheProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
 	fakeGit(t, pidFile)
-	t.Setenv(timeoutEnv, "300ms")
+	// Generous on purpose: the fake has to start a shell and fork a child before
+	// the deadline fires, and on a machine already running the rest of the suite
+	// that has taken longer than a few hundred milliseconds. The subject here is
+	// which processes survive cancellation, not how quickly it happens —
+	// TestRunTimesOut covers the timing, and needs nothing to have started.
+	t.Setenv(timeoutEnv, "3s")
 
 	if _, err := run(t.TempDir(), "status"); err == nil {
 		t.Fatal("want a timeout error, got nil")
