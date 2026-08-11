@@ -190,16 +190,28 @@ branches have landed and could go:
   ⚠    acme/proj                upstream-push  1 branch needs attention
     ⚠    PRECXP-91-spike                       never pushed
     ◦    PRECXP-74-dev-cluster                 1 ahead of main
-    ◦    refactor-auth                         merged (squashed) — prunable
+    ◦    refactor-auth                         merged (rewritten) — prunable
     ◦    tidy-logging                          merged — prunable
     ◦    main                                  up to date
 ```
 
-`merged (squashed)` is the point of the tiered detection (§5.3): `git branch
+`merged (rewritten)` is the point of the tiered detection (§5.3): `git branch
 --merged` only answers the ancestry question, so a squash- or rebase-merged
-branch looks like unfinished work forever. These verdicts are the same call
-`repo prune` acts on, not a lookalike that might disagree — so the decision can
-be watched during ordinary sweeps.
+branch looks like unfinished work forever. The two verdicts differ in who can
+vouch for the branch, not in how it was merged:
+
+| verdict | means | to prune |
+|---------|-------|----------|
+| `merged` | base literally contains the branch's commits | `git branch -d` accepts it too |
+| `merged (rewritten)` | the branch's content is in base under other SHAs | needs `-D`; git's own check can't see the merge |
+
+`repo` deliberately won't say *which* rewrite it was. Squashing a single-commit
+branch produces that commit's exact patch, so on the object graph it is the same
+thing as a rebase or a cherry-pick — the SHA changed and the content landed, and
+anything more specific would be a guess.
+
+These verdicts are the same call `repo prune` acts on, not a lookalike that might
+disagree — so the decision can be watched during ordinary sweeps.
 
 Note this is *not* `task_branches`, which decides what `sync` **does** with
 those branches (push them, leave them, keep them pulled). `show_branches`

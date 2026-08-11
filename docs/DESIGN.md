@@ -705,27 +705,36 @@ landed by squash or rebase looks like unfinished work forever. Detection is
 therefore tiered — cheapest first, stopping at the first that confirms, so only a
 genuinely unmerged branch pays for all three:
 
-| tier | evidence | catches | defeated by |
-|------|----------|---------|-------------|
-| ancestor | `rev-list <base>..<branch>` is empty | merges, fast-forwards | any replay |
-| same patches | `git cherry` finds every commit's patch already in base | rebase, cherry-pick — new SHAs, same patches | squashing several commits into one |
-| squashed | the branch rebuilt as **one** commit against the merge base has its patch in base | squash merges | genuinely outstanding work |
+| tier | evidence | catches | defeated by | reported as |
+|------|----------|---------|-------------|-------------|
+| ancestor | `rev-list <base>..<branch>` is empty | merges, fast-forwards | any replay | `merged` |
+| each patch | `git cherry` finds every commit's patch already in base | rebase, cherry-pick, squash of one commit — new SHAs, same patches | squashing several commits into one | `merged (rewritten)` |
+| whole diff | the branch rebuilt as **one** commit against the merge base has its patch in base | squash merges | genuinely outstanding work | `merged (rewritten)` |
 
-The tiers name the **evidence**, not the merge style, and the two don't map
-one-to-one: squashing a *single-commit* branch yields that commit's exact patch,
-so it is found at the "same patches" tier and never reaches the squash tier.
-That is not a misdetection — the operations are indistinguishable on the object
-graph, and the decision is identical either way.
+The tiers name the **evidence**, not the merge style, because the object graph
+only records the former: squashing a *single-commit* branch yields that commit's
+exact patch, so it is found at the "each patch" tier, indistinguishable there
+from a rebase or a cherry-pick.
+
+The two patch tiers therefore report under **one** verdict. Which of them fired
+says how the search went, not how the branch was merged, and printing "squashed"
+on the strength of it would be a guess dressed as a finding. The split the report
+does draw is the one a reader can act on:
+
+- `merged` — the ancestry case, which `git branch -d` will agree to.
+- `merged (rewritten)` — the content is in base under other SHAs. `-d` refuses
+  these, so pruning them takes `-D` (§ `NeedsForceDelete`), and the second
+  opinion git would otherwise give is not available.
 
 `git cherry` compares patches, and a merge commit has none, so it passes over
 merges in silence: "every commit's patch is in base" is a claim about the commits
 it looked at. A merge that only joins its parents adds nothing, but one that
 resolved a conflict by hand holds work that exists on no commit as a patch, so
-the "same patches" tier also checks the combined diff (`diff-tree --cc`) of every
+the "each patch" tier also checks the combined diff (`diff-tree --cc`) of every
 merge the branch is ahead by, and withholds its verdict when one is non-empty.
 
-The squash tier is the only one needing a scratch object (`commit-tree` for the
-rebuilt commit). It is unreferenced and gc reclaims it; no ref, config, or
+The whole-diff tier is the only one needing a scratch object (`commit-tree` for
+the rebuilt commit). It is unreferenced and gc reclaims it; no ref, config, or
 working tree is touched.
 
 Cost is bounded and local — no network. Measured on a 13-branch repo with one

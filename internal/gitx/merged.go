@@ -46,12 +46,12 @@ func DefaultScanLimit() int {
 // landed and still looks like unfinished work to an ancestry test.
 type MergeState int
 
-// The states name the *evidence* that the work landed, not the merge style that
-// produced it — the two don't map one-to-one. Squashing a single-commit branch
-// yields a commit with that commit's exact patch, so it is found by MergedPatch
-// and never reaches the squash tier. That isn't a misdetection: the two
-// operations are indistinguishable on the object graph, and the prune decision
-// is identical either way.
+// The states name the *evidence* that the work landed, never the merge style
+// that produced it — the two don't map one-to-one, and only the evidence is
+// something the object graph can actually be asked about. Squashing a
+// single-commit branch yields a commit with that commit's exact patch, so it is
+// found by MergedPatch and never reaches the squash tier; nothing distinguishes
+// it there from a rebase or a cherry-pick.
 const (
 	Unmerged       MergeState = iota // carries commits base does not have, in any form
 	MergedAncestor                   // base literally contains the branch's commits
@@ -62,15 +62,18 @@ const (
 // Merged reports whether the state is any flavour of landed.
 func (m MergeState) Merged() bool { return m != Unmerged }
 
-// String names the state for reports.
+// String names the state for reports. The two patch tiers deliberately share
+// one word: which of them fired says how the *search* went, not how the branch
+// was merged, and naming a merge style there would be a guess dressed as a
+// finding. What a reader can act on is the split this does draw — "merged" is
+// the ancestry case git's own `-d` will agree to, "merged (rewritten)" is the
+// content landing under other SHAs, which `-d` refuses (see NeedsForceDelete).
 func (m MergeState) String() string {
 	switch m {
 	case MergedAncestor:
 		return "merged"
-	case MergedPatch:
-		return "merged (same patches)"
-	case MergedSquash:
-		return "merged (squashed)"
+	case MergedPatch, MergedSquash:
+		return "merged (rewritten)"
 	default:
 		return "unmerged"
 	}

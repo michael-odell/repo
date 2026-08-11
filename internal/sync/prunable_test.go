@@ -69,7 +69,9 @@ func TestSquashMergedBranchIsNotRePushedEither(t *testing.T) {
 	if refExists(t, origin, "feature") {
 		t.Errorf("origin has feature again: a squash-merged branch was resurrected")
 	}
-	if !hasAction(res, "merged (squashed)") {
+	// An ancestry test calls this branch unmerged, so the "rewritten" verdict
+	// could only have come from a patch tier.
+	if !hasAction(res, "merged (rewritten)") {
 		t.Errorf("squash merge not recognised; actions=%v", res.Actions)
 	}
 }
@@ -132,7 +134,7 @@ func TestClassifyVerdicts(t *testing.T) {
 	if !ok {
 		t.Fatalf("no line for landed; branches=%+v", res.Branches)
 	}
-	if want := "merged (squashed) — prunable"; b.Summary != want {
+	if want := "merged (rewritten) — prunable"; b.Summary != want {
 		t.Errorf("landed summary = %q, want %q", b.Summary, want)
 	}
 }
