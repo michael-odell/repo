@@ -116,6 +116,50 @@ func DefaultBranch(dir, remote string) (string, bool) {
 	return strings.TrimPrefix(out, remote+"/"), true
 }
 
+// InferDefaultBranch is the clone's own answer to which branch is the important
+// one, in descending order of authority: origin's recorded HEAD symref; then,
+// for a bare repo only, its own HEAD (`git clone --bare` records no
+// remote-tracking refs, and a bare repo has no checkout that could have moved
+// HEAD — its worktrees carry their own); then a conventional mainline name among
+// its local branches. ok is false when none of the three resolves, and the
+// caller must not paper over that with the checked-out branch: a task branch
+// parked in a working tree is not evidence about which branch matters.
+func InferDefaultBranch(dir string) (string, bool) {
+	if b, ok := DefaultBranch(dir, "origin"); ok {
+		return b, true
+	}
+	if ClassifyLayout(dir) == LayoutWorktree {
+		if b, err := CurrentBranch(dir); err == nil && b != "" {
+			return b, true
+		}
+	}
+	if b := mainlineBranch(dir); b != "" {
+		return b, true
+	}
+	return "", false
+}
+
+// mainlineBranch returns whichever of a small set of conventional names
+// (checked in order of how common each is) exists as a local branch, or "" when
+// none do — the weakest signal, a guess from convention rather than anything the
+// repo states, and so the last one tried.
+func mainlineBranch(dir string) string {
+	locals, err := LocalBranches(dir)
+	if err != nil {
+		return ""
+	}
+	have := map[string]bool{}
+	for _, b := range locals {
+		have[b] = true
+	}
+	for _, name := range []string{"main", "master", "develop"} {
+		if have[name] {
+			return name
+		}
+	}
+	return ""
+}
+
 // IsDirty reports whether the working tree has uncommitted changes (ignoring
 // untracked files, matching the plugins-update dirty guard).
 func IsDirty(dir string) (bool, error) {

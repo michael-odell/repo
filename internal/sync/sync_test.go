@@ -108,6 +108,61 @@ func TestDiscoveredRepoFlagsUnresolvedImportantBranch(t *testing.T) {
 	}
 }
 
+// TestProvisionAdoptsTheClonesDefaultBranch: a repo being provisioned has no
+// clone to read a default branch from, so it starts the run carrying the
+// [defaults]/builtin assumption. Once the clone lands, the clone's answer must
+// take over within the same run — otherwise a fresh machine's first sweep
+// reports "main missing on origin" for every repo whose trunk is master, and
+// each one quietly fixes itself on the second run.
+func TestProvisionAdoptsTheClonesDefaultBranch(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	origin := filepath.Join(remotes, "acme", "proj")
+	must(t, os.MkdirAll(filepath.Dir(origin), 0o755))
+	git(t, T, "init", "-q", "-b", "master", "--bare", origin)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", origin, seed)
+	git(t, seed, "checkout", "-q", "-b", "master")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "master")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[defaults]
+branches = ["main"]
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:acme/proj"
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if res := results[0]; res.Outcome != UpToDate && res.Outcome != Updated {
+		t.Errorf("first sync outcome = %v (%s), want the clone's master to be recognised; actions=%v",
+			res.Outcome, res.Detail, res.Actions)
+	}
+	// The assumed branch must not have been created on the way past.
+	clone := filepath.Join(T, "clones", "proj")
+	out, err := exec.Command("git", "-C", clone, "branch", "--list", "main").Output()
+	must(t, err)
+	if trim(string(out)) != "" {
+		t.Errorf("provisioning created the assumed branch main: %q", string(out))
+	}
+}
+
 func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

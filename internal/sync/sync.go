@@ -221,6 +221,35 @@ func (x *run) provisionAndUpdate() {
 	}
 }
 
+// adoptClonedBranch re-reads the important branch from a clone that did not
+// exist when the run started. Branch resolution asks the clone first, but a repo
+// being provisioned has no clone to ask, so it arrives here carrying the
+// [defaults]/builtin assumption instead. Once the clone lands, the assumption is
+// obsolete: without this, provisioning a master-trunk repo would spend its first
+// sweep reporting "main missing on origin" — self-healing only on the next run —
+// and a worktree repo would have a main/ worktree added for a branch that does
+// not exist. Config that states `branches` is left alone; it is not an
+// assumption, and it may legitimately name a branch the clone doesn't have yet.
+func (x *run) adoptClonedBranch() {
+	if x.r.BranchesStated {
+		return
+	}
+	b, ok := gitx.InferDefaultBranch(x.container)
+	if !ok || b == x.branch {
+		return
+	}
+	x.add("clone's default branch is %s (config states none, assumed %s)", b, quoteBranch(x.branch))
+	x.r.Branches = []string{b}
+	x.branch = b
+}
+
+func quoteBranch(b string) string {
+	if b == "" {
+		return "none"
+	}
+	return b
+}
+
 // hookDir picks an existing working tree to run hooks in: the configured primary
 // tree when it exists, else the container (e.g. a mismatched single clone that
 // has not yet been converted to worktrees).
@@ -352,6 +381,9 @@ func (x *run) provisionWorktree() bool {
 		_ = gitx.Fetch(x.container, "upstream")
 	}
 	x.res.Cloned = true
+	// Before syncWorktree adds a worktree per important branch — adding one for
+	// an assumed branch would materialize it, not just misreport it.
+	x.adoptClonedBranch()
 	return true
 }
 
@@ -466,6 +498,7 @@ func (x *run) provision() bool {
 			return false
 		}
 		x.res.Cloned = true
+		x.adoptClonedBranch()
 	}
 
 	// Ensure remotes: origin, plus upstream when a fork exists.
