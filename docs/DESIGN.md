@@ -108,20 +108,27 @@ repos too, because a clone can answer for itself whether or not config also
 mentions it. Declaring a repo — often done just to hang a comment or a hook on it
 — must not change which branch `sync` tracks. Precedence, therefore:
 
-1. `branches` stated by the repo's own entry or by a root it sits under — config
-   overriding inference, as everywhere else;
-2. else the clone's answer (`origin`'s `HEAD`, then a mainline name);
-3. else `[defaults] branches`, or the builtin `["main"]` — which get a say only
-   when there is *no* clone to read, i.e. a repo about to be provisioned;
+1. `branches` as config states it — `[defaults]`, a root, or the repo's own
+   entry, innermost winning — config overriding inference, as everywhere else;
+2. else the clone's answer (`origin`'s `HEAD`, then a bare container's `HEAD`,
+   then a mainline name);
+3. else the builtin `["main"]`, which gets a say only when there is *no* clone to
+   read: what a repo about to be provisioned is assumed to have. `sync` re-asks
+   the moment the clone lands, so the assumption never outlives the run that
+   made it;
 4. else nothing, reported as above.
 
-`[defaults]` ranking *below* the clone is the one departure from plain
-innermost-wins inheritance, and is deliberate: a default is a blanket assumption
-about every repo anywhere, including ones it has never seen, while `origin`'s
-`HEAD` is a fact about the repo in front of you. The failure it prevents is a
-`[defaults] branches = ["main"]` reporting `main missing on origin` against a
-repo whose trunk is `master` — a finding about the config, dressed up as a
-finding about the repo.
+Only the *builtin* sits below the clone, and only because nobody wrote it: if a
+value no one chose could outrank `origin`'s `HEAD`, a discovered repo would never
+get to answer for itself and §3.2's whole zero-config premise would collapse.
+Anything written in config is honored clear down the tree, `[defaults]` included.
+
+The corollary is worth stating plainly, since the report cannot: a `branches`
+value at `[defaults]` asserts that branch for *every* repo, including ones whose
+trunk differs. A repo that reports `main missing on origin` and has no `main` is
+telling you about your config, and `[defaults] branches` is the first place to
+look — a fleet-wide `branches` is rarely what you want, and belongs on the root
+that actually describes those repos.
 
 So ordinary cloning stays toil-free: `git clone` (or `repo clone <url>`, a thin
 convenience that places it per root/owner defaults) and never edit config. `sync` /

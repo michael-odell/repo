@@ -124,16 +124,13 @@ func TestBranchesUnresolvedStayEmpty(t *testing.T) {
 
 // TestDeclaredRepoStillReadsItsClone is the regression that started this:
 // declaring a repo — even for no reason beyond hanging a comment on it — must
-// not silently swap the clone's own trunk for a blanket [defaults] assumption,
-// which is how a master-only repo ends up reported as "main missing on origin".
+// not change which branch is important. With config silent on `branches`, a
+// declared repo reads its clone exactly as a discovered one does.
 func TestDeclaredRepoStillReadsItsClone(t *testing.T) {
 	wd := t.TempDir()
 	proj := clone(t, wd, "proj", "master")
 
 	reg := loadReg(t, `
-[defaults]
-branches = ["main"]
-
 [root.wd]
 dir = "`+wd+`"
 layout = "flat"
@@ -144,10 +141,48 @@ id = "gh:me/proj"
 `)
 	r := resolved(t, reg, proj)
 	if got := r.Branches; len(got) != 1 || got[0] != "master" {
-		t.Errorf("Branches = %v, want [master]: [defaults] is an assumption, the clone is a fact", got)
+		t.Errorf("Branches = %v, want [master]: declaring a repo is not a statement about its branches", got)
 	}
 	if !r.ID.Zero() && r.ID.String() != "gh:me/proj" {
 		t.Errorf("declared entry lost its identity: %v", r.ID)
+	}
+}
+
+// TestConfiguredDefaultsWinOverTheClone: `branches` written at [defaults] is
+// still config, and config overrides inference (DESIGN §3.2) at whatever tier it
+// is written — declared repos and discovered ones alike. The builtin ["main"] is
+// the thing that doesn't outrank a clone, because nobody wrote it.
+func TestConfiguredDefaultsWinOverTheClone(t *testing.T) {
+	wd := t.TempDir()
+	declared := clone(t, wd, "declared", "trunk")
+	found := clone(t, wd, "found", "trunk")
+
+	reg := loadReg(t, `
+[defaults]
+branches = ["release"]
+
+[root.wd]
+dir = "`+wd+`"
+layout = "flat"
+
+[[root.wd.repo]]
+id = "gh:me/declared"
+`)
+	if got := resolved(t, reg, declared).Branches; len(got) != 1 || got[0] != "release" {
+		t.Errorf("declared Branches = %v, want [release] ([defaults] is config, and config wins)", got)
+	}
+	if got := resolved(t, reg, found).Branches; len(got) != 1 || got[0] != "release" {
+		t.Errorf("discovered Branches = %v, want [release] (inheritance reaches discovered repos too)", got)
+	}
+
+	// …and with nothing written anywhere, the builtin stays out of the clone's way.
+	bare := loadReg(t, `
+[root.wd]
+dir = "`+wd+`"
+layout = "flat"
+`)
+	if got := resolved(t, bare, declared).Branches; len(got) != 1 || got[0] != "trunk" {
+		t.Errorf("Branches = %v, want [trunk]: the builtin must not outrank the clone", got)
 	}
 }
 

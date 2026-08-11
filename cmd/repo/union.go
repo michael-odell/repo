@@ -57,17 +57,16 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 // rule for a declared repo and a discovered one: what separates the two is what
 // config says about them, not how they are read. In precedence order —
 //
-//  1. `branches` stated for the repo or a root it sits under wins outright:
-//     config overrides inference (DESIGN §3.2), and a fork/mirror whose
-//     important branches aren't its origin's default needs to be able to say so.
+//  1. `branches` as config states it — [defaults], a root, or the repo's own
+//     entry, innermost winning — takes precedence outright: config overrides
+//     inference (DESIGN §3.2), wherever in the tree it is written.
 //  2. else the clone's own answer (gitx.InferDefaultBranch) — never a working
 //     tree's checkout, which a task branch left in place would otherwise win.
-//  3. else the [defaults]/builtin value, which gets a say only when there is no
-//     clone to ask. That is the one case it is good for: a repo sync is about to
-//     provision has no HEAD to read yet.
+//  3. else the builtin ["main"], which gets a say only with no clone to ask: it
+//     is what a repo about to be provisioned is assumed to have until its HEAD
+//     can be read (sync re-asks the moment the clone lands).
 //  4. else nothing, and sync says it can't tell rather than asserting a branch
-//     that may not exist — the trap being a blanket `branches = ["main"]`
-//     reporting "main missing on origin" against a repo whose trunk is master.
+//     that may not exist.
 func resolveBranches(r *model.Repo) {
 	if r.BranchesStated {
 		return

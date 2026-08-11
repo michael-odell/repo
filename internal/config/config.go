@@ -323,16 +323,18 @@ type Inherited struct {
 	Hooks               []model.Hook
 }
 
-// StatedBranches returns `branches` as stated about a particular repo — by the
-// repo's own entry (pass its Settings; the zero value for a discovered repo,
-// which has none) or by a root it sits under — and nil when neither says
-// anything. [defaults] is deliberately not consulted: a value there is a blanket
-// assumption about every repo anywhere, including ones whose clone can answer
-// the question itself, so it ranks below the clone rather than above it (see
-// resolveBranches). Every other setting keeps the plain innermost-wins chain;
-// branches is the one with a per-repo fact to compete with.
+// StatedBranches returns `branches` as config states it for a repo — from
+// [defaults], any root it sits under, or its own entry (pass its Settings; the
+// zero value for a discovered repo, which has none), innermost winning as
+// everywhere else — and nil when config is silent at every tier.
+//
+// Config is honored wherever it is written, including [defaults]: a value there
+// applies clear down the tree, and a repo whose trunk disagrees with it is a
+// config bug worth reporting as one. What is *not* config is builtinDefaults —
+// nobody wrote it, so it cannot outrank what a clone says about itself; if it
+// did, a discovered repo would never get to answer for itself at all.
 func (reg *Registry) StatedBranches(chain []string, entry Settings) []string {
-	var s Settings
+	s := reg.defaults
 	for _, n := range chain {
 		s = overlay(s, reg.roots[n].Settings)
 	}
@@ -401,7 +403,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		Layout:              strOr(s.Layout, builtinDefaults.Layout),
 		Worktrees:           boolOr(s.Worktrees, builtinDefaults.Worktrees),
 		Branches:            sliceOr(s.Branches, builtinDefaults.Branches),
-		BranchesStated:      reg.StatedBranches(chain, m.entry.Settings) != nil,
+		BranchesStated:      s.Branches != nil, // == StatedBranches(chain, entry): the same overlay
 		Push:                strOr(s.Push, pushDefault),
 		TaskBranches:        strOr(s.TaskBranches, taskDefault),
 		ShowBranches:        strOr(s.ShowBranches, showDefault),

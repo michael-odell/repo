@@ -108,10 +108,10 @@ func TestDiscoveredRepoFlagsUnresolvedImportantBranch(t *testing.T) {
 	}
 }
 
-// TestProvisionAdoptsTheClonesDefaultBranch: a repo being provisioned has no
-// clone to read a default branch from, so it starts the run carrying the
-// [defaults]/builtin assumption. Once the clone lands, the clone's answer must
-// take over within the same run — otherwise a fresh machine's first sweep
+// TestProvisionAdoptsTheClonesDefaultBranch: with config silent on `branches`,
+// a repo being provisioned has no clone to read a default branch from, so it
+// starts the run carrying the builtin ["main"]. Once the clone lands, the
+// clone's answer must take over within the same run — otherwise a fresh machine's first sweep
 // reports "main missing on origin" for every repo whose trunk is master, and
 // each one quietly fixes itself on the second run.
 func TestProvisionAdoptsTheClonesDefaultBranch(t *testing.T) {
@@ -131,8 +131,6 @@ func TestProvisionAdoptsTheClonesDefaultBranch(t *testing.T) {
 
 	regPath := filepath.Join(T, "registry.toml")
 	must(t, os.WriteFile(regPath, []byte(`
-[defaults]
-branches = ["main"]
 [hosts.local]
 base = "`+remotes+`/"
 [root.clones]

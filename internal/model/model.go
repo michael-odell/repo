@@ -41,10 +41,10 @@ type Repo struct {
 	Worktrees    bool
 	Branches     []string
 
-	// BranchesStated distinguishes a `branches` value that config states about
-	// this repo or a root it sits under from one that merely fell out of
-	// [defaults] or the builtin. Both land in Branches; only the former outranks
-	// what the clone itself says its default branch is (see resolveBranches).
+	// BranchesStated distinguishes a `branches` value config actually states —
+	// at [defaults], a root, or the repo's own entry — from the builtin nobody
+	// wrote. Both land in Branches; only a stated one outranks what the clone
+	// says its own default branch is (see resolveBranches).
 	BranchesStated bool
 
 	Push         string   // "auto" | "manual" | "never" (DESIGN §3.6)

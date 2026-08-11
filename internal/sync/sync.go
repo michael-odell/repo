@@ -222,10 +222,9 @@ func (x *run) provisionAndUpdate() {
 }
 
 // adoptClonedBranch re-reads the important branch from a clone that did not
-// exist when the run started. Branch resolution asks the clone first, but a repo
-// being provisioned has no clone to ask, so it arrives here carrying the
-// [defaults]/builtin assumption instead. Once the clone lands, the assumption is
-// obsolete: without this, provisioning a master-trunk repo would spend its first
+// exist when the run started. A repo being provisioned has no clone to ask, so
+// when config states no `branches` it arrives here carrying the builtin
+// assumption instead. Once the clone lands, the assumption is obsolete: without this, provisioning a master-trunk repo would spend its first
 // sweep reporting "main missing on origin" — self-healing only on the next run —
 // and a worktree repo would have a main/ worktree added for a branch that does
 // not exist. Config that states `branches` is left alone; it is not an
