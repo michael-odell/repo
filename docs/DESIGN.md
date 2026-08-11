@@ -931,6 +931,23 @@ send you to `repo list` to interpret it. A branch sub-bullet leaves the column
 empty: it inherits its repo's workflow, and repeating it would say nothing
 while pushing the summary out of the column it elaborates.
 
+**While the sweep runs**, a single status line on **stderr** shows a spinner, a
+done/total count, how many repos are in flight, and — once one has been in
+flight long enough for the name to mean something — the longest-running repo and
+for how long. A sweep prints nothing until it finishes, because the report is a
+table and a table can't be written out of order; without a status line that
+silence is indistinguishable from a hang, which is the wrong impression for the
+one command that mostly waits on the network. The longest-running repo is the
+useful part: on a slow sweep it answers "what is it waiting on" without anyone
+going to `ps`. It is stderr-only and terminal-only, so redirecting the report
+never collects animation frames, and it is wiped before the report prints — a
+spinner frozen mid-spin above the output would imply work still in progress.
+
+The footer names the **slowest** repo when one took long enough (30s) to
+plausibly be what you were waiting on. A report organised by outcome says
+nothing about where the time went, and the repo that ate the sweep is often a
+`✓`; `--verbose` gives every repo's duration alongside its workflow.
+
 Names, branches, and details are plain text; the leading glyph carries color
 (bold red for ✗ specifically, since a plain ✗/✓ pair reads as too similar
 without it) and the workflow is greyed — it qualifies the row rather than

@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	stdsync "sync" // this package is also called sync
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -50,6 +51,11 @@ type Result struct {
 	Outcome  Outcome
 	Detail   string
 	Branches []BranchNote // notable branch findings, rendered as sub-bullets (DESIGN §5.6)
+	// Elapsed is how long this repo took. A sweep's cost is never evenly spread
+	// — one repo with a huge history or a slow remote accounts for most of it —
+	// and without this the only way to find that repo is to watch the sweep
+	// happen.
+	Elapsed time.Duration
 	Actions  []string
 	Err      error
 
@@ -85,6 +91,19 @@ type Options struct {
 	LoseIgnored bool // pre-approve discarding .gitignore'd files during a relayout
 	Frequency   time.Duration
 	StateDir    string
+
+	// Progress, when set, is called as each repo enters and leaves the sweep, so
+	// a caller can show that work is moving without this package knowing
+	// anything about terminals. Calls are serialised, and every Started is
+	// followed by exactly one Finished, including for a repo that failed.
+	Progress func(Progress)
+}
+
+// Progress is one repo crossing into or out of the sweep.
+type Progress struct {
+	Name     string
+	Finished bool
+	Outcome  Outcome // meaningful only when Finished
 }
 
 // Run reconciles the selected repos in a bounded, isolated sweep, then performs
@@ -93,12 +112,27 @@ type Options struct {
 // concurrent output (DESIGN §4.1).
 func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
 	results := make([]Result, len(repos))
+	// Serialised here rather than in every caller: the sweep is concurrent, and a
+	// progress display is the last place that should have to think about it.
+	var progressMu stdsync.Mutex
+	report := func(p Progress) {
+		if opts.Progress == nil {
+			return
+		}
+		progressMu.Lock()
+		defer progressMu.Unlock()
+		opts.Progress(p)
+	}
+
 	var g errgroup.Group
 	g.SetLimit(6)
 	for i, r := range repos {
 		i, r := i, r
 		g.Go(func() error {
+			name := repoName(r)
+			report(Progress{Name: name})
 			results[i] = syncRepo(reg, r, opts)
+			report(Progress{Name: name, Finished: true, Outcome: results[i].Outcome})
 			return nil
 		})
 	}
@@ -148,8 +182,12 @@ type run struct {
 	res *Result
 }
 
-func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
+// The result is named so the deferred timing lands in what the caller receives:
+// every return here is `return *res`, which copies before defers run, so setting
+// res.Elapsed would time the repo and then throw the number away.
+func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 	res := &Result{Name: repoName(r), Workflow: r.Workflow}
+	defer func(start time.Time) { out.Elapsed = time.Since(start) }(time.Now())
 	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
 
 	// A repo whose important branch couldn't be settled — config states none and

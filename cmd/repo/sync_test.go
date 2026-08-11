@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/michael-odell/repo/internal/model"
 	syncpkg "github.com/michael-odell/repo/internal/sync"
@@ -50,8 +51,39 @@ func TestRenderSyncShowsWorkflow(t *testing.T) {
 	}
 
 	verbose := renderedLines(t, syncpkg.Options{Verbose: true})
-	if l := lineWith(t, verbose, "romkatv/powerlevel10k"); !strings.Contains(l, "("+model.SupplyChainMirror+")") {
+	if l := lineWith(t, verbose, "romkatv/powerlevel10k"); !strings.Contains(l, "("+model.SupplyChainMirror+", ") {
 		t.Errorf("verbose row %q should name its workflow", l)
+	}
+}
+
+// TestRenderSyncNamesTheSlowestRepo: a report organised by outcome says nothing
+// about where the time went, and the repo that ate the sweep is often a ✓ — so
+// it has to be named separately or not at all. Only when it was slow enough to
+// plausibly be what you were waiting on.
+func TestRenderSyncNamesTheSlowestRepo(t *testing.T) {
+	quick := []syncpkg.Result{
+		{Name: "acme/one", Workflow: model.UpstreamPush, Detail: "up to date", Elapsed: 2 * time.Second},
+		{Name: "acme/two", Workflow: model.UpstreamPush, Detail: "up to date", Elapsed: 3 * time.Second},
+	}
+	var buf bytes.Buffer
+	renderSync(&buf, quick, syncpkg.Options{})
+	if strings.Contains(buf.String(), "slowest") {
+		t.Errorf("a sweep with nothing slow in it should not name a slowest repo:\n%s", buf.String())
+	}
+
+	slow := append([]syncpkg.Result{}, quick...)
+	slow[1].Elapsed = 4 * time.Minute
+	buf.Reset()
+	renderSync(&buf, slow, syncpkg.Options{})
+	if !strings.Contains(buf.String(), "slowest: acme/two 4m0s") {
+		t.Errorf("want the slow repo named with its duration:\n%s", buf.String())
+	}
+
+	// One repo alone is the whole sweep; naming it says nothing you didn't watch.
+	buf.Reset()
+	renderSync(&buf, slow[1:], syncpkg.Options{})
+	if strings.Contains(buf.String(), "slowest") {
+		t.Errorf("a single-repo sweep should not name a slowest:\n%s", buf.String())
 	}
 }
 

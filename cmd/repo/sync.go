@@ -47,7 +47,9 @@ func cmdSync(_ context.Context, args []string) error {
 		return fmt.Errorf("no repos selected")
 	}
 
+	prog := newProgress(len(selected))
 	opts := syncpkg.Options{
+		Progress:    prog.update,
 		DryRun:      dryRun || dryRunN,
 		Verbose:     verbose || verboseV,
 		Force:       *force,
@@ -58,6 +60,7 @@ func cmdSync(_ context.Context, args []string) error {
 		StateDir:    filepath.Join(outDir(), "last-sync"),
 	}
 	results := syncpkg.Run(reg, selected, opts)
+	prog.stopAndClear()
 	renderSync(os.Stdout, results, opts)
 	for _, r := range results {
 		if r.Err != nil {
@@ -150,7 +153,7 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	if opts.Verbose {
 		for _, r := range results {
 			fmt.Fprintf(w, "  %s %s %s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
-				color(ansiGray, "("+r.Workflow+")"))
+				color(ansiGray, "("+r.Workflow+", "+r.Elapsed.Round(time.Millisecond).String()+")"))
 			for _, a := range r.Actions {
 				fmt.Fprintf(w, "    · %s\n", a)
 			}
@@ -184,6 +187,35 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	fmt.Fprintf(w, "\n%d updated · %d up to date · %d need attention · %d review pending · %d deferred · %d failed%s\n",
 		counts[syncpkg.Updated], counts[syncpkg.UpToDate], counts[syncpkg.Attention],
 		counts[syncpkg.ReviewPending], counts[syncpkg.Deferred], counts[syncpkg.Failed], mode)
+
+	// A sweep's cost is rarely evenly spread, and the repo that ate it leaves no
+	// trace in a report organised by outcome — it may well be a ✓. Name it when
+	// it was slow enough to have been the thing you were waiting on.
+	if slow := slowest(results); slow != nil {
+		fmt.Fprintf(w, "slowest: %s %s\n", slow.Name, slow.Elapsed.Round(time.Second))
+	}
+}
+
+// slowestThreshold is where a repo stops being ordinary and starts being the
+// reason the sweep felt slow. Below it, naming one repo would imply a problem
+// that isn't there.
+const slowestThreshold = 30 * time.Second
+
+// slowest returns the repo worth naming for its duration, or nil when nothing
+// took long enough to be worth mentioning. Only meaningful with more than one
+// repo: on a single-repo sweep its duration is the sweep's, which the user just
+// watched.
+func slowest(results []syncpkg.Result) *syncpkg.Result {
+	if len(results) < 2 {
+		return nil
+	}
+	var worst *syncpkg.Result
+	for i := range results {
+		if results[i].Elapsed >= slowestThreshold && (worst == nil || results[i].Elapsed > worst.Elapsed) {
+			worst = &results[i]
+		}
+	}
+	return worst
 }
 
 func syncGlyph(o syncpkg.Outcome) string {
