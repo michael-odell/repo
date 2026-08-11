@@ -193,9 +193,14 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	if opts.DryRun {
 		mode = " (dry-run)"
 	}
-	fmt.Fprintf(w, "\n%d updated · %d up to date · %d need attention · %d review pending · %d deferred · %d failed%s\n",
-		counts[syncpkg.Updated], counts[syncpkg.UpToDate], counts[syncpkg.Attention],
-		counts[syncpkg.ReviewPending], counts[syncpkg.Deferred], counts[syncpkg.Failed], mode)
+	// Worst first, and the ⚠ bucket is "flagged" rather than "need attention":
+	// with failures on the board, "1 need attention" beside "21 failed" claims
+	// the failures don't — and buried at the end, the number that matters was
+	// the last thing read. Each word here names one glyph's rows and nothing
+	// wider.
+	fmt.Fprintf(w, "\n%d failed · %d flagged · %d review pending · %d deferred · %d updated · %d up to date%s\n",
+		counts[syncpkg.Failed], counts[syncpkg.Attention], counts[syncpkg.ReviewPending],
+		counts[syncpkg.Deferred], counts[syncpkg.Updated], counts[syncpkg.UpToDate], mode)
 
 	// A sweep's cost is rarely evenly spread, and the repo that ate it leaves no
 	// trace in a report organised by outcome — it may well be a ✓. Name it when

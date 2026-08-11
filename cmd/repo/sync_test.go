@@ -82,6 +82,31 @@ func TestRenderSyncVerboseShowsWhyItFailed(t *testing.T) {
 	}
 }
 
+// TestRenderSyncTallyDoesNotUnderstateFailures: the ⚠ bucket used to be called
+// "need attention", which beside a count of failures reads as a claim that the
+// failures don't need any — and it sat last, after the good news.
+func TestRenderSyncTallyDoesNotUnderstateFailures(t *testing.T) {
+	results := []syncpkg.Result{
+		{Name: "acme/one", Outcome: syncpkg.Failed, Detail: "fetch failed"},
+		{Name: "acme/two", Outcome: syncpkg.Failed, Detail: "fetch failed"},
+		{Name: "acme/three", Outcome: syncpkg.Attention, Detail: "1 branch needs attention"},
+		{Name: "acme/four", Outcome: syncpkg.UpToDate, Detail: "up to date"},
+	}
+	var buf bytes.Buffer
+	renderSync(&buf, results, syncpkg.Options{})
+	tally := lineWith(t, strings.Split(buf.String(), "\n"), "failed ·")
+
+	if strings.Contains(tally, "need attention") {
+		t.Errorf("tally = %q, should not label one bucket as the set needing attention", tally)
+	}
+	if !strings.Contains(tally, "2 failed") || !strings.Contains(tally, "1 flagged") {
+		t.Errorf("tally = %q, want 2 failed and 1 flagged", tally)
+	}
+	if strings.Index(tally, "failed") > strings.Index(tally, "up to date") {
+		t.Errorf("tally = %q, want the failures before the good news", tally)
+	}
+}
+
 // TestRenderSyncNamesTheSlowestRepo: a report organised by outcome says nothing
 // about where the time went, and the repo that ate the sweep is often a ✓ — so
 // it has to be named separately or not at all. Only when it was slow enough to
