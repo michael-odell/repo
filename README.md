@@ -120,8 +120,12 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `workflow`   | `upstream-push` \| `fork-pr` \| `supply-chain-mirror` \| `vendor` | remote contract (below) |
 | `push`       | `auto` \| `manual` \| `never`                   | important branch's ahead-only commits: push automatically, leave for you, or flag as unexpected — default varies per workflow (§3.6) |
 | `task_branches` | `auto` \| `report` \| `pull-only`             | every other local branch: push automatically, defer to PR time, or keep it passively pulled and flag only local commits — default varies per workflow (§3.6) |
+| `show_branches` | `none` \| `notable` \| `unmerged` \| `all`    | how much of the branch inventory `sync` lists (below) — default varies per workflow (§5.6) |
 | `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
+| `expected_untracked` | list of path globs                      | untracked files that are expected rather than notable — suppresses the report, never the data-safety rules (§3.6) |
+| `expected_uncommitted` | list of path globs                    | as above, for tracked files with local modifications (§3.6) |
+| `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 1000 (§5.3) |
 | `prune`      | `auto` \| `report` \| `manual`                  | stale local-branch handling |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
@@ -166,6 +170,41 @@ else `hosts[id.host].base + owner/repo`. See DESIGN §3.7 for keeping private re
 of public dotfiles (private fragments contribute hosts, roots, and defaults; a private
 machine's repos can be purely discovered so no private name is written down anywhere).
 
+### What `sync` reports about branches
+
+`show_branches` decides how much of a repo's branch inventory is enumerated
+under its row. Findings (something happened, or needs to) always show; this
+controls the *observations* around them:
+
+| value | lists |
+|-------|-------|
+| `none` | nothing — the repo row is the whole report |
+| `notable` | branches with a finding this run |
+| `unmerged` | …plus task branches holding work the important branch lacks |
+| `all` | …plus every remaining branch, important ones included, each with the verdict `prune` would act on |
+
+`all` is the one to reach for when you want dispositions — including which
+branches have landed and could go:
+
+```
+  ⚠    acme/proj                upstream-push  1 branch needs attention
+    ⚠    PRECXP-91-spike                       never pushed
+    ◦    PRECXP-74-dev-cluster                 1 ahead of main
+    ◦    refactor-auth                         merged (squashed) — prunable
+    ◦    tidy-logging                          merged — prunable
+    ◦    main                                  up to date
+```
+
+`merged (squashed)` is the point of the tiered detection (§5.3): `git branch
+--merged` only answers the ancestry question, so a squash- or rebase-merged
+branch looks like unfinished work forever. These verdicts are the same call
+`repo prune` acts on, not a lookalike that might disagree — so the decision can
+be watched during ordinary sweeps.
+
+Note this is *not* `task_branches`, which decides what `sync` **does** with
+those branches (push them, leave them, keep them pulled). `show_branches`
+decides what it **tells you**.
+
 ### Environment variables
 
 | variable             | purpose                                       | default             |
@@ -173,9 +212,12 @@ machine's repos can be purely discovered so no private name is written down anyw
 | `REPO_REGISTRY_PATH` | registry fragment files/dirs to merge         | `~/.config/repo`    |
 | `REPO_ROOTS`         | override directories to scan for repos        | the `[root.*]` dirs |
 | `REPO_OUT`           | where generated shell artifacts are written   | `~/.local/repo`     |
+| `REPO_GIT_TIMEOUT`   | deadline for local git invocations            | `2m`                |
+| `REPO_GIT_NETWORK_TIMEOUT` | deadline for git invocations that reach a remote | `10m`     |
+| `REPO_MERGE_SCAN_LIMIT` | default `merge_scan_limit` for repos config doesn't set one on | `1000` |
 
 `REPO_REGISTRY_PATH` and `REPO_ROOTS` are colon-separated path-style lists;
-`REPO_OUT` is a single directory.
+`REPO_OUT` is a single directory. The timeouts take Go durations (`90s`, `5m`).
 
 ## Commands
 
@@ -186,7 +228,9 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   id, effective (inherited) workflow, and root
 - `sync` — reconcile repos toward the registry; `--fix` migrates a container to its
   configured layout (single ↔ worktree, data-safe) after history is pushed. Takes
-  positional root/path/name selectors.
+  positional root/path/name selectors. While it runs, a status line on stderr
+  shows progress and the longest-running repo; `--verbose` explains the decision
+  for every repo and gives each one's duration.
 - `apply` — regenerate the shell navigation/completion artifacts into `$REPO_OUT`
   from the declared ∪ discovered union
 - `list` — enumerate the declared ∪ discovered union (for completion)
