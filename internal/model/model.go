@@ -40,6 +40,13 @@ type Repo struct {
 	Layout       string // LayoutFlat | LayoutOwner
 	Worktrees    bool
 	Branches     []string
+
+	// BranchesStated distinguishes a `branches` value that config states about
+	// this repo or a root it sits under from one that merely fell out of
+	// [defaults] or the builtin. Both land in Branches; only the former outranks
+	// what the clone itself says its default branch is (see resolveBranches).
+	BranchesStated bool
+
 	Push         string   // "auto" | "manual" | "never" (DESIGN §3.6)
 	TaskBranches string   // "auto" | "report" | "pull-only" (DESIGN §3.6)
 	ShowBranches string   // "none" | "notable" | "unmerged" | "all" (DESIGN §5.6)

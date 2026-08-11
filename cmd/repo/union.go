@@ -47,28 +47,65 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 		}
 		repos = append(repos, discoveredRepo(reg, f))
 	}
+	for i := range repos {
+		resolveBranches(&repos[i])
+	}
 	return repos, nil
 }
 
+// resolveBranches settles which branches sync treats as important, by the same
+// rule for a declared repo and a discovered one: what separates the two is what
+// config says about them, not how they are read. In precedence order —
+//
+//  1. `branches` stated for the repo or a root it sits under wins outright:
+//     config overrides inference (DESIGN §3.2), and a fork/mirror whose
+//     important branches aren't its origin's default needs to be able to say so.
+//  2. else the clone's own answer — origin's HEAD symref, then a known mainline
+//     name (main/master/develop) among its local branches — never whatever is
+//     checked out, which a task branch left in place would otherwise win.
+//  3. else the [defaults]/builtin value, which gets a say only when there is no
+//     clone to ask. That is the one case it is good for: a repo sync is about to
+//     provision has no HEAD to read yet.
+//  4. else nothing, and sync says it can't tell rather than asserting a branch
+//     that may not exist — the trap being a blanket `branches = ["main"]`
+//     reporting "main missing on origin" against a repo whose trunk is master.
+func resolveBranches(r *model.Repo) {
+	if r.BranchesStated {
+		return
+	}
+	dir := r.Container()
+	if !gitx.IsRepo(dir) {
+		return // nothing cloned to ask: keep the assumption, it's all there is
+	}
+	if b, ok := gitx.DefaultBranch(dir, "origin"); ok {
+		r.Branches = []string{b}
+		return
+	}
+	if b := mainlineBranch(dir); b != "" {
+		r.Branches = []string{b}
+		return
+	}
+	r.Branches = nil
+}
+
 // discoveredRepo synthesizes the merged model for a repo found on disk. Its
-// container and origin come from disk (not the registry), and its lone important
-// branch is inferred the same way a declared repo's default would be: origin's
-// actual default branch (its HEAD symref) first, else a known mainline name
-// (main/master/develop) among its local branches — never whatever happens to be
-// checked out, which is what a task branch left checked out would otherwise get
-// mistaken for. When neither signal resolves, Branches is left empty rather than
-// guessed; sync flags that repo for an explicit `branches` override instead of
-// silently treating some arbitrary branch as important. Everything else is
+// container and origin come from disk (not the registry) and everything else is
 // inherited from the root it sits under (DESIGN §3.2: config overrides remote
 // inference), falling back to what disk/remotes report where config is silent.
+// Its important branches are left to resolveBranches, which treats it no
+// differently from a declared repo: a root that states `branches` governs the
+// repos discovered under it too, and otherwise the clone answers for itself.
 func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 	inh := reg.InheritedFor(f.Roots)
 	workflow := strOrDefault(inh.Workflow, f.Workflow) // config wins over inference
 	pushDefault, taskDefault, showDefault := config.WorkflowDefaults(workflow)
+	stated := reg.StatedBranches(f.Roots, config.Settings{})
 	r := model.Repo{
 		ID:                  f.ID,
 		Roots:               f.Roots,
 		Dir:                 f.Dir,
+		Branches:            stated,
+		BranchesStated:      stated != nil,
 		OriginURL:           f.Remotes["origin"],
 		Workflow:            workflow,
 		Layout:              strOrDefault(inh.Layout, model.LayoutFlat),
@@ -90,18 +127,13 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 			break
 		}
 	}
-	if b, ok := gitx.DefaultBranch(f.Dir, "origin"); ok {
-		r.Branches = []string{b}
-	} else if b := mainlineBranch(f.Dir); b != "" {
-		r.Branches = []string{b}
-	}
 	return r
 }
 
 // mainlineBranch returns whichever of a small set of conventional names
 // (checked in order of how common each is) exists as a local branch, or ""
-// when none do — the fallback signal for a discovered repo whose clone
-// predates `git clone` recording origin's HEAD symref (see DefaultBranch).
+// when none do — the fallback signal for a clone that predates `git clone`
+// recording origin's HEAD symref (see DefaultBranch).
 func mainlineBranch(dir string) string {
 	locals, err := gitx.LocalBranches(dir)
 	if err != nil {

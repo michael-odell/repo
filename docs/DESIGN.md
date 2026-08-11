@@ -100,6 +100,26 @@ of what the registry would state:
   Neither signal resolving is reported (`can't tell which branch is
   important`), not guessed — the repo needs an explicit `branches` override.
 
+The important-branch rule is not a discovery-only rule: it applies to declared
+repos too, because a clone can answer for itself whether or not config also
+mentions it. Declaring a repo — often done just to hang a comment or a hook on it
+— must not change which branch `sync` tracks. Precedence, therefore:
+
+1. `branches` stated by the repo's own entry or by a root it sits under — config
+   overriding inference, as everywhere else;
+2. else the clone's answer (`origin`'s `HEAD`, then a mainline name);
+3. else `[defaults] branches`, or the builtin `["main"]` — which get a say only
+   when there is *no* clone to read, i.e. a repo about to be provisioned;
+4. else nothing, reported as above.
+
+`[defaults]` ranking *below* the clone is the one departure from plain
+innermost-wins inheritance, and is deliberate: a default is a blanket assumption
+about every repo anywhere, including ones it has never seen, while `origin`'s
+`HEAD` is a fact about the repo in front of you. The failure it prevents is a
+`[defaults] branches = ["main"]` reporting `main missing on origin` against a
+repo whose trunk is `master` — a finding about the config, dressed up as a
+finding about the repo.
+
 So ordinary cloning stays toil-free: `git clone` (or `repo clone <url>`, a thin
 convenience that places it per root/owner defaults) and never edit config. `sync` /
 `status` / `list` operate over the union, so the operational list is complete

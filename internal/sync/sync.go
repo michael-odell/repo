@@ -147,12 +147,13 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) Result {
 	res := &Result{Name: repoName(r)}
 	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
 
-	// A discovered repo whose important branch couldn't be confidently inferred
-	// (no origin default-branch symref, no known mainline name — see
-	// discoveredRepo) is flagged rather than guessed from whatever's checked
-	// out: silently treating an arbitrary branch as important would get its
-	// task-branch findings (and push policy) wrong.
-	if r.Dir != "" && x.branch == "" {
+	// A repo whose important branch couldn't be settled — config states none and
+	// the clone answers neither with an origin default-branch symref nor a known
+	// mainline name (see resolveBranches) — is flagged rather than guessed from
+	// whatever's checked out: silently treating an arbitrary branch as important
+	// would get its task-branch findings (and push policy) wrong. Declared or
+	// discovered makes no difference; only whether anything actually knows does.
+	if x.branch == "" {
 		res.Outcome, res.Detail = Attention, "can't tell which branch is important — add `branches = [...]`"
 		x.add("no origin default branch and no known mainline name (main/master/develop) among local branches")
 		return *res
@@ -979,14 +980,15 @@ func (x *run) writeTimestamp() {
 
 // --- misc ------------------------------------------------------------------
 
+// branch0 is the repo's primary important branch, or "" when nothing settled
+// one. There is no fallback here: resolveBranches already applied every tier
+// config and the clone can offer, so an empty list means the question is
+// genuinely open, and syncRepo flags it rather than guessing "main".
 func branch0(r model.Repo) string {
 	if len(r.Branches) > 0 {
 		return r.Branches[0]
 	}
-	if r.Dir != "" {
-		return "" // discovered repo: no confident important-branch signal (see discoveredRepo) — flagged by syncRepo, never guessed
-	}
-	return "main"
+	return ""
 }
 
 // repoName is owner/repo — definitive regardless of how many repos elsewhere

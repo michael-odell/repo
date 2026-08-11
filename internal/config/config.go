@@ -323,6 +323,22 @@ type Inherited struct {
 	Hooks               []model.Hook
 }
 
+// StatedBranches returns `branches` as stated about a particular repo — by the
+// repo's own entry (pass its Settings; the zero value for a discovered repo,
+// which has none) or by a root it sits under — and nil when neither says
+// anything. [defaults] is deliberately not consulted: a value there is a blanket
+// assumption about every repo anywhere, including ones whose clone can answer
+// the question itself, so it ranks below the clone rather than above it (see
+// resolveBranches). Every other setting keeps the plain innermost-wins chain;
+// branches is the one with a per-repo fact to compete with.
+func (reg *Registry) StatedBranches(chain []string, entry Settings) []string {
+	var s Settings
+	for _, n := range chain {
+		s = overlay(s, reg.roots[n].Settings)
+	}
+	return overlay(s, entry).Branches
+}
+
 // InheritedFor overlays [defaults] with each root in the chain and returns the
 // result for a discovered repo.
 func (reg *Registry) InheritedFor(chain []string) Inherited {
@@ -385,6 +401,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		Layout:              strOr(s.Layout, builtinDefaults.Layout),
 		Worktrees:           boolOr(s.Worktrees, builtinDefaults.Worktrees),
 		Branches:            sliceOr(s.Branches, builtinDefaults.Branches),
+		BranchesStated:      reg.StatedBranches(chain, m.entry.Settings) != nil,
 		Push:                strOr(s.Push, pushDefault),
 		TaskBranches:        strOr(s.TaskBranches, taskDefault),
 		ShowBranches:        strOr(s.ShowBranches, showDefault),
