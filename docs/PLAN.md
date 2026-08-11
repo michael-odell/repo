@@ -84,6 +84,11 @@ bare+worktree provisioning; `fork-pr` push (+ `gh repo sync` when present); `ven
 pins; `repo prune` confirmation UX; `repo home`/`path`. Then `wd-repos-update` ->
 `repo sync --tag work`.
 **Proof:** work repos managed as owner-nested worktrees; the PRJPATH script retired.
+**Tags:** whatever `prune` grows here, tags are not branches — no merge question to
+answer, no reflog to recover from, and pruning is scoped to the fetch refspec so a
+narrowed `tags` makes it partial. Read DESIGN §5.3 (the tag constraints under prune)
+before adding `--prune-tags` or any tag sweep; the short version is that it must be
+an explicit glob list defaulting to nothing, never an inference.
 
 ### Stage 6 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`

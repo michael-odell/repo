@@ -817,6 +817,41 @@ branches deleted upstream that no tier can confirm landed. Both wait until the
 classification has been watched being right on real repos, which is what putting
 it in the sweep is for.
 
+**Tags are the ref class prune does not touch — and the one that grows fastest.**
+`fetch --prune` prunes remote-tracking *branches*; tags survive it, and an
+upstream that tags every build adds a permanent local ref per build forever. So
+"my refs are out of hand" will eventually arrive as a tag problem, and prune is
+where someone will reach for it. Four things constrain what it may do there, and
+they are recorded now because they are the reason the answer isn't "add
+`--prune-tags`":
+
+- **The branch rails do not transfer.** Every deletion prune makes rests on a
+  question it can answer — *has this work landed* — resolved by the three tiers
+  above and checked a second, independent time by `git branch -d`. **There is no
+  such question for a tag.** A tag's meaning is entirely external: it is a name
+  something outside this repo may depend on, and nothing in the object graph
+  says whether anyone still does. So no tag may ever be pruned by inference.
+  Whatever tag pruning arrives must be driven by an explicit glob list, the way
+  `force_tags` is (§3.6), and must default to touching nothing.
+- **A deleted tag has no reflog.** `core.logAllRefUpdates` covers `refs/heads`,
+  `refs/remotes`, `refs/notes` and `HEAD` — not `refs/tags`. A pruned *branch*
+  is recoverable from `.git/logs/refs/heads/<name>` for the gc window; a pruned
+  tag leaves nothing behind. The asymmetry is why tag deletion cannot inherit
+  branch deletion's confidence, even under `--delete`.
+- **A tag is independent reachability, which the `-D` path relies on.** Where a
+  merge is visible only to the second or third tier, prune falls back to `-D`
+  and git's own ancestry check no longer stands behind the decision. A tag
+  pointing into that branch keeps its objects reachable regardless — a
+  mitigating fact worth reading before anyone proposes pruning both in one
+  sweep, since doing so removes the two holds on the same commits at once.
+- **Pruning is scoped to the refspec, so a narrowed `tags` makes it partial.**
+  `--prune-tags` only considers tags the fetch refspec covers: with `tags`
+  narrowed (§3.6), a tag outside the list is never examined and survives even
+  when upstream deleted it. That is the safe direction — nothing uncovered gets
+  destroyed — but it means tag pruning under a narrowed `tags` is silently
+  incomplete, and any report must say which set of tags it actually reasoned
+  about rather than implying it swept them all.
+
 `report` / `manual` modes exist for look-first repos. Whole-repo removal is
 **report-only**, never automatic. New important branch in registry → `sync` adds its
 worktree.
