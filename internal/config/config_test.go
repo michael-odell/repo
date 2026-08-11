@@ -314,6 +314,46 @@ id = "github:me/x"
 	}
 }
 
+// TestDuplicateDeclarationRejected locks in that a repo declared twice for one
+// container is a config error rather than a silently doubled row. The same id
+// under two roots is two clones in two places and stays legal.
+func TestDuplicateDeclarationRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.wd]
+dir    = "~/wd"
+layout = "owner"
+repos  = ["github:acme/thing"]
+
+[[root.wd.repo]]
+id = "github:acme/thing"
+
+[root.other]
+dir    = "~/other"
+layout = "owner"
+repos  = ["github:acme/thing"]
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil {
+		t.Fatal("want validation error for the doubled declaration, got nil")
+	}
+	for _, want := range []string{"wd/acme/thing", "declared 2 times", `github:acme/thing in root "wd"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q; got:\n%v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "other/acme/thing") {
+		t.Errorf("same id under a second root is a separate clone, not a collision; got:\n%v", err)
+	}
+}
+
 func writeTOML(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "f.toml"), []byte(body), 0o644); err != nil {

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -60,11 +61,42 @@ func (reg *Registry) Validate() error {
 		}
 	}
 
+	reg.checkCollisions(add)
+
 	if len(errs) == 0 {
 		return nil
 	}
 	sort.Strings(errs)
 	return fmt.Errorf("invalid registry:\n  - %s", strings.Join(errs, "\n  - "))
+}
+
+// checkCollisions reports declarations that resolve to the same container.
+// Two entries for one directory are always a mistake and never a pair of repos:
+// only one of them can own that clone, so the other's settings vanish silently,
+// while every command over the declared ∪ discovered union lists the repo twice
+// and sync does its work on it twice. The key is the container rather than the
+// identity because one id declared under two roots is two distinct clones in two
+// places, which stays legal.
+func (reg *Registry) checkCollisions(add func(string, ...any)) {
+	byDir := map[string][]string{}
+	var dirs []string
+	for _, m := range reg.members() {
+		r, err := reg.effective(m)
+		if err != nil {
+			continue // already reported, with its own parse error
+		}
+		dir := filepath.Clean(r.Container())
+		if len(byDir[dir]) == 0 {
+			dirs = append(dirs, dir)
+		}
+		byDir[dir] = append(byDir[dir], fmt.Sprintf("%s in root %q", r.ID, m.root))
+	}
+	for _, dir := range dirs {
+		if decls := byDir[dir]; len(decls) > 1 {
+			add("%s: declared %d times (%s) — one container holds one repo, so all but one declaration is ignored",
+				dir, len(decls), strings.Join(distinct(decls), ", "))
+		}
+	}
 }
 
 // settingsOf lifts the enum-bearing fields of a resolved repo back into a
@@ -137,6 +169,20 @@ func globsOfRepo(r model.Repo) globSettings {
 		ExpectedUntracked:   r.ExpectedUntracked,
 		ExpectedUncommitted: r.ExpectedUncommitted,
 	}
+}
+
+// distinct drops repeats while keeping order, so a repo declared twice under one
+// root names itself once in the message rather than echoing.
+func distinct(ss []string) []string {
+	seen := map[string]bool{}
+	out := ss[:0:0]
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func contains(ss []string, want string) bool {
