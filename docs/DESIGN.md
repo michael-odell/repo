@@ -92,8 +92,11 @@ of what the registry would state:
   §3.6). Config only *overrides* inference.
 - **important branch** ← `origin`'s actual default branch (its `HEAD` symref,
   the same thing `git clone` records locally — no network round trip needed),
-  else a known mainline name (`main`/`master`/`develop`) found among its local
-  branches. **Never** whatever happens to be checked out — a task branch left
+  else a *bare* container's own `HEAD` (`git clone --bare` records no
+  remote-tracking refs, and a bare repo has no checkout to have moved its HEAD;
+  its worktrees carry their own), else a known mainline name
+  (`main`/`master`/`develop`) found among its local branches. **Never** a
+  working tree's checkout — a task branch left
   checked out is not a proxy for which branch is important, and inferring it
   that way would silently swap the two: the real mainline reads as a task
   branch, and someone's WIP reads as the branch sync tracks and pushes.

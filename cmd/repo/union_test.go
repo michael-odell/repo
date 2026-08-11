@@ -178,6 +178,35 @@ branches = ["main", "next"]
 	}
 }
 
+// TestBareContainerAnswersWithItsHead: a bare+worktree container has no
+// remote-tracking refs for `git clone --bare` to have set, so its own HEAD —
+// which is the remote's default branch, and which no checkout can move, there
+// being no checkout — is the signal. Without it, a worktree repo whose trunk
+// isn't a conventional name resolves to nothing at all.
+func TestBareContainerAnswersWithItsHead(t *testing.T) {
+	wd := t.TempDir()
+	origin := filepath.Join(t.TempDir(), "proj.git")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, origin, "init", "-q", "-b", "trunk", ".")
+	git(t, origin, "commit", "-q", "--allow-empty", "-m", "one")
+
+	container := filepath.Join(wd, "proj")
+	if err := os.MkdirAll(container, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, container, "clone", "-q", "--bare", origin, ".bare")
+	if err := os.WriteFile(filepath.Join(container, ".git"), []byte("gitdir: ./.bare\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := resolved(t, testRegistry(t, wd), container)
+	if got := r.Branches; len(got) != 1 || got[0] != "trunk" {
+		t.Errorf("Branches = %v, want [trunk] (the bare container's HEAD)", got)
+	}
+}
+
 // TestUnclonedRepoKeepsTheDefault: with no clone to read, the [defaults]/builtin
 // value is the only answer available, and sync provisions against it.
 func TestUnclonedRepoKeepsTheDefault(t *testing.T) {

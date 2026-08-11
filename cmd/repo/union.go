@@ -60,9 +60,10 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 //  1. `branches` stated for the repo or a root it sits under wins outright:
 //     config overrides inference (DESIGN §3.2), and a fork/mirror whose
 //     important branches aren't its origin's default needs to be able to say so.
-//  2. else the clone's own answer — origin's HEAD symref, then a known mainline
-//     name (main/master/develop) among its local branches — never whatever is
-//     checked out, which a task branch left in place would otherwise win.
+//  2. else the clone's own answer — origin's HEAD symref, then a bare
+//     container's own HEAD, then a known mainline name (main/master/develop)
+//     among its local branches — never a working tree's checkout, which a task
+//     branch left in place would otherwise win.
 //  3. else the [defaults]/builtin value, which gets a say only when there is no
 //     clone to ask. That is the one case it is good for: a repo sync is about to
 //     provision has no HEAD to read yet.
@@ -80,6 +81,17 @@ func resolveBranches(r *model.Repo) {
 	if b, ok := gitx.DefaultBranch(dir, "origin"); ok {
 		r.Branches = []string{b}
 		return
+	}
+	// A bare container's HEAD is the one place HEAD is admissible evidence: a
+	// bare clone has no checkout, so its HEAD is what `git clone` recorded as the
+	// remote's default and nothing since has moved it (worktrees carry their
+	// own). `git clone --bare` also records no remote-tracking refs, so this is
+	// usually the only signal a worktree-layout repo has.
+	if gitx.ClassifyLayout(dir) == gitx.LayoutWorktree {
+		if b, err := gitx.CurrentBranch(dir); err == nil && b != "" {
+			r.Branches = []string{b}
+			return
+		}
 	}
 	if b := mainlineBranch(dir); b != "" {
 		r.Branches = []string{b}
