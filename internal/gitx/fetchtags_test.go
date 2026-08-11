@@ -3,6 +3,7 @@ package gitx
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -41,7 +42,7 @@ func TestFetchMovedTagIsTyped(t *testing.T) {
 	origin, clone := originWithClone(t, "independent.latest")
 	moveTag(t, origin, "independent.latest")
 
-	err := Fetch(clone, "origin")
+	err := Fetch(clone, "origin", TagPolicy{})
 	var moved *MovedTagsError
 	if !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want *MovedTagsError", err)
@@ -64,7 +65,7 @@ func TestFetchMovedTagStillUpdatesBranches(t *testing.T) {
 	moveTag(t, origin, "independent.latest")
 
 	var moved *MovedTagsError
-	if err := Fetch(clone, "origin"); !errors.As(err, &moved) {
+	if err := Fetch(clone, "origin", TagPolicy{}); !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want *MovedTagsError", err)
 	}
 	after, ok := RevParse(clone, "refs/remotes/origin/main")
@@ -85,7 +86,7 @@ func TestFetchRealFailureStaysFatal(t *testing.T) {
 	_, clone := originWithClone(t, "v1")
 	git(t, clone, "remote", "set-url", "origin", t.TempDir()+"/nope")
 
-	err := Fetch(clone, "origin")
+	err := Fetch(clone, "origin", TagPolicy{})
 	if err == nil {
 		t.Fatal("Fetch on a missing remote = nil; want an error")
 	}
@@ -106,7 +107,7 @@ func TestFetchCleanIsNil(t *testing.T) {
 	git(t, origin, "commit", "-q", "-am", "two")
 	git(t, origin, "tag", "v2") // a *new* tag is never a clobber
 
-	if err := Fetch(clone, "origin"); err != nil {
+	if err := Fetch(clone, "origin", TagPolicy{}); err != nil {
 		t.Fatalf("Fetch = %v; want nil", err)
 	}
 	if _, ok := RevParse(clone, "refs/tags/v2"); !ok {
@@ -125,5 +126,91 @@ func TestRejectedTagsRefusesBranches(t *testing.T) {
 	}
 	if tags, only := rejectedTags("! 1 2 refs/tags/a\n* 0 3 refs/tags/b\n"); !only || len(tags) != 1 || tags[0] != "a" {
 		t.Errorf("rejectedTags = %v, %v; want [a], true", tags, only)
+	}
+}
+
+// TestFetchArgsShapes pins the refspecs each policy produces, since the whole
+// feature is which refs are asked for and which carry the "+" that lets git
+// overwrite them.
+func TestFetchArgsShapes(t *testing.T) {
+	// Any explicit tag refspec replaces the remote's configured one, so the
+	// branch refspec has to come along or branches stop being fetched at all.
+	const heads = "+refs/heads/*:refs/remotes/origin/*"
+	for _, c := range []struct {
+		name   string
+		policy TagPolicy
+		want   string
+	}{
+		{"default fetches every tag and leaves the configured refspec alone",
+			TagPolicy{}, "--tags"},
+		{`explicit ["*"] is the same as the default`,
+			TagPolicy{Fetch: []string{"*"}}, "--tags"},
+		{"empty list fetches no tags at all",
+			TagPolicy{Fetch: []string{}}, heads + " --no-tags"},
+		{"a forced pattern rides alongside the full scope",
+			TagPolicy{Force: []string{"*.latest"}},
+			heads + " --tags +refs/tags/*.latest:refs/tags/*.latest"},
+		{"a narrowed scope suppresses auto-following",
+			TagPolicy{Fetch: []string{"v*"}},
+			heads + " --no-tags refs/tags/v*:refs/tags/v*"},
+		{"scope and force compose",
+			TagPolicy{Fetch: []string{"v*"}, Force: []string{"v*-rc"}},
+			heads + " --no-tags refs/tags/v*:refs/tags/v* +refs/tags/v*-rc:refs/tags/v*-rc"},
+		{"no tags fetched means nothing to force",
+			TagPolicy{Fetch: []string{}, Force: []string{"*"}}, heads + " --no-tags"},
+	} {
+		if got := strings.Join(c.policy.fetchArgs("origin"), " "); got != c.want {
+			t.Errorf("%s:\n got %q\nwant %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestForceTagsFollowsOnlyWhatItNames is the end-to-end claim the config makes:
+// a blessed tag is overwritten in place while an unlisted one is still refused,
+// in the same fetch.
+func TestForceTagsFollowsOnlyWhatItNames(t *testing.T) {
+	origin, clone := originWithClone(t, "independent.latest")
+	git(t, origin, "tag", "v1.0")
+	git(t, clone, "fetch", "-q", "--tags", "origin")
+	moveTag(t, origin, "independent.latest")
+	git(t, origin, "tag", "-f", "v1.0") // both tags move
+
+	policy := TagPolicy{Force: []string{"*.latest"}}
+	err := Fetch(clone, "origin", policy)
+
+	// v1.0 was not blessed, so the fetch still reports it as refused.
+	var moved *MovedTagsError
+	if !errors.As(err, &moved) {
+		t.Fatalf("Fetch = %v; want v1.0 still refused", err)
+	}
+	if len(moved.Tags) != 1 || moved.Tags[0] != "v1.0" {
+		t.Errorf("refused = %v, want [v1.0] only", moved.Tags)
+	}
+	// …while the blessed one was followed.
+	head, _ := RevParse(clone, "refs/remotes/origin/main")
+	blessed, _ := RevParse(clone, "refs/tags/independent.latest")
+	if blessed != head {
+		t.Errorf("independent.latest = %s, want %s — force_tags should have followed it", blessed, head)
+	}
+	if unblessed, _ := RevParse(clone, "refs/tags/v1.0"); unblessed == head {
+		t.Error("v1.0 moved; only the tags force_tags names may be overwritten")
+	}
+}
+
+// TestNarrowedTagsExcludesTheRest: `tags` is a real scope, which needs
+// --no-tags — otherwise git auto-follows any tag reachable from the branches it
+// fetched and the list quietly isn't a list.
+func TestNarrowedTagsExcludesTheRest(t *testing.T) {
+	origin, clone := originWithClone(t, "v1.0")
+	git(t, origin, "tag", "build.deadbeef") // reachable from main, so auto-follow would take it
+
+	if err := Fetch(clone, "origin", TagPolicy{Fetch: []string{"v*"}}); err != nil {
+		t.Fatalf("Fetch = %v", err)
+	}
+	if _, ok := RevParse(clone, "refs/tags/build.deadbeef"); ok {
+		t.Error("build.deadbeef arrived despite tags = [\"v*\"]")
+	}
+	if _, ok := RevParse(clone, "refs/tags/v1.0"); !ok {
+		t.Error("v1.0 did not arrive despite matching tags")
 	}
 }

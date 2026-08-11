@@ -53,6 +53,15 @@ type Repo struct {
 	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
 	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
 
+	// Tags is which tags to fetch at all, and ForceTags which of those may be
+	// overwritten when upstream moves one (DESIGN §3.6/§5.2). They are separate
+	// because scope and permission-to-destroy are separate questions: narrowing
+	// what arrives is a bandwidth and ref-count decision, while following a
+	// moved tag discards the object that tag used to name, with no reflog to
+	// get it back. Empty Tags means fetch no tags; nil means the builtin ["*"].
+	Tags      []string
+	ForceTags []string
+
 	// Path globs for local residue that is expected rather than notable: files
 	// something regenerates, that you have no intention of committing (DESIGN
 	// §3.6). They suppress the report, never the data-safety rules.

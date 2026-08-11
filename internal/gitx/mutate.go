@@ -113,11 +113,78 @@ func (e *MovedTagsError) Error() string {
 		e.Remote, len(e.Tags), strings.Join(e.Tags, ", "))
 }
 
-// Fetch fetches a remote with prune and tags. A fetch that fails only because
-// the remote moved tags the clone already has returns *MovedTagsError; every
-// other failure returns git's error unchanged.
-func Fetch(dir, remote string) error {
-	out, code, err := runCmdCode(dir, nil, "fetch", "--porcelain", "--prune", "--tags", remote)
+// TagPolicy is which tags a fetch should ask for and which of those it may
+// overwrite (DESIGN §3.6). The zero value fetches every tag and overwrites
+// none, which is what every caller outside sync wants.
+type TagPolicy struct {
+	Fetch []string // glob patterns; nil means every tag, empty means none
+	Force []string // glob patterns; those the fetch may overwrite in place
+}
+
+// fetchArgs turns a policy into git's arguments for fetching from remote. The
+// whole feature is which refspecs are asked for and which carry a leading "+",
+// because that plus is exactly git's "you may overwrite this ref":
+//
+//	--tags                                     every tag, none overwritable
+//	--no-tags +refs/tags/v*:refs/tags/v*       only v*, and v* may be overwritten
+//
+// A forced pattern is listed *in addition to* the unforced scope rather than
+// instead of it: git applies the more specific forced refspec to the tags it
+// names and the plain one to the rest, so one invocation both follows the
+// blessed tags and keeps refusing every other. --no-tags is what makes a
+// narrowed scope real — without it git auto-follows any tag reachable from the
+// branches it fetched, and the list would quietly not be a list.
+//
+// The branch refspec is restated here whenever any tag refspec is passed,
+// because **naming a refspec on the command line replaces the remote's
+// configured one entirely** rather than adding to it. Without this, asking to
+// follow one tag would silently stop fetching branches altogether — the repo
+// would keep syncing, report no error, and quietly never see upstream again.
+// It matches what EnsureRemote writes into remote.<name>.fetch, so the explicit
+// and configured forms stay the same fetch.
+func (p TagPolicy) fetchArgs(remote string) []string {
+	all := p.Fetch == nil || matchesGlob(p.Fetch, "*")
+	if all && len(p.Force) == 0 {
+		return []string{"--tags"} // configured refspec untouched: no need to restate it
+	}
+
+	args := []string{"+refs/heads/*:refs/remotes/" + remote + "/*"}
+	if all {
+		args = append(args, "--tags")
+	} else {
+		args = append(args, "--no-tags")
+		for _, g := range p.Fetch {
+			args = append(args, "refs/tags/"+g+":refs/tags/"+g)
+		}
+	}
+	// A forced pattern outside the fetched scope is not an error: it simply
+	// names nothing, the same way force_pull may name a branch that doesn't
+	// exist. Skipping them all when no tags are fetched keeps git from being
+	// handed a refspec that contradicts --no-tags.
+	if len(p.Fetch) != 0 || all {
+		for _, g := range p.Force {
+			args = append(args, "+refs/tags/"+g+":refs/tags/"+g)
+		}
+	}
+	return args
+}
+
+func matchesGlob(patterns []string, want string) bool {
+	for _, p := range patterns {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// Fetch fetches a remote with prune, and with tags per policy. A fetch that
+// fails only because the remote moved tags the clone already has — and that the
+// policy did not bless — returns *MovedTagsError; every other failure returns
+// git's error unchanged.
+func Fetch(dir, remote string, policy TagPolicy) error {
+	args := append([]string{"fetch", "--porcelain", "--prune", remote}, policy.fetchArgs(remote)...)
+	out, code, err := runCmdCode(dir, nil, args...)
 	if err == nil {
 		return nil
 	}

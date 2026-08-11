@@ -431,13 +431,18 @@ func (x *run) provisionWorktree() bool {
 		return false
 	}
 	if upstream != "" {
-		_ = gitx.Fetch(x.container, "upstream")
+		_ = gitx.Fetch(x.container, "upstream", x.tagPolicy())
 	}
 	x.res.Cloned = true
 	// Before syncWorktree adds a worktree per important branch — adding one for
 	// an assumed branch would materialize it, not just misreport it.
 	x.adoptClonedBranch()
 	return true
+}
+
+// tagPolicy is the repo's tag settings in the form gitx.Fetch wants.
+func (x *run) tagPolicy() gitx.TagPolicy {
+	return gitx.TagPolicy{Fetch: x.r.Tags, Force: x.r.ForceTags}
 }
 
 // fetchRemote fetches one remote and reports whether the run may continue.
@@ -452,7 +457,7 @@ func (x *run) provisionWorktree() bool {
 // moved tags are reported and the run goes on — the same shape as an unmatched
 // branch rewrite, which stops the branch and not the repo (DESIGN §5.2).
 func (x *run) fetchRemote(remote string) bool {
-	err := gitx.Fetch(x.container, remote)
+	err := gitx.Fetch(x.container, remote, x.tagPolicy())
 	if err == nil {
 		x.add("fetched %s", remote)
 		return true
@@ -500,7 +505,7 @@ func (x *run) fetchWorktreeRemotes() bool {
 		if changed, _ := gitx.EnsureRemote(x.container, "upstream", upstream); changed {
 			x.add("set upstream = %s", upstream)
 		}
-		if err := gitx.Fetch(x.container, "upstream"); err == nil {
+		if err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
 			x.add("fetched upstream")
 		}
 	}
@@ -610,7 +615,7 @@ func (x *run) provision() bool {
 			return false
 		}
 		if x.r.Fork != nil {
-			if err := gitx.Fetch(x.container, "upstream"); err == nil {
+			if err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
 				x.add("fetched upstream")
 			}
 		}

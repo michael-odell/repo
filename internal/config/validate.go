@@ -58,6 +58,7 @@ func (reg *Registry) Validate() error {
 		for _, r := range repos {
 			checkEnums(add, r.ID.String(), settingsOf(r))
 			checkGlobs(add, r.ID.String(), globsOfRepo(r))
+			checkPinReachesItsTag(add, r)
 			if _, err := reg.Physical(r); err != nil {
 				add("%v", err)
 			}
@@ -156,6 +157,54 @@ func checkGlobs(add func(string, ...any), where string, s globSettings) {
 	check("force_pull", s.ForcePull)
 	check("expected_untracked", s.ExpectedUntracked)
 	check("expected_uncommitted", s.ExpectedUncommitted)
+	checkRefspecGlobs(add, where, "tags", s.Tags)
+	checkRefspecGlobs(add, where, "force_tags", s.ForceTags)
+}
+
+// checkRefspecGlobs holds the tag lists to the narrower dialect git accepts.
+// Every other glob in the registry is matched here by path.Match, but these two
+// are handed to git as refspecs (`+refs/tags/<p>:refs/tags/<p>`), where the
+// rules differ: git allows at most one "*", and treats "?" and "[...]" as
+// ordinary characters rather than wildcards. A pattern that means one thing to
+// path.Match and another to git would silently fetch — or overwrite — a
+// different set of tags than it reads like, so the overlap is enforced rather
+// than documented.
+func checkRefspecGlobs(add func(string, ...any), where, field string, patterns []string) {
+	for _, p := range patterns {
+		switch {
+		case p == "":
+			add("%s: %s: empty pattern", where, field)
+		case strings.Count(p, "*") > 1:
+			add("%s: %s: %q: git refspecs allow at most one \"*\"", where, field, p)
+		case strings.ContainsAny(p, "?["):
+			add("%s: %s: %q: git refspecs have no %q or %q wildcard — only \"*\"",
+				where, field, p, "?", "[...]")
+		}
+	}
+}
+
+// checkPinReachesItsTag catches the one combination that would otherwise be
+// silently wrong rather than loudly broken. `pin = "latest-tag"` re-resolves the
+// highest semver among the tags that are *local* (DESIGN §5.1), so narrowing
+// `tags` changes which version the repo pins to — with no error, and a
+// plausible-looking answer. A literal pin excluded by `tags` fails visibly
+// instead ("tag X missing"), so only latest-tag needs the guard.
+func checkPinReachesItsTag(add func(string, ...any), r model.Repo) {
+	if r.Pin != "latest-tag" || len(r.Tags) == 0 {
+		if r.Pin == "latest-tag" && len(r.Tags) == 0 {
+			add("%s: pin = \"latest-tag\" but tags = [] — there would be no tags to pin to",
+				r.ID)
+		}
+		return
+	}
+	for _, p := range r.Tags {
+		if p == "*" {
+			return
+		}
+	}
+	add("%s: pin = \"latest-tag\" with tags = %v: the pin resolves against whichever "+
+		"tags were fetched, so a narrowed list silently changes which version is pinned "+
+		"(use tags = [\"*\"], or pin the tag by name)", r.ID, r.Tags)
 }
 
 // globSettings is the set of glob-bearing fields checkGlobs validates, so adding
@@ -164,6 +213,8 @@ func checkGlobs(add func(string, ...any), where string, s globSettings) {
 type globSettings struct {
 	ForcePush           []string
 	ForcePull           []string
+	Tags                []string
+	ForceTags           []string
 	ExpectedUntracked   []string
 	ExpectedUncommitted []string
 }
@@ -172,6 +223,8 @@ func globsOfSettings(s Settings) globSettings {
 	return globSettings{
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		Tags:                s.Tags,
+		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
 		ExpectedUncommitted: s.ExpectedUncommitted,
 	}
@@ -181,6 +234,8 @@ func globsOfRepo(r model.Repo) globSettings {
 	return globSettings{
 		ForcePush:           r.ForcePush,
 		ForcePull:           r.ForcePull,
+		Tags:                r.Tags,
+		ForceTags:           r.ForceTags,
 		ExpectedUntracked:   r.ExpectedUntracked,
 		ExpectedUncommitted: r.ExpectedUncommitted,
 	}

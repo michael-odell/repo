@@ -31,6 +31,11 @@ type Settings struct {
 	ShowBranches *string  `toml:"show_branches"`
 	ForcePush    []string `toml:"force_push"`
 	ForcePull    []string `toml:"force_pull"`
+	// Which tags to fetch, and which of those may be overwritten when upstream
+	// moves one (DESIGN §3.6). Separate lists because scope and
+	// permission-to-destroy are separate questions — see model.Repo.
+	Tags      []string `toml:"tags"`
+	ForceTags []string `toml:"force_tags"`
 	// Path globs naming local residue that is expected rather than notable
 	// (DESIGN §3.6). They change what sync calls to your attention; they never
 	// change what it protects.
@@ -100,6 +105,15 @@ var builtinDefaults = model.Repo{
 	Worktrees: false,
 	Branches:  []string{"main"},
 	Prune:     "auto",
+	// Every tag, and none of them forced. Tags are not narrowed by default
+	// because `repo` itself reads them in exactly one place — a vendor `pin`
+	// resolving through refs/tags — and everywhere else they exist for whoever
+	// uses the clone by hand (`git describe`, `checkout v1.2.3`); guessing a
+	// narrower set per workflow would be guessing about the *upstream*, not
+	// about how the repo is used. ForceTags stays empty for the same reason
+	// force_push/force_pull do (§3.6): no forced overwrite without an explicit
+	// opt-in, and a tag has no reflog to undo one.
+	Tags: []string{"*"},
 }
 
 // WorkflowDefaults returns the push/task_branches defaults for a workflow
@@ -320,6 +334,8 @@ type Inherited struct {
 	ShowBranches        string   // "" when unset by config → caller applies WorkflowDefaults
 	ForcePush           []string // nil when unset
 	ForcePull           []string // nil when unset
+	Tags                []string // nil when unset; empty means "fetch no tags"
+	ForceTags           []string // nil when unset
 	ExpectedUntracked   []string // nil when unset
 	ExpectedUncommitted []string // nil when unset
 	MergeScanLimit      *int     // nil when unset
@@ -362,6 +378,8 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		ShowBranches:        strOr(s.ShowBranches, ""),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		Tags:                s.Tags,
+		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
 		ExpectedUncommitted: s.ExpectedUncommitted,
 		MergeScanLimit:      s.MergeScanLimit,
@@ -415,6 +433,8 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		ShowBranches:        strOr(s.ShowBranches, showDefault),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		Tags:                sliceOr(s.Tags, builtinDefaults.Tags),
+		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
 		ExpectedUncommitted: s.ExpectedUncommitted,
 		MergeScanLimit:      s.MergeScanLimit,
@@ -529,6 +549,12 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.ForcePull != nil {
 		base.ForcePull = over.ForcePull
+	}
+	if over.Tags != nil {
+		base.Tags = over.Tags
+	}
+	if over.ForceTags != nil {
+		base.ForceTags = over.ForceTags
 	}
 	if over.ExpectedUntracked != nil {
 		base.ExpectedUntracked = over.ExpectedUntracked

@@ -324,6 +324,48 @@ Both default to empty, everywhere: no forced overwrite in either direction is ev
 attempted without an explicit, per-branch opt-in. Full mechanics, including the
 never-clobber-unpushed-work rail, are in §5.2.
 
+**`tags`** and **`force_tags`** are the same split applied to tags, and they are
+two settings rather than one because scope and permission-to-destroy are
+different questions. `tags` is which tags to fetch at all (default `["*"]`; `[]`
+fetches none) — a bandwidth and ref-count decision, for the upstream that tags
+every build. `force_tags` is which of those may be *overwritten* when upstream
+moves a tag it already published (default `[]`), which destroys the object that
+tag used to name.
+
+Neither default varies by workflow, unlike `push`/`task_branches`/`show_branches`.
+`repo` reads tags in exactly one place — a `vendor` `pin` resolving through
+`refs/tags` — and everywhere else they exist for whoever uses the clone by hand,
+so there is no workflow whose *use* implies a narrower set. And "this upstream
+rewrites tags" is a fact about the upstream, not about how you work with the
+repo: two `upstream-push` repos can differ on it completely, so no default could
+be right for both.
+
+The mechanism is entirely git's, and it is worth stating plainly because it
+explains why the un-configured case already behaves well: `--tags` asks for
+`refs/tags/*:refs/tags/*` with **no leading `+`**, and that missing plus is why
+git creates new tags but refuses to move existing ones. `force_tags` adds
+`+refs/tags/<glob>:refs/tags/<glob>` alongside, so one fetch follows the blessed
+tags and keeps refusing every other; a narrowed `tags` drops `--tags` for an
+explicit list plus `--no-tags`, without which git auto-follows any tag reachable
+from the branches it fetched and the list quietly isn't a list.
+
+Two consequences fall out of that mechanism rather than out of any choice here.
+Naming *any* refspec on the command line **replaces** the remote's configured
+one, so a fetch carrying tag refspecs must restate `+refs/heads/*:refs/remotes/<remote>/*`
+or it silently stops fetching branches — a failure that reports nothing and
+looks exactly like an upstream that went quiet. And because these become
+refspecs, tag globs use git's dialect, not `path.Match`: one `*` per pattern,
+`?` and `[...]` are literal. That is narrower than `force_push`/`force_pull`, so
+it is validated at load rather than left to surprise someone.
+
+`force_tags` is the more dangerous of the pair and does not inherit
+`force_pull`'s rails, which is deliberate but worth knowing: `force_pull` refuses
+to clobber a branch carrying local commits or a dirty tree, and a tag has
+neither — nothing is "ahead of" a tag. Worse, `refs/tags` has **no reflog**
+(`core.logAllRefUpdates` covers heads, remotes, notes, and HEAD), so a followed
+move cannot be undone locally. This is why every followed move reports the object
+id it moved *from*: that id is the entire recovery story.
+
 **`expected_untracked`** and **`expected_uncommitted`** are glob lists of *file
 paths* — not branch names — naming local residue that is expected rather than
 notable: files something outside the repo regenerates and that you have no

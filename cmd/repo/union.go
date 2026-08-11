@@ -109,6 +109,8 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 		ShowBranches:        strOrDefault(inh.ShowBranches, showDefault),
 		ForcePush:           inh.ForcePush,
 		ForcePull:           inh.ForcePull,
+		Tags:                sliceOrDefault(inh.Tags, builtinTags),
+		ForceTags:           inh.ForceTags,
 		ExpectedUntracked:   inh.ExpectedUntracked,
 		ExpectedUncommitted: inh.ExpectedUncommitted,
 		MergeScanLimit:      inh.MergeScanLimit,
@@ -145,3 +147,17 @@ func repoName(r model.Repo) string {
 }
 
 const builtinPrune = "auto"
+
+// builtinTags mirrors config's builtin for a *discovered* repo, which reaches
+// this path instead of effective(): fetch every tag, since nothing here knows
+// the upstream well enough to narrow it.
+var builtinTags = []string{"*"}
+
+// sliceOrDefault keeps an explicitly empty list — `tags = []` means "fetch no
+// tags", which is a decision, not an absence.
+func sliceOrDefault(s, def []string) []string {
+	if s != nil {
+		return s
+	}
+	return def
+}

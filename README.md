@@ -47,6 +47,9 @@ fork_owner = "github:michael-odell"   # forks derive here unless overridden
 # workflow (§3.6) — override here or per-root/repo when a default doesn't fit.
 # force_push/force_pull (branch-name globs, e.g. ["wip/*"]) default to [] —
 # never force in either direction unless a branch is explicitly listed (§5.2).
+# tags defaults to ["*"]; force_tags to [] — an upstream that rewrites a tag is
+# reported and not followed until you name the tag (§5.2). Tag globs are git
+# refspec globs: one "*" per pattern, no "?" or "[...]".
 
 # ── hosts: an identity's host key → the physical base URL (per machine) ──
 [hosts.github]
@@ -123,6 +126,8 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `show_branches` | `none` \| `notable` \| `unmerged` \| `all`    | how much of the branch inventory `sync` lists (below) — default varies per workflow (§5.6) |
 | `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
+| `tags`       | list of tag-name globs                          | which tags to fetch at all (default `["*"]`, i.e. every tag; `[]` fetches none) (§3.6) |
+| `force_tags` | list of tag-name globs                          | of those, which may be overwritten when upstream moves a tag it already published (default `[]`, i.e. never) (§5.2) |
 | `expected_untracked` | list of path globs                      | untracked files that are expected rather than notable — suppresses the report, never the data-safety rules (§3.6) |
 | `expected_uncommitted` | list of path globs                    | as above, for tracked files with local modifications (§3.6) |
 | `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 1000 (§5.3) |

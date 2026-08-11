@@ -86,9 +86,9 @@ func (x *run) relayoutToWorktree() {
 	if upstream != "" {
 		_, _ = gitx.EnsureRemote(container, "upstream", upstream)
 	}
-	_ = gitx.Fetch(container, "origin")
+	_ = gitx.Fetch(container, "origin", x.tagPolicy())
 	if upstream != "" {
-		_ = gitx.Fetch(container, "upstream")
+		_ = gitx.Fetch(container, "upstream", x.tagPolicy())
 	}
 
 	// 4. A worktree per important branch, plus the previously-checked-out branch
