@@ -56,12 +56,22 @@ type Result struct {
 	// and without this the only way to find that repo is to watch the sweep
 	// happen.
 	Elapsed time.Duration
-	Actions  []string
-	Err      error
+	Actions []Action
+	Err     error
 
 	// migrate, when set, defers a --fix-layout conversion to the serial phase
 	// after every repo's network sync has finished (DESIGN §4.1).
 	migrate *pendingMigration
+}
+
+// Action is one line of the reasoning trace, with when it was recorded. The
+// timing is what turns "this repo is slow" into "the fetch is slow": a trace
+// line is written *after* the work it describes, so the gap between one line
+// and the next is how long that step took. Without it, a repo that takes four
+// minutes reports four minutes and nothing about where they went.
+type Action struct {
+	Text string
+	At   time.Duration // since this repo's sync started
 }
 
 // BranchNote is one branch finding — important or task — shown as an indented
@@ -147,7 +157,8 @@ func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
 		// in Actions, but the pre-migration dirty/attention state should not mask
 		// a successful relayout.
 		results[i].Outcome, results[i].Detail = UpToDate, ""
-		x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: &results[i]}
+		x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r),
+			started: time.Now(), res: &results[i]}
 		x.relayout(results[i].migrate.kind)
 	}
 	return results
@@ -179,6 +190,10 @@ type run struct {
 	// a non-branch fact that ties a branch's rank (see finalizeBranches).
 	detailIsBranch bool
 
+	// started is when this repo's sync began, so every trace line can carry the
+	// offset at which it was recorded.
+	started time.Time
+
 	res *Result
 }
 
@@ -186,9 +201,10 @@ type run struct {
 // every return here is `return *res`, which copies before defers run, so setting
 // res.Elapsed would time the repo and then throw the number away.
 func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
+	start := time.Now()
 	res := &Result{Name: repoName(r), Workflow: r.Workflow}
-	defer func(start time.Time) { out.Elapsed = time.Since(start) }(time.Now())
-	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), res: res}
+	defer func() { out.Elapsed = time.Since(start) }()
+	x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r), started: start, res: res}
 
 	// A repo whose important branch couldn't be settled — config states none and
 	// the clone answers neither with an origin default-branch symref nor a known
@@ -802,7 +818,7 @@ func (x *run) add(format string, a ...any) {
 	if x.unit != "" {
 		msg = x.unit + ": " + msg
 	}
-	x.res.Actions = append(x.res.Actions, msg)
+	x.res.Actions = append(x.res.Actions, Action{Text: msg, At: time.Since(x.started)})
 }
 
 // branchMark records a per-branch finding — important or task — as a

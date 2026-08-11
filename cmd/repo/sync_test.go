@@ -107,6 +107,36 @@ func TestRenderSyncTallyDoesNotUnderstateFailures(t *testing.T) {
 	}
 }
 
+// TestRenderSyncVerboseTimesEachStep: "this repo takes four minutes" is only
+// actionable once you know which step spent them. A trace line is written after
+// its work, so the gap from the previous line is that work's duration — which
+// is what gets printed, next to the thing it measures.
+func TestRenderSyncVerboseTimesEachStep(t *testing.T) {
+	results := []syncpkg.Result{{
+		Name: "acme/manifests", Workflow: model.UpstreamPush,
+		Outcome: syncpkg.UpToDate, Detail: "up to date",
+		Elapsed: 4*time.Minute + 2*time.Second,
+		Actions: []syncpkg.Action{
+			{Text: "fetched origin", At: 4 * time.Minute},
+			{Text: "main up to date with origin/main", At: 4*time.Minute + 2*time.Second},
+		},
+	}}
+	var buf bytes.Buffer
+	renderSync(&buf, results, syncpkg.Options{Verbose: true})
+	lines := strings.Split(buf.String(), "\n")
+
+	// The fetch took the four minutes; the branch check took two seconds.
+	if l := lineWith(t, lines, "fetched origin"); !strings.Contains(l, "4m0s") {
+		t.Errorf("fetch line = %q, want the 4m it spent", l)
+	}
+	if l := lineWith(t, lines, "up to date with origin/main"); !strings.Contains(l, "2s") {
+		t.Errorf("branch line = %q, want the 2s it spent", l)
+	}
+	if l := lineWith(t, lines, "up to date with origin/main"); strings.Contains(l, "4m2s") {
+		t.Errorf("line = %q, should show its own step, not the running total", l)
+	}
+}
+
 // TestRenderSyncNamesTheSlowestRepo: a report organised by outcome says nothing
 // about where the time went, and the repo that ate the sweep is often a ✓ — so
 // it has to be named separately or not at all. Only when it was slow enough to

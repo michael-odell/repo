@@ -211,7 +211,7 @@ func TestClassifyRefusesCheckedOutBranch(t *testing.T) {
 // hasAction reports whether any trace line contains want.
 func hasAction(res Result, want string) bool {
 	for _, a := range res.Actions {
-		if strings.Contains(a, want) {
+		if strings.Contains(a.Text, want) {
 			return true
 		}
 	}

@@ -943,6 +943,13 @@ going to `ps`. It is stderr-only and terminal-only, so redirecting the report
 never collects animation frames, and it is wiped before the report prints — a
 spinner frozen mid-spin above the output would imply work still in progress.
 
+`--verbose` stamps each trace line with **how long that step took**. A trace
+line is written after the work it reports, so the gap from the previous line is
+that work's duration, and the number sits next to the thing it measures. This is
+what turns "this repo takes four minutes" into "the fetch takes four minutes" —
+without it, the only tool for a slow repo is watching `ps`, and the answer is
+usually a single git invocation nobody can name.
+
 The footer names the **slowest** repo when one took long enough (30s) to
 plausibly be what you were waiting on. A report organised by outcome says
 nothing about where the time went, and the repo that ate the sweep is often a

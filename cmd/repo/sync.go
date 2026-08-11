@@ -163,8 +163,15 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 			}
 			fmt.Fprintf(w, "  %s %s %s%s\n", color(outcomeColor(r.Outcome), syncGlyph(r.Outcome)), r.Name,
 				color(ansiGray, "("+r.Workflow+", "+r.Elapsed.Round(time.Millisecond).String()+")"), detail)
+			// Each line's stamp is how long the step it reports took: a trace
+			// line is written after its work, so the gap from the previous line
+			// is that work's duration. Printing the gap rather than the offset
+			// puts the number next to the thing it measures.
+			var prev time.Duration
 			for _, a := range r.Actions {
-				fmt.Fprintf(w, "    · %s\n", a)
+				fmt.Fprintf(w, "    · %s %s\n",
+					color(ansiGray, fmt.Sprintf("%7s", (a.At-prev).Round(time.Millisecond))), a.Text)
+				prev = a.At
 			}
 			for _, b := range r.Branches {
 				fmt.Fprintf(w, "    %s %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
