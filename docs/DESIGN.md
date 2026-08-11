@@ -740,6 +740,26 @@ blessed branches still report every rewrite; you just needn't act. Applies to ta
 too — a `vendor` pinned tag whose content moves is a rewrite matched against the
 pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).
 
+**A followed tag move always reports the object it moved away from**, and stays
+on the repo's row alongside whatever else happened rather than competing with it
+for the one detail slot. That id is not decoration: `refs/tags` has no reflog, so
+once the fetch lands it exists nowhere else, and it is the only way back to the
+content the tag used to name. `force_tags` therefore says "stop stopping for
+this", never "stop telling me" — the same bargain `force_pull` makes for
+branches, and what makes the setting safe to put on an upstream you don't
+control.
+
+This is also how the `vendor` review gate survives `force_tags` instead of being
+disarmed by it. That gate used to detect a rewrite by comparing the local tag
+against `ls-remote`; once a fetch is allowed to follow the move, the two agree
+and the comparison sees nothing. The fetch is the only thing that still knows, so
+the pin consults *it*: a pinned tag the fetch followed is reported as a finding
+with both object ids and the checkout proceeds, while an unblessed one takes the
+older path and still stops. Refusing to sync a vendored repo because its upstream
+rewrote a tag would be the wrong answer anyway — not controlling that upstream is
+the whole reason it is vendored — but *silently* following one would be worse,
+and neither is what happens.
+
 **A tag the upstream moved stops the tag, not the repo.** `--tags` asks for
 `refs/tags/*:refs/tags/*` with no leading `+`, so git declines to overwrite a tag
 the clone already has: it rejects exactly those refs, updates every other ref in

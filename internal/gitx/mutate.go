@@ -178,27 +178,74 @@ func matchesGlob(patterns []string, want string) bool {
 	return false
 }
 
+// TagMove is one tag this fetch overwrote in place, because force_tags named
+// it. From is what the tag pointed at before — the only record of it that will
+// exist anywhere, since refs/tags has no reflog, which is why it is carried out
+// of the fetch rather than merely counted.
+type TagMove struct {
+	Tag  string
+	From string
+	To   string
+}
+
+func (m TagMove) String() string {
+	return fmt.Sprintf("%s moved %s → %s", m.Tag, shortSHA(m.From), shortSHA(m.To))
+}
+
+func shortSHA(s string) string {
+	if len(s) > 8 {
+		return s[:8]
+	}
+	return s
+}
+
+// FetchResult is what a fetch did that a caller may want to report, beyond
+// success or failure.
+type FetchResult struct {
+	// Followed are the tags force_tags allowed this fetch to overwrite. A
+	// followed move is never silent: it is the one thing here that destroys
+	// something, so it is reported whether or not anything else went wrong.
+	Followed []TagMove
+}
+
 // Fetch fetches a remote with prune, and with tags per policy. A fetch that
 // fails only because the remote moved tags the clone already has — and that the
 // policy did not bless — returns *MovedTagsError; every other failure returns
-// git's error unchanged.
-func Fetch(dir, remote string, policy TagPolicy) error {
+// git's error unchanged. The result is meaningful on both paths, since one
+// fetch can follow a blessed tag and refuse an unblessed one at the same time.
+func Fetch(dir, remote string, policy TagPolicy) (FetchResult, error) {
 	args := append([]string{"fetch", "--porcelain", "--prune", remote}, policy.fetchArgs(remote)...)
 	out, code, err := runCmdCode(dir, nil, args...)
+	res := FetchResult{Followed: followedTags(out)}
 	if err == nil {
-		return nil
+		return res, nil
 	}
 	// Exit 1 is git's "some ref did not update", the only status that can mean a
 	// per-ref refusal; anything else (128 for a dead connection or a bad remote)
 	// failed before or beyond ref negotiation and is nobody's tag problem.
 	if code != 1 {
-		return err
+		return res, err
 	}
 	tags, onlyTags := rejectedTags(out)
 	if !onlyTags || len(tags) == 0 {
-		return err
+		return res, err
 	}
-	return &MovedTagsError{Remote: remote, Tags: tags}
+	return res, &MovedTagsError{Remote: remote, Tags: tags}
+}
+
+// followedTags reads the tags a fetch overwrote in place. Git's porcelain flag
+// for an updated existing tag is "t"; a brand-new tag is "*" and is not a move,
+// having replaced nothing.
+func followedTags(porcelain string) []TagMove {
+	var out []TagMove
+	for _, line := range splitLines(porcelain) {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[0] != "t" || !strings.HasPrefix(f[3], "refs/tags/") {
+			continue
+		}
+		out = append(out, TagMove{Tag: strings.TrimPrefix(f[3], "refs/tags/"), From: f[1], To: f[2]})
+	}
+	return out
 }
 
 // rejectedTags reads `fetch --porcelain` output — one "<flag> <old> <new>

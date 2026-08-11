@@ -187,14 +187,29 @@ func (x *run) vendorCheckoutTag(tag string) {
 		return
 	}
 
-	// A moved tag (local tag object differs from the remote's) is a rewrite:
-	// plain fetch never overwrites an existing tag, so a divergence here means
-	// upstream force-moved it.
-	if localTag, ok := gitx.RevParse(x.dir, "refs/tags/"+tag); ok {
+	// A moved tag is a rewrite. There are two ways to learn of one, and which
+	// applies depends on whether `force_tags` blessed this tag before the fetch
+	// ran — after the fetch, the local tag and the remote's agree either way, so
+	// asking the remote now can no longer tell the cases apart.
+	if move, followed := x.tagMove(tag); followed {
+		// The fetch already overwrote it. Refusing here would be theatre: the
+		// object this tag used to name is gone, and the pin is the only thing
+		// still pointing at the reviewed content. Report the move in full —
+		// including the id it moved *from*, which after this exists nowhere else
+		// — and carry on to check the working tree out at the new content. A
+		// vendored upstream you don't control is exactly the case `force_tags`
+		// is for; the review signal has to survive the convenience, not block it.
+		x.branchMark(x.ub, Attention, "tag "+move.String())
+		x.add("pinned tag %s was force-followed during fetch: was %s, now %s", tag, move.From, move.To)
+		tagCommit, _ = gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
+	} else if localTag, ok := gitx.RevParse(x.dir, "refs/tags/"+tag); ok {
+		// Not blessed, so the fetch refused it and the local tag still holds the
+		// reviewed content. Ask the remote what it has now: this is the one
+		// remaining case where the two can differ.
 		if remoteTag, ok := gitx.RemoteTagSHA(x.dir, "origin", tag); ok && remoteTag != localTag {
 			if !matchesAny(x.r.ForcePull, tag) {
 				x.branchMark(x.ub, Attention, fmt.Sprintf("tag %s moved upstream — stopped", tag))
-				x.add("tag %s content moved (no force_pull match): staying at the reviewed tag", tag)
+				x.add("tag %s content moved (no force_pull or force_tags match): staying at the reviewed tag", tag)
 				return
 			}
 			if x.opts.DryRun {
@@ -203,7 +218,7 @@ func (x *run) vendorCheckoutTag(tag string) {
 				x.fail(err)
 				return
 			} else {
-				x.add("followed moved tag %s", tag)
+				x.add("followed moved tag %s: was %s, now %s", tag, localTag, remoteTag)
 				tagCommit, _ = gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
 			}
 		}

@@ -191,6 +191,12 @@ type run struct {
 	// a non-branch fact that ties a branch's rank (see finalizeBranches).
 	detailIsBranch bool
 
+	// tagMoves are the tags force_tags let this run's fetches overwrite, kept so
+	// a vendor pin can tell "upstream moved this tag and we followed it" from
+	// "nothing happened" — after the fetch, the local tag and the remote's agree
+	// either way, so the fetch is the only thing that still knows.
+	tagMoves []gitx.TagMove
+
 	// started is when this repo's sync began, so every trace line can carry the
 	// offset at which it was recorded.
 	started time.Time
@@ -234,6 +240,7 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 	x.hooks()
 	x.observe()
 	x.finalizeBranches()
+	x.finalizeTagMoves()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()
 	}
@@ -431,7 +438,7 @@ func (x *run) provisionWorktree() bool {
 		return false
 	}
 	if upstream != "" {
-		_ = gitx.Fetch(x.container, "upstream", x.tagPolicy())
+		_, _ = gitx.Fetch(x.container, "upstream", x.tagPolicy())
 	}
 	x.res.Cloned = true
 	// Before syncWorktree adds a worktree per important branch — adding one for
@@ -457,7 +464,8 @@ func (x *run) tagPolicy() gitx.TagPolicy {
 // moved tags are reported and the run goes on — the same shape as an unmatched
 // branch rewrite, which stops the branch and not the repo (DESIGN §5.2).
 func (x *run) fetchRemote(remote string) bool {
-	err := gitx.Fetch(x.container, remote, x.tagPolicy())
+	res, err := gitx.Fetch(x.container, remote, x.tagPolicy())
+	x.recordTagMoves(res.Followed)
 	if err == nil {
 		x.add("fetched %s", remote)
 		return true
@@ -470,6 +478,77 @@ func (x *run) fetchRemote(remote string) bool {
 	x.add("fetched %s; %s", remote, err)
 	x.attention(movedTagsDetail(moved.Tags))
 	return true
+}
+
+// recordTagMoves reports every tag force_tags let this fetch overwrite, and
+// keeps them for the vendor pin to consult.
+//
+// A followed move is the one operation in a sync that destroys something with
+// no way back — refs/tags has no reflog — so it is never merely counted. Each
+// one names the object the tag pointed at *before*, which after the fetch
+// exists nowhere else: that id is what turns "upstream moved a tag" from a
+// notification into something you can actually go and look at.
+//
+// Blessing a tag says "stop stopping for this", not "stop telling me". That is
+// the same bargain force_pull makes for branches (DESIGN §5.2: surface always,
+// force only when named), and it is what lets `force_tags` be safe to set on a
+// repo whose upstream you do not control.
+func (x *run) recordTagMoves(moves []gitx.TagMove) {
+	if len(moves) == 0 {
+		return
+	}
+	x.tagMoves = append(x.tagMoves, moves...)
+	for _, m := range moves {
+		x.add("followed moved tag %s (was %s)", m.Tag, m.From)
+	}
+	// On a repo whose whole purpose is reviewing what upstream ships, a moved
+	// tag is the finding; elsewhere it is bookkeeping the user asked for and
+	// must not outrank a real one.
+	if x.r.Workflow == model.Vendor || x.r.Workflow == model.SupplyChainMirror {
+		x.attention(tagMovesDetail(moves))
+		return
+	}
+	x.updated(tagMovesDetail(moves))
+}
+
+// finalizeTagMoves keeps a followed move on the repo's row whatever else
+// happened to it.
+//
+// mark() lets an equal-ranked fact replace the row's detail, which is right for
+// facts that compete to explain a repo — but a followed tag move doesn't
+// compete, it accompanies. A repo that fast-forwarded *and* had a tag rewritten
+// under it would otherwise report only the fast-forward, and the compact report
+// is what a sweep actually shows: the trace would hold the move and nobody
+// would read it. So the move is appended rather than allowed to win or lose,
+// using the same "·" composition branchMark uses for a cloned repo.
+func (x *run) finalizeTagMoves() {
+	if len(x.tagMoves) == 0 || x.res.Err != nil {
+		return
+	}
+	detail := tagMovesDetail(x.tagMoves)
+	if x.res.Detail == "" || strings.Contains(x.res.Detail, detail) {
+		return // nothing else claimed the row, or this move already owns it
+	}
+	x.res.Detail += " · " + detail
+}
+
+// tagMovesDetail names one move in full — the interesting case, and the one
+// worth reading a hash for — and counts several.
+func tagMovesDetail(moves []gitx.TagMove) string {
+	if len(moves) == 1 {
+		return "followed " + moves[0].String()
+	}
+	return fmt.Sprintf("followed %d moved tags", len(moves))
+}
+
+// tagMove returns the move this run followed for a named tag, if it did.
+func (x *run) tagMove(tag string) (gitx.TagMove, bool) {
+	for _, m := range x.tagMoves {
+		if m.Tag == tag {
+			return m, true
+		}
+	}
+	return gitx.TagMove{}, false
 }
 
 // movedTagsDetail names the moved tags when there are few enough to read in a
@@ -505,7 +584,7 @@ func (x *run) fetchWorktreeRemotes() bool {
 		if changed, _ := gitx.EnsureRemote(x.container, "upstream", upstream); changed {
 			x.add("set upstream = %s", upstream)
 		}
-		if err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
+		if _, err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
 			x.add("fetched upstream")
 		}
 	}
@@ -615,7 +694,7 @@ func (x *run) provision() bool {
 			return false
 		}
 		if x.r.Fork != nil {
-			if err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
+			if _, err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
 				x.add("fetched upstream")
 			}
 		}

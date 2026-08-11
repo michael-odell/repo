@@ -42,7 +42,7 @@ func TestFetchMovedTagIsTyped(t *testing.T) {
 	origin, clone := originWithClone(t, "independent.latest")
 	moveTag(t, origin, "independent.latest")
 
-	err := Fetch(clone, "origin", TagPolicy{})
+	_, err := Fetch(clone, "origin", TagPolicy{})
 	var moved *MovedTagsError
 	if !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want *MovedTagsError", err)
@@ -65,7 +65,7 @@ func TestFetchMovedTagStillUpdatesBranches(t *testing.T) {
 	moveTag(t, origin, "independent.latest")
 
 	var moved *MovedTagsError
-	if err := Fetch(clone, "origin", TagPolicy{}); !errors.As(err, &moved) {
+	if _, err := Fetch(clone, "origin", TagPolicy{}); !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want *MovedTagsError", err)
 	}
 	after, ok := RevParse(clone, "refs/remotes/origin/main")
@@ -86,7 +86,7 @@ func TestFetchRealFailureStaysFatal(t *testing.T) {
 	_, clone := originWithClone(t, "v1")
 	git(t, clone, "remote", "set-url", "origin", t.TempDir()+"/nope")
 
-	err := Fetch(clone, "origin", TagPolicy{})
+	_, err := Fetch(clone, "origin", TagPolicy{})
 	if err == nil {
 		t.Fatal("Fetch on a missing remote = nil; want an error")
 	}
@@ -107,7 +107,7 @@ func TestFetchCleanIsNil(t *testing.T) {
 	git(t, origin, "commit", "-q", "-am", "two")
 	git(t, origin, "tag", "v2") // a *new* tag is never a clobber
 
-	if err := Fetch(clone, "origin", TagPolicy{}); err != nil {
+	if _, err := Fetch(clone, "origin", TagPolicy{}); err != nil {
 		t.Fatalf("Fetch = %v; want nil", err)
 	}
 	if _, ok := RevParse(clone, "refs/tags/v2"); !ok {
@@ -176,7 +176,7 @@ func TestForceTagsFollowsOnlyWhatItNames(t *testing.T) {
 	git(t, origin, "tag", "-f", "v1.0") // both tags move
 
 	policy := TagPolicy{Force: []string{"*.latest"}}
-	err := Fetch(clone, "origin", policy)
+	res, err := Fetch(clone, "origin", policy)
 
 	// v1.0 was not blessed, so the fetch still reports it as refused.
 	var moved *MovedTagsError
@@ -195,6 +195,14 @@ func TestForceTagsFollowsOnlyWhatItNames(t *testing.T) {
 	if unblessed, _ := RevParse(clone, "refs/tags/v1.0"); unblessed == head {
 		t.Error("v1.0 moved; only the tags force_tags names may be overwritten")
 	}
+	// The move must be reported with the object it moved away from: refs/tags
+	// has no reflog, so after this fetch that id exists nowhere else.
+	if len(res.Followed) != 1 || res.Followed[0].Tag != "independent.latest" {
+		t.Fatalf("Followed = %v, want one move of independent.latest", res.Followed)
+	}
+	if m := res.Followed[0]; m.To != head || m.From == "" || m.From == m.To {
+		t.Errorf("Followed[0] = %+v; want From = the pre-move object, To = %s", m, head)
+	}
 }
 
 // TestNarrowedTagsExcludesTheRest: `tags` is a real scope, which needs
@@ -204,7 +212,7 @@ func TestNarrowedTagsExcludesTheRest(t *testing.T) {
 	origin, clone := originWithClone(t, "v1.0")
 	git(t, origin, "tag", "build.deadbeef") // reachable from main, so auto-follow would take it
 
-	if err := Fetch(clone, "origin", TagPolicy{Fetch: []string{"v*"}}); err != nil {
+	if _, err := Fetch(clone, "origin", TagPolicy{Fetch: []string{"v*"}}); err != nil {
 		t.Fatalf("Fetch = %v", err)
 	}
 	if _, ok := RevParse(clone, "refs/tags/build.deadbeef"); ok {

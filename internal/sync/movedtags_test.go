@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,5 +96,106 @@ branches = ["main"]
 	must(t, err)
 	if trim(string(local)) == trim(string(head)) {
 		t.Error("the moved tag was followed; a plain fetch must never overwrite an existing tag")
+	}
+}
+
+// TestForceTagsFollowsAndReportsTheOldObject: blessing a tag says "stop
+// stopping for this", never "stop telling me". The move must reach the report
+// carrying the object the tag pointed at *before* — refs/tags has no reflog, so
+// once the fetch lands that id exists nowhere else, and it is the whole
+// recovery story for a rewrite you didn't want.
+func TestForceTagsFollowsAndReportsTheOldObject(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	origin := filepath.Join(remotes, "acme", "proj")
+	must(t, os.MkdirAll(filepath.Dir(origin), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", origin)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", origin, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "tag", "independent.latest")
+	git(t, seed, "tag", "v1.0")
+	git(t, seed, "push", "-q", "origin", "main")
+	git(t, seed, "push", "-q", "origin", "--tags")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:acme/proj"
+branches = ["main"]
+force_tags = ["*.latest"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+	Run(reg, repos, Options{StateDir: filepath.Join(T, "out1"), Frequency: time.Hour})
+
+	clone := filepath.Join(T, "clones", "proj")
+	before, err := exec.Command("git", "-C", clone, "rev-parse", "independent.latest").Output()
+	must(t, err)
+
+	// Upstream moves both tags; only one of them is blessed.
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\ntwo\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "two")
+	git(t, seed, "tag", "-f", "independent.latest")
+	git(t, seed, "tag", "-f", "v1.0")
+	git(t, seed, "push", "-q", "origin", "main")
+	git(t, seed, "push", "-q", "--force", "origin", "--tags")
+
+	res := Run(reg, repos, Options{StateDir: filepath.Join(T, "out2"), Frequency: time.Hour})[0]
+	if res.Err != nil {
+		t.Fatalf("Err = %v", res.Err)
+	}
+
+	// The blessed tag followed; the unblessed one did not.
+	head, err := exec.Command("git", "-C", clone, "rev-parse", "main").Output()
+	must(t, err)
+	blessed, err := exec.Command("git", "-C", clone, "rev-parse", "independent.latest").Output()
+	must(t, err)
+	if trim(string(blessed)) != trim(string(head)) {
+		t.Errorf("independent.latest = %s, want %s — force_tags should have followed it",
+			trim(string(blessed)), trim(string(head)))
+	}
+	unblessed, err := exec.Command("git", "-C", clone, "rev-parse", "v1.0").Output()
+	must(t, err)
+	if trim(string(unblessed)) == trim(string(head)) {
+		t.Error("v1.0 moved; only tags force_tags names may be overwritten")
+	}
+
+	// The trace must name the old object, not merely report that something moved.
+	var trace string
+	for _, a := range res.Actions {
+		trace += a.Text + "\n"
+	}
+	if !strings.Contains(trace, "followed moved tag independent.latest") {
+		t.Errorf("trace does not report the followed move:\n%s", trace)
+	}
+	if old := trim(string(before)); !strings.Contains(trace, old) {
+		t.Errorf("trace does not carry the pre-move object %s:\n%s", old, trace)
+	}
+	// And the unblessed tag is still surfaced as a finding.
+	if res.Outcome != Attention {
+		t.Errorf("outcome = %v (%s), want Attention for the refused v1.0", res.Outcome, res.Detail)
+	}
+
+	// The compact row is what a sweep actually shows, and a followed rewrite
+	// has to survive on it alongside whatever else the repo did — a move that
+	// only reaches --verbose is a move nobody reads.
+	if !strings.Contains(res.Detail, "followed independent.latest moved") {
+		t.Errorf("row detail = %q; the followed move must stay on the row", res.Detail)
+	}
+	if !strings.Contains(res.Detail, "v1.0") {
+		t.Errorf("row detail = %q; the refused tag must stay on the row too", res.Detail)
 	}
 }
