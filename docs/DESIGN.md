@@ -56,6 +56,18 @@ behaviour.
    `wd-repos-update` script's fatal flaw was dying on first failure.) Single-target
    commands may fail normally.
 
+6. **Every git invocation is bounded.** A sweep runs at most six repos at once
+   (`status`: eight), each running one git at a time — but concurrency limits
+   only cap how many things can stall, not how long. Every invocation therefore
+   carries a deadline: `REPO_GIT_NETWORK_TIMEOUT` (default 10m) for the
+   subcommands that reach a remote, `REPO_GIT_TIMEOUT` (default 2m) for local
+   queries, both overridable for the repo that is bigger than the assumption.
+   Cancellation kills the **process group**, because git's children — `ssh`,
+   `git-remote-*`, `index-pack` — are what actually block, and they neither die
+   with their parent nor release the pipe the parent's output is read from. A
+   stalled fetch is an ordinary per-repo failure with a name attached, not an
+   indefinitely hung sweep with nothing to report.
+
 ## 3. Data model
 
 ### 3.1 Three layers

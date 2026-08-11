@@ -3,12 +3,15 @@
 package gitx
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // run executes `git -C dir args...` and returns trimmed stdout.
@@ -21,15 +24,92 @@ func run(dir string, args ...string) (string, error) {
 // significant — `status --porcelain`, whose first column is a space for a
 // modified-but-unstaged file, and `-z` output, whose NUL terminators matter.
 func runRaw(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	return runCmd(dir, nil, args...)
+}
+
+// runCmd runs one git invocation under a deadline, with extra environment when
+// the caller needs it. Every git this package runs goes through here.
+//
+// The deadline exists because a sweep has no other way out of a stalled
+// network: a `fetch` whose connection dies mid-transfer never returns, and it
+// takes its worker with it — six of those and the whole sweep is stopped with
+// nothing to report and nothing to interrupt but the process tree. A timeout
+// turns that into an ordinary per-repo failure the report can name.
+func runCmd(dir string, env []string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutFor(args))
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	if env != nil {
+		cmd.Env = env
+	}
+	// git's children — ssh, git-remote-https, index-pack — are what actually
+	// block, and they do not die with their parent. Put the invocation in its own
+	// process group so cancellation reaches all of them, and cap the wait
+	// afterwards: cmd.Output() reads until the stdout pipe closes, and an
+	// inherited pipe held open by a surviving grandchild would otherwise hang
+	// exactly as long as the timeout was meant to prevent.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("git %s: timed out after %s (raise %s)",
+				strings.Join(args, " "), timeoutFor(args), timeoutEnvFor(args))
+		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
 		}
 		return "", err
 	}
 	return string(out), nil
+}
+
+// Timeouts are split in two because the two kinds of git command fail
+// differently: anything crossing the network can legitimately run for minutes
+// (a first clone of a large repo) and is the only thing that hangs
+// indefinitely, while a local query that hasn't answered in two minutes is
+// pathological on any repo small enough to work with. Both are overridable —
+// somebody's monorepo is always bigger than the assumption.
+const (
+	defaultTimeout        = 2 * time.Minute
+	defaultNetworkTimeout = 10 * time.Minute
+
+	timeoutEnv        = "REPO_GIT_TIMEOUT"
+	networkTimeoutEnv = "REPO_GIT_NETWORK_TIMEOUT"
+)
+
+// networkSubcommands are the git subcommands that talk to a remote.
+var networkSubcommands = map[string]bool{
+	"clone": true, "fetch": true, "push": true, "ls-remote": true, "pull": true,
+}
+
+func timeoutFor(args []string) time.Duration {
+	if len(args) > 0 && networkSubcommands[args[0]] {
+		return durationEnv(networkTimeoutEnv, defaultNetworkTimeout)
+	}
+	return durationEnv(timeoutEnv, defaultTimeout)
+}
+
+func timeoutEnvFor(args []string) string {
+	if len(args) > 0 && networkSubcommands[args[0]] {
+		return networkTimeoutEnv
+	}
+	return timeoutEnv
+}
+
+// durationEnv reads a Go duration ("90s", "5m") from the environment, falling
+// back to def when unset or unparseable — a typo in an env var should not
+// silently mean "no timeout".
+func durationEnv(name string, def time.Duration) time.Duration {
+	if v := os.Getenv(name); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
 }
 
 // runAsProbe is run for a command that writes a throwaway object and therefore
@@ -42,18 +122,11 @@ func runRaw(dir string, args ...string) (string, error) {
 // meaningless, and borrowing the user's would be a small lie in the object
 // database.
 func runAsProbe(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"GIT_AUTHOR_NAME=repo", "GIT_AUTHOR_EMAIL=repo@localhost",
 		"GIT_COMMITTER_NAME=repo", "GIT_COMMITTER_EMAIL=repo@localhost")
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
+	out, err := runCmd(dir, env, args...)
+	return strings.TrimSpace(out), err
 }
 
 // oneLine collapses git's (often multi-line, blank-line-padded) stderr into a
