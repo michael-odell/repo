@@ -1,11 +1,9 @@
 package gitx
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -13,23 +11,36 @@ import (
 // fakeGit puts a stand-in `git` first on PATH. The script hangs forever and
 // leaves a background child holding the inherited stdout pipe open — the shape
 // of a stalled `fetch`, whose ssh grandchild is what actually blocks and what
-// keeps the pipe from closing after the parent is signalled.
-func fakeGit(t *testing.T, pidFile string) {
+// keeps the pipe from closing after the parent is signalled. The child appends
+// to tickFile while it lives, which is how the test tells whether it is still
+// running: a pid is not enough, because a killed child that has not yet been
+// reaped is a zombie, and signalling a zombie succeeds.
+func fakeGit(t *testing.T, tickFile string) {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\nsleep 300 &\necho $! > " + pidFile + "\nsleep 300\n"
+	script := "#!/bin/sh\n" +
+		"( while : ; do echo tick >> " + tickFile + "; sleep 0.05; done ) &\n" +
+		"sleep 300\n"
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
 // TestRunTimesOut: without a deadline a stalled git holds its worker forever,
 // and a sweep of six of them stops dead with nothing to report. The invocation
 // must come back on its own, as an ordinary error naming what happened.
 func TestRunTimesOut(t *testing.T) {
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	fakeGit(t, pidFile)
+	fakeGit(t, filepath.Join(t.TempDir(), "tick"))
 	t.Setenv(timeoutEnv, "300ms")
 
 	start := time.Now()
@@ -56,8 +67,8 @@ func TestRunTimesOut(t *testing.T) {
 // die with it. Cancelling only the parent would leave the ssh (or index-pack)
 // behind, still holding the pipe and still doing whatever stalled.
 func TestRunKillsTheProcessGroup(t *testing.T) {
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	fakeGit(t, pidFile)
+	tick := filepath.Join(t.TempDir(), "tick")
+	fakeGit(t, tick)
 	// Generous on purpose: the fake has to start a shell and fork a child before
 	// the deadline fires, and on a machine already running the rest of the suite
 	// that has taken longer than a few hundred milliseconds. The subject here is
@@ -68,18 +79,18 @@ func TestRunKillsTheProcessGroup(t *testing.T) {
 	if _, err := run(t.TempDir(), "status"); err == nil {
 		t.Fatal("want a timeout error, got nil")
 	}
+	if fileSize(t, tick) == 0 {
+		t.Fatal("fake git's child never ran; the fixture proves nothing")
+	}
 
-	pid, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatalf("fake git never recorded its child: %v", err)
-	}
-	var n int
-	if _, err := fmt.Sscanf(strings.TrimSpace(string(pid)), "%d", &n); err != nil {
-		t.Fatalf("unreadable child pid %q: %v", pid, err)
-	}
-	// Signal 0 tests for existence without delivering anything.
-	if err := syscall.Kill(n, 0); err == nil {
-		t.Errorf("child %d survived the timeout; the process group was not killed", n)
+	// Whether the child is *working* is the question, and the only one a pid
+	// can't answer: settle, then watch for a while.
+	time.Sleep(300 * time.Millisecond)
+	before := fileSize(t, tick)
+	time.Sleep(600 * time.Millisecond)
+	if after := fileSize(t, tick); after != before {
+		t.Errorf("child was still running after the timeout (%d → %d bytes); "+
+			"the process group was not killed", before, after)
 	}
 }
 
