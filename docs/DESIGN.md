@@ -717,6 +717,13 @@ so it is found at the "same patches" tier and never reaches the squash tier.
 That is not a misdetection — the operations are indistinguishable on the object
 graph, and the decision is identical either way.
 
+`git cherry` compares patches, and a merge commit has none, so it passes over
+merges in silence: "every commit's patch is in base" is a claim about the commits
+it looked at. A merge that only joins its parents adds nothing, but one that
+resolved a conflict by hand holds work that exists on no commit as a patch, so
+the "same patches" tier also checks the combined diff (`diff-tree --cc`) of every
+merge the branch is ahead by, and withholds its verdict when one is non-empty.
+
 The squash tier is the only one needing a scratch object (`commit-tree` for the
 rebuilt commit). It is unreferenced and gc reclaims it; no ref, config, or
 working tree is touched.

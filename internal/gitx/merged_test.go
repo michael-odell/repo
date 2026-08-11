@@ -109,6 +109,56 @@ func TestMergedStateTiers(t *testing.T) {
 	})
 }
 
+// TestPatchTierAccountsForMergeCommits: `git cherry` compares patches and a merge
+// commit has none, so it passes over merges without a word. A branch whose only
+// commit ahead of base is a merge therefore drew no "+" line at all, which tier 2
+// read as "every commit landed" — and the merge's hand-written resolution, the one
+// kind of work that exists on no commit as a patch, was pruned away with the
+// branch. A merge that only joins its parents still has to stay prunable, or
+// every long-lived branch that ever caught up with main becomes unprunable.
+func TestPatchTierAccountsForMergeCommits(t *testing.T) {
+	// setup returns a repo where `feature` is ahead of main by one merge commit
+	// and nothing else, having merged main in after main moved on.
+	setup := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		gitT(t, dir, "init", "-q", "-b", "main", ".")
+		gitT(t, dir, "config", "user.email", "a@b")
+		gitT(t, dir, "config", "user.name", "A")
+		commit(t, dir, "f", "base\n", "base")
+		gitT(t, dir, "branch", "feature")
+		commit(t, dir, "f", "base\nmain work\n", "main work")
+		gitT(t, dir, "checkout", "-q", "feature")
+		gitT(t, dir, "merge", "-q", "--no-ff", "main", "-m", "merge main into feature")
+		return dir
+	}
+
+	t.Run("a merge holding work of its own is not landed", func(t *testing.T) {
+		dir := setup(t)
+		writeFile(t, filepath.Join(dir, "resolution"), "exists only on the branch\n")
+		gitT(t, dir, "add", "resolution")
+		gitT(t, dir, "commit", "-q", "--amend", "--no-edit")
+		gitT(t, dir, "checkout", "-q", "main")
+
+		if _, ok := RevParse(dir, "main:resolution"); ok {
+			t.Fatal("fixture: main already carries the resolution")
+		}
+		assertState(t, dir, "feature", "main", Unmerged)
+	})
+
+	t.Run("a merge that only joins its parents is landed", func(t *testing.T) {
+		dir := setup(t)
+		gitT(t, dir, "checkout", "-q", "main")
+		state, err := MergedState(dir, "feature", "main", DefaultScanLimit())
+		if err != nil {
+			t.Fatalf("MergedState: %v", err)
+		}
+		if !state.Merged() {
+			t.Errorf("MergedState = %v; a branch adding nothing but a clean merge has landed", state)
+		}
+	})
+}
+
 // TestSquashTierWorksWithoutAConfiguredIdentity: tier 3 writes a scratch commit
 // object, and git refuses to write one unless it can determine a committer.
 // Auto-detection is declined wherever the hostname has no domain — CI runners,

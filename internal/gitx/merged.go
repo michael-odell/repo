@@ -119,9 +119,14 @@ func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
 	}
 
 	// Tier 2: per-commit patch-ids. Catches a replay onto a moved base, where
-	// every commit was rewritten but its diff survived intact.
+	// every commit was rewritten but its diff survived intact. A merge commit has
+	// no single patch to compare, so `git cherry` passes over it in silence —
+	// which makes "every commit landed" a claim about only the commits it looked
+	// at, and the merges have to be accounted for separately.
 	if unmatched, err := cherryUnmatched(dir, base, branch); err == nil && unmatched == 0 {
-		return MergedPatch, nil
+		if held, err := mergesHoldOwnWork(dir, base, branch); err == nil && !held {
+			return MergedPatch, nil
+		}
 	}
 
 	// Tier 3: the branch's whole diff as one patch-id.
@@ -158,6 +163,36 @@ func cherryUnmatched(dir, base, head string) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// mergesHoldOwnWork reports whether any merge commit the branch is ahead by
+// carries content of its own — a conflict resolved by hand, or an edit made
+// while merging. Such a merge is the one place a branch can hold work that no
+// commit anywhere states as a patch, so tier 2 is blind to it: `git cherry`
+// compares patches, a merge has none, and the branch reads as fully landed while
+// the resolution exists only on it. Reporting the whole branch unmerged is the
+// safe reading — the tier below still gets its say, and a branch nobody can
+// vouch for is never pruned (DESIGN §5.3).
+//
+// The combined diff draws exactly the needed line: empty for a merge that only
+// joins what its parents already say, non-empty for one that says something more.
+func mergesHoldOwnWork(dir, base, branch string) (bool, error) {
+	merges, err := run(dir, "rev-list", "--merges", base+".."+branch)
+	if err != nil {
+		return false, err
+	}
+	for _, sha := range splitLines(merges) {
+		// --cc leads with the commit's own sha and adds a diff only when the
+		// merge is more than the sum of its parents.
+		out, err := run(dir, "diff-tree", "--cc", sha)
+		if err != nil {
+			return false, err
+		}
+		if strings.TrimSpace(strings.TrimPrefix(out, sha)) != "" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // DeleteBranch removes a local branch. force selects `-D` over `-d`, which is
