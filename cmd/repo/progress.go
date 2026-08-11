@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
+
 	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
 
@@ -18,20 +20,31 @@ import (
 // indistinguishable from a hang, which is exactly the wrong impression for the
 // one command that mostly waits on the network.
 //
-// So the sweep gets a status line: a spinner (something is moving), a count
-// (how much is left), and the repo that has been in flight longest (what it is
-// waiting on — the question anyone watching a slow sweep actually has). It is
-// one line, rewritten in place, on stderr, and only when stderr is a terminal:
-// piping or redirecting the report must not collect animation frames.
+// So the sweep gets a live block: a header carrying a spinner (something is
+// moving) and a count (how much is left), then one row per repo in flight
+// naming it and how long it has been there. The rows are the useful part — on a
+// slow sweep they answer "what is it waiting on" without anyone going to `ps`,
+// and giving each repo a whole line is what makes the name legible enough to
+// answer it. The block is rewritten in place, on stderr, and only when stderr
+// is a terminal: piping or redirecting the report must not collect animation
+// frames.
 type progress struct {
 	w     io.Writer
 	total int
+	// size reports the terminal's width and height. It is re-queried on every
+	// paint rather than cached, so a window resized mid-sweep is picked up
+	// without a SIGWINCH handler, and it is a field so tests can render at a
+	// size they control.
+	size func() (int, int)
 
 	mu      sync.Mutex
 	done    int
 	started map[string]time.Time
+	// slots maps display row to the repo occupying it, "" for a row whose repo
+	// has finished. See claim.
+	slots   []string
 	frame   int
-	painted bool
+	painted int // rows the last paint left on screen
 
 	stop chan struct{}
 	gone chan struct{}
@@ -43,14 +56,22 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 const (
 	paintInterval = 100 * time.Millisecond
-	// A repo is only named once it has been in flight long enough that naming it
-	// means something. Below this, the name would change faster than it reads.
-	nameAfter = 2 * time.Second
-	// Terminal width is not queried: COLUMNS is not exported to children by most
-	// shells, and asking properly means an ioctl dependency for one line of
-	// cosmetics. 80 is the floor every terminal clears, and the line is built to
-	// fit it rather than to fill whatever is available.
-	lineWidth = 80
+	// rowIndent sets the rows under the header, so the block reads as one
+	// thing rather than as a list that happens to start with a spinner.
+	rowIndent = "  "
+	// gap is the space between the longest name and the duration column. Two
+	// columns is enough to separate the fields without the eye having to
+	// travel to pair a name with its number.
+	gap = 2
+	// maxRows bounds the block's height. The sweep's concurrency limit is well
+	// under this, so it only matters if that limit rises — a block taller than
+	// the terminal would scroll, and a scrolled block can't be rewritten in
+	// place.
+	maxRows = 8
+	// fallbackWidth/fallbackHeight are what a terminal that won't report its
+	// size gets: 80×24 is the floor every terminal clears.
+	fallbackWidth  = 80
+	fallbackHeight = 24
 )
 
 // newProgress returns a live display, or nil when there is nothing to show it
@@ -63,6 +84,7 @@ func newProgress(total int) *progress {
 	p := &progress{
 		w:       os.Stderr,
 		total:   total,
+		size:    func() (int, int) { return terminalSize(os.Stderr) },
 		started: map[string]time.Time{},
 		stop:    make(chan struct{}),
 		gone:    make(chan struct{}),
@@ -94,13 +116,49 @@ func (p *progress) update(ev syncpkg.Progress) {
 	defer p.mu.Unlock()
 	if ev.Finished {
 		delete(p.started, ev.Name)
+		p.release(ev.Name)
 		p.done++
 		return
 	}
 	p.started[ev.Name] = time.Now()
+	p.claim(ev.Name)
 }
 
-// stopAndClear ends the animation and wipes the line, leaving the cursor at
+// claim gives a repo entering the sweep a display row, reusing the first row
+// whose repo has finished. Rows are assigned and held rather than sorted on
+// every paint: a repo finishing would otherwise shift every line below it up
+// one, and on a fleet where most repos finish quickly that shuffling is
+// unreadable. A fixed row lets the eye track one repo, and one climbing
+// duration, in place. Held under p.mu.
+func (p *progress) claim(name string) {
+	for i, n := range p.slots {
+		if n == "" {
+			p.slots[i] = name
+			return
+		}
+	}
+	p.slots = append(p.slots, name)
+}
+
+// release frees a finished repo's row, trimming rows off the end so the block
+// shrinks rather than trailing blanks. A freed row with a longer-running repo
+// still below it is held open: the next repo to start claims it within
+// milliseconds, and closing the gap instead would move that longer-running
+// repo's line out from under the reader for a single frame. See rows for what
+// happens to a row nothing is left to claim. Held under p.mu.
+func (p *progress) release(name string) {
+	for i, n := range p.slots {
+		if n == name {
+			p.slots[i] = ""
+			break
+		}
+	}
+	for len(p.slots) > 0 && p.slots[len(p.slots)-1] == "" {
+		p.slots = p.slots[:len(p.slots)-1]
+	}
+}
+
+// stopAndClear ends the animation and wipes the block, leaving the cursor at
 // column zero for the report that follows. Clearing rather than leaving the
 // last frame matters: a finished sweep should not leave a spinner frozen
 // mid-spin above its own output, implying work still in progress.
@@ -112,68 +170,209 @@ func (p *progress) stopAndClear() {
 	<-p.gone
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.painted {
-		fmt.Fprintf(p.w, "\r%s\r", strings.Repeat(" ", lineWidth))
-	}
+	p.clear()
 }
 
 func (p *progress) paint() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Once every repo is accounted for there is nothing left to animate, and
+	// what comes next in the same sweep may be a question waiting on an answer
+	// — a --fix relayout asks before discarding ignored files, and it asks
+	// after the concurrent phase but before the caller stops this display.
+	// Going quiet here keeps the block from repainting over that prompt, or
+	// erasing it outright.
+	if p.done >= p.total && len(p.started) == 0 {
+		p.clear()
+		return
+	}
 	p.frame++
-	p.painted = true
-	fmt.Fprintf(p.w, "\r%-*s", lineWidth, p.line())
+	p.render(p.lines())
 }
 
-// line renders the current state, truncated to fit. Held under p.mu.
-func (p *progress) line() string {
-	spin := spinnerFrames[p.frame%len(spinnerFrames)]
-	s := fmt.Sprintf("%s  %d/%d", spin, p.done, p.total)
+// render rewrites the block in place: back to its first row, then each row
+// cleared and redrawn, then everything below the last one erased so a block
+// that just got shorter doesn't leave its old tail on screen. Held under p.mu.
+func (p *progress) render(lines []string) {
+	var b strings.Builder
+	b.WriteString(p.rewind())
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		// The carriage return is not redundant with the newline: a terminal
+		// that isn't translating output leaves the column where it was.
+		b.WriteString("\r\x1b[K")
+		b.WriteString(l)
+	}
+	b.WriteString("\x1b[J")
+	p.painted = len(lines)
+	fmt.Fprint(p.w, b.String())
+}
+
+// rewind puts the cursor back at column zero of the block's first row. Held
+// under p.mu.
+func (p *progress) rewind() string {
+	if p.painted <= 1 {
+		return "\r"
+	}
+	return fmt.Sprintf("\r\x1b[%dA", p.painted-1)
+}
+
+// clear wipes the block and forgets it. Held under p.mu.
+func (p *progress) clear() {
+	if p.painted == 0 {
+		return
+	}
+	fmt.Fprint(p.w, p.rewind()+"\x1b[J")
+	p.painted = 0
+}
+
+// lines renders the current state, one string per screen row and none of them
+// wider than the terminal — a row that wrapped would occupy two screen lines
+// and throw off the cursor arithmetic that rewrites the block. Held under p.mu.
+func (p *progress) lines() []string {
+	width, height := p.size()
+	out := []string{truncate(p.header(), width)}
+
+	// Leave the header its line and one more besides, so the block never fills
+	// the screen to the last row.
+	rows := maxRows
+	if h := height - 2; h < rows {
+		rows = h
+	}
+	if rows < 1 {
+		return out
+	}
+
+	active := p.rows()
+	var hidden int
+	if len(active) > rows {
+		hidden = len(active) - (rows - 1)
+		active = active[:rows-1]
+	}
+	nameW, durW := columns(active, width)
+	for _, r := range active {
+		out = append(out, truncate(r.render(nameW, durW), width))
+	}
+	if hidden > 0 {
+		out = append(out, truncate(fmt.Sprintf("%s…and %d more", rowIndent, hidden), width))
+	}
+	return out
+}
+
+// header says how the sweep as a whole is going: what fraction is behind it,
+// and how much is in flight right now. Held under p.mu.
+func (p *progress) header() string {
+	s := fmt.Sprintf("%s  %d/%d", spinnerFrames[p.frame%len(spinnerFrames)], p.done, p.total)
 	if n := len(p.started); n > 0 {
 		s += fmt.Sprintf("  ·  %d active", n)
-	}
-	if name, since := p.longestRunning(); name != "" {
-		s += fmt.Sprintf("  ·  %s %s", name, roundSeconds(since))
-	}
-	if len(s) > lineWidth {
-		s = s[:lineWidth-1] + "…"
 	}
 	return s
 }
 
-// longestRunning names the repo that has been in flight longest, once it has
-// been there long enough to be worth naming. On a healthy sweep this is just
-// whatever is slowest; on a stalled one it is the answer to "what is it stuck
-// on", without anyone having to go digging through `ps`. Held under p.mu.
-func (p *progress) longestRunning() (string, time.Duration) {
-	var name string
-	var oldest time.Time
-	for n, t := range p.started {
-		// Ties broken by name so the line doesn't flicker between two repos that
-		// started in the same millisecond.
-		if name == "" || t.Before(oldest) || (t.Equal(oldest) && n < name) {
-			name, oldest = n, t
+// a row is one line of the block: a repo in flight and how long it has been
+// there, or the zero value for a row whose repo has finished while a
+// longer-running one holds a row below it.
+type row struct {
+	name  string
+	since time.Duration
+}
+
+func (r row) dur() string { return roundSeconds(r.since) }
+
+func (r row) render(nameW, durW int) string {
+	if r.name == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s%-*s%*s", rowIndent, nameW, truncate(r.name, nameW), gap+durW, r.dur())
+}
+
+// rows snapshots the block's rows in display order. Held under p.mu.
+func (p *progress) rows() []row {
+	now := time.Now()
+	// Everything accounted for is everything there is: no repo is left to
+	// start, so no freed row will ever be reclaimed. Closing the gaps now
+	// costs the stability that holding them open was buying, and keeps the
+	// last seconds of a sweep from being mostly blank lines.
+	draining := p.done+len(p.started) >= p.total
+	out := make([]row, 0, len(p.slots))
+	for _, n := range p.slots {
+		if n == "" {
+			if !draining {
+				out = append(out, row{})
+			}
+			continue
+		}
+		out = append(out, row{name: n, since: now.Sub(p.started[n])})
+	}
+	return out
+}
+
+// columns sizes the name and duration fields from what's actually in the
+// block, so the durations line up in a column of their own that sits just
+// past the longest name rather than out at the far edge of a wide terminal.
+// Names are given whatever is left.
+func columns(rows []row, width int) (nameW, durW int) {
+	for _, r := range rows {
+		if r.name == "" {
+			continue
+		}
+		if n := len([]rune(r.name)); n > nameW {
+			nameW = n
+		}
+		if d := len(r.dur()); d > durW {
+			durW = d
 		}
 	}
-	if name == "" {
-		return "", 0
+	if avail := width - len(rowIndent) - gap - durW; nameW > avail {
+		nameW = avail
 	}
-	since := time.Since(oldest)
-	if since < nameAfter {
-		return "", 0
+	if nameW < 1 {
+		nameW = 1
 	}
-	return name, since
+	return nameW, durW
+}
+
+// truncate cuts s to at most n columns, marking the cut with an ellipsis. It
+// counts runes rather than bytes: a repo name is arbitrary text, and slicing a
+// UTF-8 string by byte can land mid-rune and put a replacement character on
+// screen.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	switch {
+	case n < 1:
+		return ""
+	case n == 1:
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func roundSeconds(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
+// terminalSize reports the terminal's dimensions, falling back to the size
+// every terminal clears when it won't say. Width matters more than it did when
+// this was a single line: the block's whole purpose is giving repo names room
+// to be read, and clamping a 200-column terminal to 80 would throw away most
+// of the room it has.
+func terminalSize(f *os.File) (int, int) {
+	w, h, err := term.GetSize(int(f.Fd()))
+	if err != nil || w <= 0 || h <= 0 {
+		return fallbackWidth, fallbackHeight
+	}
+	return w, h
+}
+
 // isTerminal reports whether f is attached to a terminal rather than a pipe or
 // file, the same test the report's color uses.
 func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // sortedNames is used by tests to assert on state deterministically.

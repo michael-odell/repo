@@ -228,9 +228,10 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   id, effective (inherited) workflow, and root
 - `sync` — reconcile repos toward the registry; `--fix` migrates a container to its
   configured layout (single ↔ worktree, data-safe) after history is pushed. Takes
-  positional root/path/name selectors. While it runs, a status line on stderr
-  shows progress and the longest-running repo; `--verbose` explains the decision
-  for every repo and gives each one's duration.
+  positional root/path/name selectors. While it runs, a live block on stderr
+  shows progress and gives every repo in flight its own line with how long it
+  has been running; `--verbose` explains the decision for every repo and gives
+  each one's duration.
 - `apply` — regenerate the shell navigation/completion artifacts into `$REPO_OUT`
   from the declared ∪ discovered union
 - `list` — enumerate the declared ∪ discovered union (for completion)

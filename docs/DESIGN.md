@@ -931,15 +931,34 @@ send you to `repo list` to interpret it. A branch sub-bullet leaves the column
 empty: it inherits its repo's workflow, and repeating it would say nothing
 while pushing the summary out of the column it elaborates.
 
-**While the sweep runs**, a single status line on **stderr** shows a spinner, a
-done/total count, how many repos are in flight, and — once one has been in
-flight long enough for the name to mean something — the longest-running repo and
-for how long. A sweep prints nothing until it finishes, because the report is a
-table and a table can't be written out of order; without a status line that
-silence is indistinguishable from a hang, which is the wrong impression for the
-one command that mostly waits on the network. The longest-running repo is the
-useful part: on a slow sweep it answers "what is it waiting on" without anyone
-going to `ps`. It is stderr-only and terminal-only, so redirecting the report
+**While the sweep runs**, a live block on **stderr** shows a header — spinner,
+done/total count, how many repos are in flight — over **one row per repo in
+flight**, naming it and how long it has been there. A sweep prints nothing until
+it finishes, because the report is a table and a table can't be written out of
+order; without a status display that silence is indistinguishable from a hang,
+which is the wrong impression for the one command that mostly waits on the
+network. The rows are the useful part: on a slow sweep they answer "what is it
+waiting on" without anyone going to `ps`, and a row each is what makes the names
+legible enough to answer it — a single line has room for one name, so a sweep
+running six at a time spends itself with five of them unaccounted for.
+
+The block sizes itself to the **actual terminal**, re-measured every paint so a
+resize is picked up, because its whole purpose is giving names room to be read.
+It caps its height below the terminal's: a block taller than the screen scrolls,
+and a scrolled block can't be rewritten in place.
+
+A repo **holds the row it was given** rather than the block re-sorting each
+paint. A repo finishing would otherwise shift every line below it up one, and on
+a fleet where most repos finish in under a second nothing would stay still long
+enough to read. A freed row is held open for the repo about to claim it — but
+once `done + in flight` reaches the total, nothing is left to start, no freed row
+will ever be reclaimed, and the gaps close so the end of a sweep isn't a header
+over a screen of blanks.
+
+The block stops painting **as soon as every repo is accounted for**, before its
+caller tears it down: `--fix` relayouts run after the concurrent phase and prompt
+before discarding ignored files, and a block still repainting there would erase
+the question. It is stderr-only and terminal-only, so redirecting the report
 never collects animation frames, and it is wiped before the report prints — a
 spinner frozen mid-spin above the output would imply work still in progress.
 
