@@ -159,7 +159,7 @@ func TestScanLimitDeclinesFarDivergence(t *testing.T) {
 	gitT(t, dir, "commit", "-q", "-m", "squashed feature")
 	commit(t, dir, "later", "later\n", "later main work")
 
-	state, err := MergedState(dir, "feature", "main")
+	state, err := MergedState(dir, "feature", "main", DefaultScanLimit())
 	if !errors.Is(err, ErrTooFarDiverged) {
 		t.Fatalf("MergedState = %v, %v; want ErrTooFarDiverged", state, err)
 	}
@@ -209,7 +209,7 @@ func TestDeleteBranchForceNeededForSquash(t *testing.T) {
 
 func assertState(t *testing.T, dir, branch, base string, want MergeState) {
 	t.Helper()
-	got, err := MergedState(dir, branch, base)
+	got, err := MergedState(dir, branch, base, DefaultScanLimit())
 	if err != nil {
 		t.Fatalf("MergedState: %v", err)
 	}

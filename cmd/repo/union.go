@@ -111,6 +111,7 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 		ForcePull:           inh.ForcePull,
 		ExpectedUntracked:   inh.ExpectedUntracked,
 		ExpectedUncommitted: inh.ExpectedUncommitted,
+		MergeScanLimit:      inh.MergeScanLimit,
 		Prune:               strOrDefault(inh.Prune, builtinPrune),
 		Pin:                 inh.Pin,
 		Hooks:               inh.Hooks,

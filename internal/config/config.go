@@ -34,14 +34,18 @@ type Settings struct {
 	// Path globs naming local residue that is expected rather than notable
 	// (DESIGN §3.6). They change what sync calls to your attention; they never
 	// change what it protects.
-	ExpectedUntracked   []string     `toml:"expected_untracked"`
-	ExpectedUncommitted []string     `toml:"expected_uncommitted"`
-	Prune               *string      `toml:"prune"`
-	Host                *string      `toml:"host"`
-	Workflow            *string      `toml:"workflow"`
-	ForkOwner           *string      `toml:"fork_owner"`
-	Pin                 *string      `toml:"pin"`
-	Hooks               []model.Hook `toml:"hooks"`
+	ExpectedUntracked   []string `toml:"expected_untracked"`
+	ExpectedUncommitted []string `toml:"expected_uncommitted"`
+	// How far apart a branch and its base may be before merge detection gives up
+	// on the expensive patch-id tiers: -1 unlimited, 0 off, N commits (DESIGN
+	// §5.3). Per repo because the cost is per repo.
+	MergeScanLimit *int         `toml:"merge_scan_limit"`
+	Prune          *string      `toml:"prune"`
+	Host           *string      `toml:"host"`
+	Workflow       *string      `toml:"workflow"`
+	ForkOwner      *string      `toml:"fork_owner"`
+	Pin            *string      `toml:"pin"`
+	Hooks          []model.Hook `toml:"hooks"`
 }
 
 // Host is a [hosts.*] entry.
@@ -318,6 +322,7 @@ type Inherited struct {
 	ForcePull           []string // nil when unset
 	ExpectedUntracked   []string // nil when unset
 	ExpectedUncommitted []string // nil when unset
+	MergeScanLimit      *int     // nil when unset
 	Prune               string   // "" when unset
 	Pin                 string   // "" when unset
 	Hooks               []model.Hook
@@ -359,6 +364,7 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		ForcePull:           s.ForcePull,
 		ExpectedUntracked:   s.ExpectedUntracked,
 		ExpectedUncommitted: s.ExpectedUncommitted,
+		MergeScanLimit:      s.MergeScanLimit,
 		Prune:               strOr(s.Prune, ""),
 		Pin:                 strOr(s.Pin, ""),
 		Hooks:               s.Hooks,
@@ -411,6 +417,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		ForcePull:           s.ForcePull,
 		ExpectedUntracked:   s.ExpectedUntracked,
 		ExpectedUncommitted: s.ExpectedUncommitted,
+		MergeScanLimit:      s.MergeScanLimit,
 		Prune:               strOr(s.Prune, builtinDefaults.Prune),
 		Pin:                 strOr(s.Pin, ""),
 		Hooks:               s.Hooks,
@@ -528,6 +535,9 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.ExpectedUncommitted != nil {
 		base.ExpectedUncommitted = over.ExpectedUncommitted
+	}
+	if over.MergeScanLimit != nil {
+		base.MergeScanLimit = over.MergeScanLimit
 	}
 	if over.Prune != nil {
 		base.Prune = over.Prune

@@ -32,14 +32,14 @@ type Hook struct {
 
 // Repo is a fully-resolved repository: all root/default inheritance applied.
 type Repo struct {
-	ID           ident.ID
-	Fork         *ident.ID // nil when there is no separate fork
-	Roots        []string  // inheritance chain of root names (shallowest → deepest)
-	Workflow     string
-	HomeRoot     string // the owning root's dir; where the container lives
-	Layout       string // LayoutFlat | LayoutOwner
-	Worktrees    bool
-	Branches     []string
+	ID        ident.ID
+	Fork      *ident.ID // nil when there is no separate fork
+	Roots     []string  // inheritance chain of root names (shallowest → deepest)
+	Workflow  string
+	HomeRoot  string // the owning root's dir; where the container lives
+	Layout    string // LayoutFlat | LayoutOwner
+	Worktrees bool
+	Branches  []string
 
 	// BranchesStated distinguishes a `branches` value config actually states —
 	// at [defaults], a root, or the repo's own entry — from the builtin nobody
@@ -58,9 +58,15 @@ type Repo struct {
 	// §3.6). They suppress the report, never the data-safety rules.
 	ExpectedUntracked   []string
 	ExpectedUncommitted []string
-	Prune               string // "auto" | "report" | "manual"
-	Pin                 string // vendor only
-	Hooks               []Hook
+	// MergeScanLimit bounds the expensive half of merge detection: -1 unlimited,
+	// 0 off (ancestry only), N commits of divergence (DESIGN §5.3). A pointer
+	// because 0 is a meaningful value here — leaving the field zero must mean
+	// "nobody said", not "switch the tiers off", or a Repo built anywhere but
+	// config would quietly stop detecting squash merges.
+	MergeScanLimit *int
+	Prune          string // "auto" | "report" | "manual"
+	Pin            string // vendor only
+	Hooks          []Hook
 
 	// Discovered-only: a repo found on disk that the registry does not declare
 	// (DESIGN §3.2). Dir is its actual container (authoritative over the computed

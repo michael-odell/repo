@@ -58,7 +58,7 @@ func (x *run) taskBranch(branch string) {
 		// important branch, the remote ref is gone because the work landed and
 		// the branch was deleted upstream — pushing would resurrect it, and
 		// call the resurrection "never pushed" (DESIGN §5.3).
-		if state, err := gitx.MergedState(x.container, branch, x.branch); err == nil && state.Merged() {
+		if state, err := gitx.MergedState(x.container, branch, x.branch, scanLimitOf(x.r)); err == nil && state.Merged() {
 			// Why the remote ref is absent is unknowable — deleted after the
 			// merge, or never pushed at all — and guessing would put a history
 			// in the report that may never have happened. What matters is

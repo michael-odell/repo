@@ -72,7 +72,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		if important[b] {
 			continue
 		}
-		state, err := gitx.MergedState(container, b, base)
+		state, err := gitx.MergedState(container, b, base, scanLimitOf(r))
 		if err != nil {
 			// "Declined to look" and "tried and failed" are both unknown, and
 			// both unprunable, but only one of them is a fault — so the reason
@@ -109,6 +109,16 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// scanLimitOf resolves how far merge detection may scan for this repo: what
+// config states, else the ambient default. Unset is deliberately not "off" —
+// see model.Repo.MergeScanLimit.
+func scanLimitOf(r model.Repo) int {
+	if r.MergeScanLimit != nil {
+		return *r.MergeScanLimit
+	}
+	return gitx.DefaultScanLimit()
 }
 
 // NeedsForceDelete reports whether removing this branch requires `git branch -D`

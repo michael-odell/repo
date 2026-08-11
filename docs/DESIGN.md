@@ -162,7 +162,9 @@ machine without changing identity.
 Configuration attaches to **roots**, not tags. A root is a named directory node —
 `[root.<name>]` with a `dir` — that carries any part of the settings bundle
 (`layout`, `worktrees`, `branches`, `workflow`, `prune`, `push`, `task_branches`,
-`force_push`, `force_pull`, `host`, `pin`, `hooks`, `fork_owner`). Settings flow
+`show_branches`, `force_push`, `force_pull`, `expected_untracked`,
+`expected_uncommitted`, `merge_scan_limit`, `host`, `pin`, `hooks`,
+`fork_owner`). Settings flow
 *down the directory tree*: roots are
 ordered by `dir` prefix, and a repo inherits
 
@@ -728,12 +730,32 @@ hurts. Both patch tiers run `git cherry`, which generates and hashes a diff for
 every commit on *both* sides of the divergence, so their cost tracks how far the
 two have drifted rather than how big the branch is. A branch abandoned on a busy
 trunk years ago is thousands of diffs, and six repos are classified at once.
-Past `REPO_MERGE_SCAN_LIMIT` commits apart (default 1000, both sides combined)
-the patch tiers are therefore **declined rather than attempted**, and the branch
-is reported as unclassified — never as unmerged, and never as prunable. The
-ancestry tier runs before the guard, so branches that plainly landed are still
-recognised however far apart the two have drifted; what is given up is only the
-ability to spot a *replayed* merge on a branch nobody has touched in years.
+Past the scan limit (both sides combined) the patch tiers are therefore
+**declined rather than attempted**, and the branch is reported as unclassified —
+never as unmerged, and never as prunable, so the guard can only ever withhold a
+deletion, never cause one. The ancestry tier runs before the guard, so branches
+that plainly landed are still recognised however far apart the two have drifted;
+what is given up is only the ability to spot a *replayed* merge on a branch
+nobody has touched in years.
+
+The limit is `merge_scan_limit`, an ordinary inheritable setting (§3.4), because
+the cost is a property of the repo rather than of the machine — the archive of
+decade-old branches and the monorepo worth paying for are usually in the same
+sweep:
+
+| value | meaning |
+|---|---|
+| *unset* | `REPO_MERGE_SCAN_LIMIT` if set, else 1000 commits |
+| `N` | decline the patch tiers past N commits of divergence |
+| `0` | never run them: ancestry only, the cheapest possible classification |
+| `-1` | no limit — run them however far apart the refs are |
+
+Set it to `0` on a repo whose branch graveyard isn't worth walking and the
+expensive half of detection stops there; set it to `-1` on the one repo where
+knowing about squash merges is worth the wait. The environment variable remains
+as the floor beneath repos config says nothing about, which is what makes it
+useful for a one-off run (`REPO_MERGE_SCAN_LIMIT=0 repo sync`) without editing
+anything.
 
 **Which tier confirmed a merge decides how it can be removed.** Git's own `-d`
 safety check is an ancestry test, so it refuses exactly the branches the second

@@ -9,8 +9,8 @@ import (
 )
 
 // ErrTooFarDiverged reports that the patch-id tiers were declined rather than
-// attempted, because the branch and its base are further apart than
-// scanLimitEnv allows. It is not a failure: the branch's standing is simply
+// attempted, because the branch and its base are further apart than the caller's
+// scan limit allows. It is not a failure: the branch's standing is simply
 // unestablished, so callers must treat it as unknown — never as unmerged, and
 // never as safe to remove.
 var ErrTooFarDiverged = errors.New("too far diverged to classify")
@@ -18,15 +18,22 @@ var ErrTooFarDiverged = errors.New("too far diverged to classify")
 const (
 	defaultScanLimit = 1000
 	scanLimitEnv     = "REPO_MERGE_SCAN_LIMIT"
+
+	// ScanUnlimited runs the patch tiers however far apart the two refs are.
+	ScanUnlimited = -1
+	// ScanNever skips them entirely, leaving ancestry (which is cheap and exact)
+	// as the only evidence considered.
+	ScanNever = 0
 )
 
-// scanLimit is the largest divergence, in commits on both sides combined, that
-// the patch-id tiers will walk. Generous enough that ordinary parked work is
-// always classified; small enough that one abandoned branch on an old repo
-// can't stall a sweep.
-func scanLimit() int {
+// DefaultScanLimit is the limit for a repo whose config says nothing: the
+// environment's value if it sets one, else 1000 commits. Generous enough that
+// ordinary parked work is always classified, small enough that one abandoned
+// branch on an old repo can't stall a sweep. Config states it per repo (DESIGN
+// §5.3); this is only the floor beneath that.
+func DefaultScanLimit() int {
 	if v := os.Getenv(scanLimitEnv); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil && n >= ScanUnlimited {
 			return n
 		}
 	}
@@ -80,7 +87,12 @@ func (m MergeState) String() string {
 // The object is unreferenced and gc reclaims it — no ref, config, or working
 // tree is touched. It is written with runAsProbe's own identity, so the tier
 // works on a machine where git has none to auto-detect.
-func MergedState(dir, branch, base string) (MergeState, error) {
+// scanLimit is how far apart the two refs may be before the patch tiers are
+// declined: ScanUnlimited to always run them, ScanNever to never, or a commit
+// count. It is a parameter rather than a package-level setting because the
+// answer is per repo — the monorepo that needs it raised and the archive that
+// needs it off are usually in the same sweep.
+func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
 	// Tier 1: ancestry. Also the answer for a branch with nothing of its own.
 	ahead, behind, err := AheadBehindRefs(dir, base, branch)
 	if err != nil {
@@ -98,9 +110,12 @@ func MergedState(dir, branch, base string) (MergeState, error) {
 	// laptop's memory, and the answer was never going to be interesting. Decline
 	// instead, and say so: an unanswered branch is reported and never pruned,
 	// which is the safe direction (DESIGN §5.3).
-	if limit := scanLimit(); ahead+behind > limit {
-		return Unmerged, fmt.Errorf("%w: %d commits apart, limit %d (raise %s)",
-			ErrTooFarDiverged, ahead+behind, limit, scanLimitEnv)
+	if scanLimit == ScanNever {
+		return Unmerged, fmt.Errorf("%w: patch tiers off for this repo (merge_scan_limit)", ErrTooFarDiverged)
+	}
+	if scanLimit != ScanUnlimited && ahead+behind > scanLimit {
+		return Unmerged, fmt.Errorf("%w: %d commits apart, limit %d (raise merge_scan_limit or %s)",
+			ErrTooFarDiverged, ahead+behind, scanLimit, scanLimitEnv)
 	}
 
 	// Tier 2: per-commit patch-ids. Catches a replay onto a moved base, where

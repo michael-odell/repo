@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
 )
 
@@ -41,9 +42,11 @@ func (reg *Registry) Validate() error {
 		}
 		checkEnums(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkGlobs(add, fmt.Sprintf("root %q", n), globsOfSettings(r.Settings))
+		checkScanLimit(add, fmt.Sprintf("root %q", n), r.Settings)
 	}
 	checkEnums(add, "defaults", reg.defaults)
 	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
+	checkScanLimit(add, "defaults", reg.defaults)
 
 	// effective() surfaces id/fork parse errors and undervable forks; resolving
 	// Physical additionally catches unknown hosts. Report the first structural
@@ -109,6 +112,18 @@ func settingsOf(r model.Repo) Settings {
 		ShowBranches: &r.ShowBranches,
 		Prune:        &r.Prune,
 		Workflow:     &r.Workflow,
+	}
+}
+
+// checkScanLimit rejects a merge_scan_limit below -1. The two negative-adjacent
+// values that mean something are spelled out, because "-1 disables the limit"
+// and "0 disables the tiers" are easy to swap and the failure would be silent:
+// one makes a sweep slower than it should be, the other quietly stops finding
+// squash merges.
+func checkScanLimit(add func(string, ...any), where string, s Settings) {
+	if s.MergeScanLimit != nil && *s.MergeScanLimit < gitx.ScanUnlimited {
+		add("%s: merge_scan_limit = %d (want -1 for no limit, 0 to skip the patch tiers, or a commit count)",
+			where, *s.MergeScanLimit)
 	}
 }
 

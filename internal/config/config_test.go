@@ -354,6 +354,71 @@ repos  = ["github:acme/thing"]
 	}
 }
 
+// TestMergeScanLimitInherits: the expensive half of merge detection is switched
+// off per repo, so the setting has to reach a repo the same way every other
+// setting does — stated at the root, overridden on the entry it doesn't suit.
+func TestMergeScanLimitInherits(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.gh]
+base = "git@github.com:"
+
+[root.wd]
+dir              = "~/wd"
+merge_scan_limit = 250
+
+[[root.wd.repo]]
+id = "gh:acme/normal"
+
+[[root.wd.repo]]
+id               = "gh:acme/ancient"
+merge_scan_limit = 0    # patch tiers off: this one is a graveyard of old branches
+
+[[root.wd.repo]]
+id               = "gh:acme/monorepo"
+merge_scan_limit = -1   # no limit: worth the cost here
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	for _, c := range []struct {
+		short string
+		want  int
+	}{
+		{"normal", 250},  // from the root
+		{"ancient", 0},   // off
+		{"monorepo", -1}, // unlimited
+	} {
+		got := repoByShort(t, reg, c.short).MergeScanLimit
+		if got == nil || *got != c.want {
+			t.Errorf("%s merge_scan_limit = %v, want %d", c.short, got, c.want)
+		}
+	}
+}
+
+// TestMergeScanLimitRejectsNonsense: -1 and 0 both mean something, and they mean
+// opposite things, so anything below them is a typo rather than an intention.
+func TestMergeScanLimitRejectsNonsense(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[root.wd]
+dir              = "~/wd"
+merge_scan_limit = -5
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "merge_scan_limit = -5") {
+		t.Fatalf("want a merge_scan_limit error, got %v", err)
+	}
+}
+
 func writeTOML(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "f.toml"), []byte(body), 0o644); err != nil {
