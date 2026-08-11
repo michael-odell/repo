@@ -84,8 +84,24 @@ func TestRunKillsTheProcessGroup(t *testing.T) {
 	}
 
 	// Whether the child is *working* is the question, and the only one a pid
-	// can't answer: settle, then watch for a while.
-	time.Sleep(300 * time.Millisecond)
+	// can't answer. Wait for the ticking to stop rather than assuming how
+	// quickly it should: a fixed sleep here is the same class of timing
+	// assumption that made the previous version of this test flaky, and the
+	// contract is that the group dies, not that it dies within some number of
+	// milliseconds of a loaded runner's scheduler getting round to it.
+	//
+	// A child that genuinely survived never settles, so it runs this loop out
+	// and fails the check below — tolerating a slow death costs nothing.
+	settled := fileSize(t, tick)
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		if n := fileSize(t, tick); n == settled {
+			break
+		} else {
+			settled = n
+		}
+	}
+
 	before := fileSize(t, tick)
 	time.Sleep(600 * time.Millisecond)
 	if after := fileSize(t, tick); after != before {
