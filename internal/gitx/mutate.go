@@ -2,34 +2,38 @@ package gitx
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 )
 
+// The clones go through runCmd like every other invocation, which gets them the
+// network deadline — a first clone is the single likeliest thing in a sweep to
+// hang, so exempting it would have exempted the main case. It also stops them
+// writing git's transfer progress straight to the terminal: six concurrent
+// clones interleaving "Receiving objects" with each other, and with the sweep's
+// own status line, is noise rather than feedback. What is happening, and to
+// which repo, is the status line's job (see cmd/repo/progress.go); a clone that
+// fails still reports git's stderr as the error.
+
 // Clone clones url into dir (parent created by caller).
 func Clone(url, dir string) error {
-	cmd := exec.Command("git", "clone", url, dir)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	_, err := runCmd("", nil, "clone", url, dir)
+	return err
 }
 
 // CloneBare clones url into dir as a bare repository — the object store for a
 // worktree-layout container (DESIGN §4).
 func CloneBare(url, dir string) error {
-	cmd := exec.Command("git", "clone", "--bare", url, dir)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	_, err := runCmd("", nil, "clone", "--bare", url, dir)
+	return err
 }
 
 // CloneLocal clones a local repository into dir as a normal working clone,
 // hardlinking objects where possible — used to collapse a bare worktree
 // container back into a single tree (DESIGN §4.1).
 func CloneLocal(src, dir string) error {
-	cmd := exec.Command("git", "clone", "--local", src, dir)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	_, err := runCmd("", nil, "clone", "--local", src, dir)
+	return err
 }
 
 // CreateBranch creates a local branch at start (no checkout), used to preserve

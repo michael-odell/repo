@@ -39,7 +39,11 @@ func runCmd(dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutFor(args))
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+	full := args
+	if dir != "" { // "" for clone, which has no repo to be -C'd into yet
+		full = append([]string{"-C", dir}, args...)
+	}
+	cmd := exec.CommandContext(ctx, "git", full...)
 	if env != nil {
 		cmd.Env = env
 	}
