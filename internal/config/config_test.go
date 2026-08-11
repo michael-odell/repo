@@ -274,6 +274,46 @@ dir = "~/src"
 	}
 }
 
+// TestFragmentReadOnce covers a path list that reaches one fragment twice — a
+// directory plus a file inside it, and a symlink into a checkout the path also
+// names directly. Settings would overlay themselves harmlessly, but declared
+// members append, so a second read would double every repo the fragment
+// declares.
+func TestFragmentReadOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+[root.r]
+dir = "~/r"
+[[root.r.repo]]
+id = "github:me/x"
+`)
+	frag := filepath.Join(dir, "f.toml")
+	link := filepath.Join(t.TempDir(), "linked.toml")
+	if err := os.Symlink(frag, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, paths := range [][]string{
+		{dir, frag},       // the directory and a file inside it
+		{dir, dir},        // the same path entry twice
+		{dir, link},       // two routes to one file, one a symlink
+		{frag, dir, link}, // all three, in one path list
+	} {
+		reg, err := Load(paths)
+		if err != nil {
+			t.Fatalf("Load(%v): %v", paths, err)
+		}
+		repos, err := reg.Repos()
+		if err != nil {
+			t.Fatalf("Repos(): %v", err)
+		}
+		if len(repos) != 1 {
+			t.Errorf("Load(%v) declared %d repos, want 1: %v", paths, len(repos), repos)
+		}
+	}
+}
+
 func writeTOML(t *testing.T, dir, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, "f.toml"), []byte(body), 0o644); err != nil {

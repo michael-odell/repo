@@ -125,12 +125,14 @@ type member struct {
 // Load reads and merges every fragment named on the path list, rejecting any
 // unknown keys (so an out-of-date or mistyped config fails loudly rather than
 // silently ignoring the setting). A path entry may be a file or a directory (in
-// which case its *.toml files are read, sorted).
+// which case its *.toml files are read, sorted). Each distinct fragment is read
+// once however many times the path names it.
 func Load(paths []string) (*Registry, error) {
 	reg := &Registry{
 		Hosts: map[string]Host{},
 		roots: map[string]Root{},
 	}
+	read := map[string]bool{}
 	for _, p := range paths {
 		if p == "" {
 			continue
@@ -140,6 +142,11 @@ func Load(paths []string) (*Registry, error) {
 			return nil, err
 		}
 		for _, fp := range files {
+			key := fragmentKey(fp)
+			if read[key] {
+				continue // already merged, under this path entry or an earlier one
+			}
+			read[key] = true
 			var f file
 			md, err := toml.DecodeFile(fp, &f)
 			if err != nil {
@@ -163,6 +170,23 @@ func joinKeys(keys []toml.Key) string {
 	}
 	sort.Strings(ss)
 	return strings.Join(ss, ", ")
+}
+
+// fragmentKey identifies a fragment by its real location, so one file reached
+// two ways — a path entry naming a directory *and* a file inside it, or two
+// routes to one file through a symlinked dotfiles checkout — is merged once.
+// Re-merging a fragment is never meaningful and is actively wrong: settings
+// would overlay themselves harmlessly, but declared members append, so a second
+// read silently doubles every repo the fragment declares (and with it every row
+// those repos produce, and the work sync does on them).
+func fragmentKey(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		p = real
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		return abs
+	}
+	return filepath.Clean(p)
 }
 
 func fragmentFiles(p string) ([]string, error) {
