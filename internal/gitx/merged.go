@@ -47,7 +47,8 @@ func (m MergeState) String() string {
 // matches no individual commit of the branch. Rebuilding the branch as a single
 // commit against the merge base gives that collapsed patch something to match.
 // The object is unreferenced and gc reclaims it — no ref, config, or working
-// tree is touched.
+// tree is touched. It is written with runAsProbe's own identity, so the tier
+// works on a machine where git has none to auto-detect.
 func MergedState(dir, branch, base string) (MergeState, error) {
 	// Tier 1: ancestry. Also the answer for a branch with nothing of its own.
 	ahead, _, err := AheadBehindRefs(dir, base, branch)
@@ -73,7 +74,7 @@ func MergedState(dir, branch, base string) (MergeState, error) {
 	if err != nil {
 		return Unmerged, err
 	}
-	synthetic, err := run(dir, "commit-tree", tree, "-p", mergeBase, "-m", "repo: squash-merge probe")
+	synthetic, err := runAsProbe(dir, "commit-tree", tree, "-p", mergeBase, "-m", "repo: squash-merge probe")
 	if err != nil {
 		return Unmerged, err
 	}

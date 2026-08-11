@@ -107,6 +107,44 @@ func TestMergedStateTiers(t *testing.T) {
 	})
 }
 
+// TestSquashTierWorksWithoutAConfiguredIdentity: tier 3 writes a scratch commit
+// object, and git refuses to write one unless it can determine a committer.
+// Auto-detection is declined wherever the hostname has no domain — CI runners,
+// containers — so a tier relying on the ambient identity passes on a laptop and
+// fails everywhere else. The blast radius was far wider than the tier: an
+// unclassifiable branch is skipped, so every branch on a repo vanished from the
+// report at once.
+//
+// The repo here has no identity in its config and none to auto-detect; the
+// fixture's own commits pass one per invocation, where the code under test
+// cannot inherit it.
+func TestSquashTierWorksWithoutAConfiguredIdentity(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	writeFile(t, cfg, "[user]\n\tuseConfigOnly = true\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main", ".")
+	commitAs := func(file, content, msg string) {
+		t.Helper()
+		writeFile(t, filepath.Join(dir, file), content)
+		gitT(t, dir, "add", file)
+		gitT(t, dir, "-c", "user.name=A", "-c", "user.email=a@b", "commit", "-q", "-m", msg)
+	}
+
+	commitAs("f", "base\n", "base")
+	gitT(t, dir, "checkout", "-q", "-b", "feature")
+	commitAs("f", "base\none\n", "c1")
+	commitAs("f", "base\none\ntwo\n", "c2")
+	gitT(t, dir, "checkout", "-q", "main")
+	gitT(t, dir, "merge", "-q", "--squash", "feature")
+	commitAs("f", "base\none\ntwo\n", "squashed feature")
+	commitAs("later", "later\n", "later main work")
+
+	assertState(t, dir, "feature", "main", MergedSquash)
+}
+
 // TestDeleteBranchForceNeededForSquash pins why the tiers matter operationally:
 // git's own `-d` check is an ancestry test, so it refuses a squash-merged
 // branch that tier 3 has confirmed is fully landed.

@@ -32,6 +32,30 @@ func runRaw(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+// runAsProbe is run for a command that writes a throwaway object and therefore
+// needs a committer identity git would otherwise have to auto-detect. Auto-
+// detection fails outright wherever the hostname has no domain (CI runners,
+// containers) or `user.useConfigOnly` is set, so a command left to fend for
+// itself works on a developer's laptop and dies everywhere else. The identity is
+// supplied here rather than read from config because the object is never
+// referenced, never pushed, and gc reclaims it: whose name is on it is
+// meaningless, and borrowing the user's would be a small lie in the object
+// database.
+func runAsProbe(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=repo", "GIT_AUTHOR_EMAIL=repo@localhost",
+		"GIT_COMMITTER_NAME=repo", "GIT_COMMITTER_EMAIL=repo@localhost")
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
+		}
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // oneLine collapses git's (often multi-line, blank-line-padded) stderr into a
 // single line, so it reads as part of a Result's one-line Detail/Summary
 // instead of breaking out of the tabular or verbose report layout.
