@@ -698,6 +698,19 @@ blessed branches still report every rewrite; you just needn't act. Applies to ta
 too — a `vendor` pinned tag whose content moves is a rewrite matched against the
 pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).
 
+**A tag the upstream moved stops the tag, not the repo.** `--tags` asks for
+`refs/tags/*:refs/tags/*` with no leading `+`, so git declines to overwrite a tag
+the clone already has: it rejects exactly those refs, updates every other ref in
+the same run, and *then* exits non-zero because something didn't update. Reading
+that status as "the fetch failed" abandons a repo whose remote-tracking branches
+are in fact current — and does it on every later sync too, since the rejected tag
+stays rejected, so a single upstream tag rewrite silently freezes a repo
+indefinitely. `sync` therefore separates the two using `fetch --porcelain`, whose
+per-ref lines say which refs were refused: a failure whose rejections are *all*
+tags is reported as a finding on a repo that still syncs, and anything else —
+including a rejected branch alongside them — stays a failure. This is the same
+shape as an unmatched `force_pull`: the thing that diverged is what stops.
+
 ### 5.3 Prune — three tiers (rebase/squash aware)
 
 `git branch --merged` answers only "is this branch an ancestor", so a branch that

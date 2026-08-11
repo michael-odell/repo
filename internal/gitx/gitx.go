@@ -36,6 +36,21 @@ func runRaw(dir string, args ...string) (string, error) {
 // nothing to report and nothing to interrupt but the process tree. A timeout
 // turns that into an ordinary per-repo failure the report can name.
 func runCmd(dir string, env []string, args ...string) (string, error) {
+	out, _, err := runCmdCode(dir, env, args...)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// runCmdCode is runCmd with the exit status and — unlike runCmd — the standard
+// output git produced even when it exited non-zero. It exists for `fetch
+// --porcelain`, which writes one machine-readable line per ref to stdout while
+// the exit status says only "some ref didn't update": discarding stdout on
+// failure would throw away the sole account of *which* refs failed and why,
+// leaving nothing to distinguish a repo-wide problem from a handful of refused
+// tags. Callers that don't need that distinction should use runCmd.
+func runCmdCode(dir string, env []string, args ...string) (stdout string, code int, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeoutFor(args))
 	defer cancel()
 
@@ -60,15 +75,16 @@ func runCmd(dir string, env []string, args ...string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", fmt.Errorf("git %s: timed out after %s (raise %s)",
+			return "", 0, fmt.Errorf("git %s: timed out after %s (raise %s)",
 				strings.Join(args, " "), timeoutFor(args), timeoutEnvFor(args))
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
+			return string(out), ee.ExitCode(),
+				fmt.Errorf("git %s: %s", strings.Join(args, " "), oneLine(ee.Stderr))
 		}
-		return "", err
+		return "", 0, err
 	}
-	return string(out), nil
+	return string(out), 0, nil
 }
 
 // Timeouts are split in two because the two kinds of git command fail

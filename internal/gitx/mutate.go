@@ -90,10 +90,71 @@ func EnsureRemote(dir, name, url string) (changed bool, err error) {
 	return changed, err
 }
 
-// Fetch fetches a remote with prune and tags.
+// MovedTagsError reports a fetch that failed *only* because the remote moved
+// tags this clone already has. `--tags` asks for refs/tags/*:refs/tags/* with no
+// leading "+", so git refuses to overwrite an existing tag: it rejects those
+// refs individually, updates every other ref in the same run, and then exits 1
+// because something didn't update. The distinction matters because that exit
+// status is otherwise indistinguishable from a fetch that achieved nothing —
+// and treating the two alike abandons a repo whose branches are, in fact,
+// current (DESIGN §5.2).
+//
+// It carries the tags rather than a message so the caller can report them in
+// its own voice, and says nothing about *why* upstream moved them: a rewritten
+// tag is what git observed, and whether that was a release process or something
+// worth alarm is not a thing a fetch can establish.
+type MovedTagsError struct {
+	Remote string
+	Tags   []string // local tag names left at their old value
+}
+
+func (e *MovedTagsError) Error() string {
+	return fmt.Sprintf("%s moved %d existing tag(s), not followed: %s",
+		e.Remote, len(e.Tags), strings.Join(e.Tags, ", "))
+}
+
+// Fetch fetches a remote with prune and tags. A fetch that fails only because
+// the remote moved tags the clone already has returns *MovedTagsError; every
+// other failure returns git's error unchanged.
 func Fetch(dir, remote string) error {
-	_, err := run(dir, "fetch", "--prune", "--tags", remote)
-	return err
+	out, code, err := runCmdCode(dir, nil, "fetch", "--porcelain", "--prune", "--tags", remote)
+	if err == nil {
+		return nil
+	}
+	// Exit 1 is git's "some ref did not update", the only status that can mean a
+	// per-ref refusal; anything else (128 for a dead connection or a bad remote)
+	// failed before or beyond ref negotiation and is nobody's tag problem.
+	if code != 1 {
+		return err
+	}
+	tags, onlyTags := rejectedTags(out)
+	if !onlyTags || len(tags) == 0 {
+		return err
+	}
+	return &MovedTagsError{Remote: remote, Tags: tags}
+}
+
+// rejectedTags reads `fetch --porcelain` output — one "<flag> <old> <new>
+// <ref>" line per ref, with "!" marking a ref git declined to update — and
+// returns the rejected tags, plus whether *every* rejection was a tag. A
+// rejected branch means something else went wrong, and the caller must keep
+// treating that as a failure rather than shrugging it off with the tags.
+func rejectedTags(porcelain string) (tags []string, onlyTags bool) {
+	for _, line := range splitLines(porcelain) {
+		if !strings.HasPrefix(line, "!") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 4 {
+			return nil, false // unparseable: assume the worst and stay fatal
+		}
+		ref := f[3]
+		if !strings.HasPrefix(ref, "refs/tags/") {
+			return nil, false
+		}
+		tags = append(tags, strings.TrimPrefix(ref, "refs/tags/"))
+	}
+	return tags, true
 }
 
 // FastForwardCurrent fast-forwards the checked-out branch to ref, failing (not

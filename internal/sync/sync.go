@@ -4,6 +4,7 @@
 package sync
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -426,8 +427,7 @@ func (x *run) provisionWorktree() bool {
 	if upstream != "" {
 		_, _ = gitx.EnsureRemote(x.container, "upstream", upstream)
 	}
-	if err := gitx.Fetch(x.container, "origin"); err != nil {
-		x.fail(err)
+	if !x.fetchRemote("origin") {
 		return false
 	}
 	if upstream != "" {
@@ -438,6 +438,42 @@ func (x *run) provisionWorktree() bool {
 	// an assumed branch would materialize it, not just misreport it.
 	x.adoptClonedBranch()
 	return true
+}
+
+// fetchRemote fetches one remote and reports whether the run may continue.
+//
+// A fetch that failed only because upstream moved tags this clone already has
+// is a finding, not a failure. Git refuses to overwrite an existing tag, so it
+// rejects exactly those refs and updates everything else in the same run — the
+// remote-tracking branches this sync is actually about are current. Stopping
+// there abandons the entire repo (no branch reconciled, no worktree updated,
+// nothing pushed) over tags that nothing has asked to follow, and does it on
+// every subsequent sync too, since the rejected tag stays rejected. So the
+// moved tags are reported and the run goes on — the same shape as an unmatched
+// branch rewrite, which stops the branch and not the repo (DESIGN §5.2).
+func (x *run) fetchRemote(remote string) bool {
+	err := gitx.Fetch(x.container, remote)
+	if err == nil {
+		x.add("fetched %s", remote)
+		return true
+	}
+	var moved *gitx.MovedTagsError
+	if !errors.As(err, &moved) {
+		x.fail(err)
+		return false
+	}
+	x.add("fetched %s; %s", remote, err)
+	x.attention(movedTagsDetail(moved.Tags))
+	return true
+}
+
+// movedTagsDetail names the moved tags when there are few enough to read in a
+// report row, and counts them otherwise.
+func movedTagsDetail(tags []string) string {
+	if len(tags) <= 2 {
+		return fmt.Sprintf("tag %s moved upstream — not followed", strings.Join(tags, ", "))
+	}
+	return fmt.Sprintf("%d tags moved upstream — not followed", len(tags))
 }
 
 // fetchWorktreeRemotes ensures origin (and upstream, for a fork) are set and
@@ -457,11 +493,9 @@ func (x *run) fetchWorktreeRemotes() bool {
 	if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
 		x.add("set origin = %s", origin)
 	}
-	if err := gitx.Fetch(x.container, "origin"); err != nil {
-		x.fail(err)
+	if !x.fetchRemote("origin") {
 		return false
 	}
-	x.add("fetched origin")
 	if upstream != "" {
 		if changed, _ := gitx.EnsureRemote(x.container, "upstream", upstream); changed {
 			x.add("set upstream = %s", upstream)
@@ -572,11 +606,9 @@ func (x *run) provision() bool {
 	if x.opts.DryRun {
 		x.add("would fetch origin%s", ifFork(x.r, " and upstream"))
 	} else {
-		if err := gitx.Fetch(x.container, "origin"); err != nil {
-			x.fail(err)
+		if !x.fetchRemote("origin") {
 			return false
 		}
-		x.add("fetched origin")
 		if x.r.Fork != nil {
 			if err := gitx.Fetch(x.container, "upstream"); err == nil {
 				x.add("fetched upstream")
