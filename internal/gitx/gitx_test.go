@@ -3,6 +3,7 @@ package gitx
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -56,5 +57,33 @@ func TestDefaultBranchMissingSymref(t *testing.T) {
 
 	if got, ok := DefaultBranch(clone, "origin"); ok {
 		t.Errorf("DefaultBranch = %q, true; want false with the symref removed", got)
+	}
+}
+
+// TestLocalBranchRefsSurvivesABrokenRef: only the date reads the object, and
+// one ref pointing at a missing one makes for-each-ref fail for the entire
+// repo. A damaged repo is exactly when the branch inventory matters most, so
+// the healthy branches keep their names and tips and the answer degrades to
+// "when it moved is unknown" rather than to nothing at all.
+func TestLocalBranchRefsSurvivesABrokenRef(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main", ".")
+	git(t, dir, "commit", "-q", "--allow-empty", "-m", "one")
+	if err := os.WriteFile(filepath.Join(dir, ".git", "refs", "heads", "broken"),
+		[]byte("0000000000000000000000000000000000000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := LocalBranchRefs(dir)
+	if err != nil {
+		t.Fatalf("a single broken ref took the whole inventory with it: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("got %d refs, want main and broken: %+v", len(refs), refs)
+	}
+	for _, r := range refs {
+		if r.SHA == "" {
+			t.Errorf("%s has no object name, which the refs themselves carry", r.Name)
+		}
 	}
 }

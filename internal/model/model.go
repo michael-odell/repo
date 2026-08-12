@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/michael-odell/repo/internal/ident"
 )
@@ -73,9 +74,20 @@ type Repo struct {
 	// "nobody said", not "switch the tiers off", or a Repo built anywhere but
 	// config would quietly stop detecting squash merges.
 	MergeScanLimit *int
-	Prune          string // "auto" | "report" | "manual"
-	Pin            string // vendor only
-	Hooks          []Hook
+	Prune          string // "auto" | "report" | "interactive" | "manual"
+
+	// PruneKeep names branches prune must never remove, whatever the merge
+	// tiers concluded, and PruneMinAge how long a ref must have sat still to be
+	// removable at all (DESIGN §5.3). Both are the person's judgement rather
+	// than the evidence's: a tier answers "has this landed", and neither of
+	// these disputes the answer — they say the branch stays regardless. Zero
+	// PruneMinAge is no age gate, which is why it needs no pointer: "nobody
+	// said" and "no minimum" are the same instruction here.
+	PruneKeep   []string
+	PruneMinAge time.Duration
+
+	Pin   string // vendor only
+	Hooks []Hook
 
 	// Discovered-only: a repo found on disk that the registry does not declare
 	// (DESIGN §3.2). Dir is its actual container (authoritative over the computed

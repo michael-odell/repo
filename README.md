@@ -40,7 +40,7 @@ fails loudly instead of misbehaving.
 [defaults]
 worktrees  = false          # single working tree (true → bare + worktree-per-branch)
 branches   = ["main"]       # important branches, synced/worktree'd
-prune      = "auto"         # auto | report | manual  — stale-branch policy (§5.3)
+prune      = "report"       # report | interactive | auto | manual  (§5.3)
 host       = "github"       # default host for bare-name clones
 fork_owner = "github:michael-odell"   # forks derive here unless overridden
 # push/task_branches (auto|manual|never, auto|report|pull-only) default per
@@ -131,7 +131,9 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `expected_untracked` | list of path globs                      | untracked files that are expected rather than notable — suppresses the report, never the data-safety rules (§3.6) |
 | `expected_uncommitted` | list of path globs                    | as above, for tracked files with local modifications (§3.6) |
 | `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 1000 (§5.3) |
-| `prune`      | `auto` \| `report` \| `manual`                  | stale local-branch handling |
+| `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
+| `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
+| `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
 | `pin`        | branch \| tag \| `latest-tag`                   | vendor only: what to track |

@@ -3,6 +3,7 @@ package sync
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
@@ -14,7 +15,12 @@ import (
 // same verdict, so the line you see during a sweep is the decision prune would
 // act on — not a second, similar-looking calculation that might disagree.
 type Verdict struct {
-	Name     string
+	Name string
+	// SHA is what the ref holds, carried out of classification rather than
+	// re-read at deletion time: it is the whole content of the journal's
+	// restore line, and after the branch is gone there is nothing left to ask.
+	SHA      string
+	Updated  time.Time // when the ref last moved (tip date or reflog, later wins)
 	State    gitx.MergeState
 	Ahead    int    // commits the important branch lacks (0 once merged)
 	Worktree string // the tree holding this branch, "" when none does
@@ -73,13 +79,14 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 	for _, b := range r.Branches {
 		important[b] = true
 	}
-	branches, err := gitx.LocalBranches(container)
+	branches, err := gitx.LocalBranchRefs(container)
 	if err != nil {
 		return nil, err
 	}
 
 	var out []Verdict
-	for _, b := range branches {
+	for _, ref := range branches {
+		b := ref.Name
 		if important[b] {
 			continue
 		}
@@ -101,6 +108,8 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 			// instead of filling it with errors.
 			out = append(out, Verdict{
 				Name:     b,
+				SHA:      ref.SHA,
+				Updated:  ref.Updated,
 				Unknown:  true,
 				Worktree: gitx.WorktreeFor(container, b),
 				Blocker:  why,
@@ -108,18 +117,67 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 			continue
 		}
 		ahead, _ := aheadBehind(container, b, base)
-		v := Verdict{Name: b, State: state, Ahead: ahead, Worktree: gitx.WorktreeFor(container, b)}
+		v := Verdict{
+			Name:     b,
+			SHA:      ref.SHA,
+			Updated:  ref.Updated,
+			State:    state,
+			Ahead:    ahead,
+			Worktree: gitx.WorktreeFor(container, b),
+		}
+		// Ordered by who is refusing. Git's own answers come first — the work
+		// isn't landed, or a tree is standing on the branch — and only then the
+		// two settings, which don't dispute the merge question at all: they say
+		// the branch stays regardless of it. Reporting "kept (prune_keep)" for
+		// a branch that is also unmerged would name the weaker reason and
+		// suggest the setting is what stands between you and losing the work.
 		switch {
 		case !state.Merged():
 			v.Blocker = "unmerged"
 		case v.Worktree != "":
 			v.Blocker = "checked out"
+		case matchesAny(r.PruneKeep, b):
+			v.Blocker = "kept (prune_keep)"
+		case tooYoung(v, r.PruneMinAge):
+			v.Blocker = fmt.Sprintf("moved %s ago (prune_min_age %s)",
+				roughAge(time.Since(v.Updated)), roughAge(r.PruneMinAge))
 		default:
 			v.Prunable = true
 		}
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// tooYoung reports whether a ref has moved too recently to be removed.
+//
+// A zero Updated means nothing could be established about when the branch last
+// moved, and an unknown age never satisfies a minimum: the setting exists to
+// hold back branches that might still be in use, and "I couldn't tell" is not
+// evidence that one isn't.
+func tooYoung(v Verdict, min time.Duration) bool {
+	if min <= 0 {
+		return false
+	}
+	return v.Updated.IsZero() || time.Since(v.Updated) < min
+}
+
+// roughAge renders a duration at the resolution the setting is written in.
+// "moved 3d ago (prune_min_age 14d)" is the sentence someone can act on;
+// "moved 78h13m4s ago" makes them do arithmetic to reach the same place.
+func roughAge(d time.Duration) string {
+	switch {
+	case d >= 14*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d/(7*24*time.Hour)))
+	case d >= 24*time.Hour:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	default:
+		return "moments"
+	}
 }
 
 // scanLimitOf resolves how far merge detection may scan for this repo: what

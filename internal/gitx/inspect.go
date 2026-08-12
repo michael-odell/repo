@@ -1,6 +1,12 @@
 package gitx
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
 
 // UntrackedFiles lists untracked, non-ignored files in a working tree (the work
 // a layout collapse must not silently discard).
@@ -61,6 +67,89 @@ func LocalBranches(dir string) ([]string, error) {
 		return nil, err
 	}
 	return splitLines(out), nil
+}
+
+// BranchRef is a local branch with the facts a deletion needs: what it points
+// at, and when it last moved.
+type BranchRef struct {
+	Name    string
+	SHA     string
+	Updated time.Time
+}
+
+// LocalBranchRefs lists local branches with their tips and last movement.
+//
+// One `for-each-ref` for the whole repo, the same single invocation
+// LocalBranches already costs — the SHA and the date come back in the same
+// output, so knowing what a branch points at is free where asking per branch
+// would be one process each.
+//
+// "When it moved" is the later of the tip's committer date and the ref log's
+// mtime, because neither alone is the question being asked. Committer date
+// misses a branch created today at an ancient commit (`git branch old <sha>`),
+// which reads years stale while being minutes old. Reflog mtime misses the
+// branches of a fresh clone, which have no local log at all and would read as
+// brand new — the safe direction, but wrong often enough to matter on a machine
+// that reclones. Taking the later of the two is wrong only when both are, and
+// errs toward "recently touched", which errs toward not deleting.
+func LocalBranchRefs(dir string) ([]BranchRef, error) {
+	// A space separates the fields because git's own ref-name rules forbid one
+	// inside a branch name, which makes it the one delimiter that cannot appear
+	// in the data. (NUL would be the usual choice and is not available: an
+	// argument carrying one cannot cross exec.)
+	//
+	// The date is asked for separately from the rest, because it is the only
+	// field that reads the *object*: one ref pointing at a missing object makes
+	// `for-each-ref` fail for the whole repo, and a single damaged branch must
+	// not cost every other branch its verdict — a repo arrives damaged exactly
+	// when someone most needs to be told which branch is the problem. Ref names
+	// and object *names* come straight out of the refs, so they survive it.
+	out, err := run(dir, "for-each-ref",
+		"--format=%(refname:short) %(objectname) %(committerdate:unix)", "refs/heads")
+	if err != nil {
+		out, err = run(dir, "for-each-ref", "--format=%(refname:short) %(objectname) 0", "refs/heads")
+	}
+	if err != nil {
+		return nil, err
+	}
+	logDir := reflogDir(dir)
+	var refs []BranchRef
+	for _, line := range splitLines(out) {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		r := BranchRef{Name: f[0], SHA: f[1]}
+		// A zero date is the fallback format above saying it could not read the
+		// objects; it stays the zero time rather than 1970, so callers can tell
+		// "never established" from "very old" — the difference between holding a
+		// branch back and offering it up.
+		if secs, err := strconv.ParseInt(f[2], 10, 64); err == nil && secs > 0 {
+			r.Updated = time.Unix(secs, 0)
+		}
+		if logDir != "" {
+			if fi, err := os.Stat(filepath.Join(logDir, filepath.FromSlash(r.Name))); err == nil {
+				if fi.ModTime().After(r.Updated) {
+					r.Updated = fi.ModTime()
+				}
+			}
+		}
+		refs = append(refs, r)
+	}
+	return refs, nil
+}
+
+// reflogDir locates logs/refs/heads for a repo, which is in the *common* git
+// dir: a linked worktree's own .git holds only that worktree's HEAD log, while
+// branch logs are shared by every worktree of the repo. Returns "" when git
+// won't say, which costs the caller the mtime half of the answer and nothing
+// else.
+func reflogDir(dir string) string {
+	common, err := run(dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || common == "" {
+		return ""
+	}
+	return filepath.Join(common, "logs", "refs", "heads")
 }
 
 // RemoteBranches lists a remote's branch names (short form), excluding its HEAD

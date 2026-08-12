@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
@@ -241,4 +242,99 @@ func TestClassifyNamesAMissingBase(t *testing.T) {
 	if !strings.Contains(err.Error(), `"trunk"`) {
 		t.Errorf("the error does not name the missing branch: %v", err)
 	}
+}
+
+// TestPruneKeepOutranksTheVerdict: the tiers answer "has this landed", and
+// prune_keep does not dispute the answer — it says the branch stays anyway. So
+// the branch must still read as landed, with the *setting* named as what is
+// holding it, or the report would look like a classification failure.
+func TestPruneKeepOutranksTheVerdict(t *testing.T) {
+	dir := landedBranchRepo(t, "wip/spike")
+
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneKeep: []string{"wip/*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := findVerdict(t, vs, "wip/spike")
+	if v.Prunable {
+		t.Error("prune_keep did not hold the branch")
+	}
+	if !v.State.Merged() {
+		t.Error("prune_keep changed the merge verdict; it is only supposed to change what happens next")
+	}
+	if !strings.Contains(v.Blocker, "prune_keep") {
+		t.Errorf("blocker %q does not name the setting doing the keeping", v.Blocker)
+	}
+}
+
+// TestPruneMinAgeHoldsAFreshBranch: a branch whose work landed a minute ago is
+// exactly the one still likely to be in play, and it is the case an age gate
+// exists for.
+func TestPruneMinAgeHoldsAFreshBranch(t *testing.T) {
+	dir := landedBranchRepo(t, "feature")
+
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneMinAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := findVerdict(t, vs, "feature")
+	if v.Prunable {
+		t.Error("a branch that moved moments ago was offered for deletion under a 1h minimum")
+	}
+	if !strings.Contains(v.Blocker, "prune_min_age") {
+		t.Errorf("blocker %q does not name the setting doing the holding", v.Blocker)
+	}
+
+	// The same branch with no minimum set: the gate is opt-in, and an unset
+	// setting must not quietly protect everything.
+	vs, err = Classify(dir, model.Repo{Branches: []string{"main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !findVerdict(t, vs, "feature").Prunable {
+		t.Error("an unset prune_min_age held the branch back anyway")
+	}
+}
+
+// TestVerdictCarriesTheTipSHA: the journal's restore line is built from this,
+// and after the branch is deleted there is nowhere left to read it from.
+func TestVerdictCarriesTheTipSHA(t *testing.T) {
+	dir := landedBranchRepo(t, "feature")
+	want, ok := gitx.RevParse(dir, "feature")
+	if !ok {
+		t.Fatal("no tip to compare against")
+	}
+
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := findVerdict(t, vs, "feature").SHA; got != want {
+		t.Errorf("verdict SHA = %q, want %q", got, want)
+	}
+}
+
+// landedBranchRepo builds a repo whose named branch is merged into main and
+// left unchecked-out, so nothing but policy can block it.
+func landedBranchRepo(t *testing.T, branch string) string {
+	t.Helper()
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main", ".")
+	writeCommit(t, dir, "f", "x\n", "one")
+	git(t, dir, "checkout", "-q", "-b", branch)
+	writeCommit(t, dir, "g", "y\n", "two")
+	git(t, dir, "checkout", "-q", "main")
+	git(t, dir, "merge", "-q", "--ff-only", branch)
+	return dir
+}
+
+func findVerdict(t *testing.T, vs []Verdict, name string) Verdict {
+	t.Helper()
+	for _, v := range vs {
+		if v.Name == name {
+			return v
+		}
+	}
+	t.Fatalf("no verdict for %q in %+v", name, vs)
+	return Verdict{}
 }

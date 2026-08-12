@@ -18,7 +18,7 @@ var (
 	validPush         = []string{"auto", "manual", "never"}
 	validTaskBranches = []string{"auto", "report", "pull-only"}
 	validShowBranches = []string{"none", "notable", "unmerged", "all"}
-	validPrune        = []string{"auto", "report", "manual"}
+	validPrune        = []string{"auto", "report", "interactive", "manual"}
 )
 
 // Validate checks the loaded registry semantically and returns a single error
@@ -43,10 +43,12 @@ func (reg *Registry) Validate() error {
 		checkEnums(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkGlobs(add, fmt.Sprintf("root %q", n), globsOfSettings(r.Settings))
 		checkScanLimit(add, fmt.Sprintf("root %q", n), r.Settings)
+		checkAge(add, fmt.Sprintf("root %q", n), r.Settings)
 	}
 	checkEnums(add, "defaults", reg.defaults)
 	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
 	checkScanLimit(add, "defaults", reg.defaults)
+	checkAge(add, "defaults", reg.defaults)
 
 	// effective() surfaces id/fork parse errors and undervable forks; resolving
 	// Physical additionally catches unknown hosts. Report the first structural
@@ -128,6 +130,20 @@ func checkScanLimit(add func(string, ...any), where string, s Settings) {
 	}
 }
 
+// checkAge rejects a prune_min_age nothing can read. It is checked at every
+// tier rather than only where a repo resolves, because a root that currently
+// declares no repos still holds the setting for whatever lands under it later,
+// and a typo that waits for its first repo to surface is a typo that surfaces
+// during someone else's task.
+func checkAge(add func(string, ...any), where string, s Settings) {
+	if s.PruneMinAge == nil {
+		return
+	}
+	if _, err := ParseAge(*s.PruneMinAge); err != nil {
+		add("%s: prune_min_age: %v", where, err)
+	}
+}
+
 func checkEnums(add func(string, ...any), where string, s Settings) {
 	check := func(field string, v *string, allowed []string) {
 		if v != nil && !contains(allowed, *v) {
@@ -155,6 +171,7 @@ func checkGlobs(add func(string, ...any), where string, s globSettings) {
 	}
 	check("force_push", s.ForcePush)
 	check("force_pull", s.ForcePull)
+	check("prune_keep", s.PruneKeep)
 	check("expected_untracked", s.ExpectedUntracked)
 	check("expected_uncommitted", s.ExpectedUncommitted)
 	checkRefspecGlobs(add, where, "tags", s.Tags)
@@ -213,6 +230,7 @@ func checkPinReachesItsTag(add func(string, ...any), r model.Repo) {
 type globSettings struct {
 	ForcePush           []string
 	ForcePull           []string
+	PruneKeep           []string
 	Tags                []string
 	ForceTags           []string
 	ExpectedUntracked   []string
@@ -223,6 +241,7 @@ func globsOfSettings(s Settings) globSettings {
 	return globSettings{
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		PruneKeep:           s.PruneKeep,
 		Tags:                s.Tags,
 		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
@@ -234,6 +253,7 @@ func globsOfRepo(r model.Repo) globSettings {
 	return globSettings{
 		ForcePush:           r.ForcePush,
 		ForcePull:           r.ForcePull,
+		PruneKeep:           r.PruneKeep,
 		Tags:                r.Tags,
 		ForceTags:           r.ForceTags,
 		ExpectedUntracked:   r.ExpectedUntracked,

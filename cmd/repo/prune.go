@@ -156,7 +156,17 @@ func runPrune(w io.Writer, selected []model.Repo, opts pruneOpts) error {
 func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.Verdict, log *journal.Log, opts pruneOpts) int {
 	n := 0
 	for _, v := range prunable {
-		sha, _ := gitx.RevParse(container, v.Name)
+		// The SHA came out of classification, which read it before anything was
+		// deleted — the only moment it was available for free and the only
+		// moment it was certain to still be there.
+		sha := v.SHA
+		if sha == "" {
+			// No SHA is no restore line, and a deletion nobody can undo is not
+			// one this command makes. Reaching here means classification could
+			// not read the ref at all, which is itself worth seeing.
+			fmt.Fprintf(w, "    ✗ %s: no object recorded for this ref — not deleted\n", v.Name)
+			continue
+		}
 		if opts.DryRun {
 			fmt.Fprintf(w, "    ✂ would delete %s (%s)\n", v.Name, shortSHA(sha))
 			n++
