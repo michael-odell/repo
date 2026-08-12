@@ -176,9 +176,9 @@ func (x *run) onVendorBranch(branch string) bool {
 	return true
 }
 
-// vendorCheckoutTag pins the working tree to a tag, treating a moved tag as a
-// rewrite (matched against `force_pull`, DESIGN §5.2) and reporting an
-// ordinary version bump otherwise.
+// vendorCheckoutTag pins the working tree to a tag and reports the version bump.
+// Whether that tag moved under it is the fetch's business, not this function's —
+// see below.
 func (x *run) vendorCheckoutTag(tag string) {
 	tagCommit, ok := gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
 	if !ok {
@@ -187,42 +187,23 @@ func (x *run) vendorCheckoutTag(tag string) {
 		return
 	}
 
-	// A moved tag is a rewrite. There are two ways to learn of one, and which
-	// applies depends on whether `force_tags` blessed this tag before the fetch
-	// ran — after the fetch, the local tag and the remote's agree either way, so
-	// asking the remote now can no longer tell the cases apart.
-	if move, followed := x.tagMove(tag); followed {
-		// The fetch already overwrote it. Refusing here would be theatre: the
-		// object this tag used to name is gone, and the pin is the only thing
-		// still pointing at the reviewed content. Report the move in full —
-		// including the id it moved *from*, which after this exists nowhere else
-		// — and carry on to check the working tree out at the new content. A
-		// vendored upstream you don't control is exactly the case `force_tags`
-		// is for; the review signal has to survive the convenience, not block it.
-		x.branchMark(x.ub, Attention, "tag "+move.String())
-		x.add("pinned tag %s was force-followed during fetch: was %s, now %s", tag, move.From, move.To)
-		tagCommit, _ = gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
-	} else if localTag, ok := gitx.RevParse(x.dir, "refs/tags/"+tag); ok {
-		// Not blessed, so the fetch refused it and the local tag still holds the
-		// reviewed content. Ask the remote what it has now: this is the one
-		// remaining case where the two can differ.
-		if remoteTag, ok := gitx.RemoteTagSHA(x.dir, "origin", tag); ok && remoteTag != localTag {
-			if !matchesAny(x.r.ForcePull, tag) {
-				x.branchMark(x.ub, Attention, fmt.Sprintf("tag %s moved upstream — stopped", tag))
-				x.add("tag %s content moved (no force_pull or force_tags match): staying at the reviewed tag", tag)
-				return
-			}
-			if x.opts.DryRun {
-				x.add("would follow moved tag %s", tag)
-			} else if err := gitx.ForceFetchTag(x.dir, "origin", tag); err != nil {
-				x.fail(err)
-				return
-			} else {
-				x.add("followed moved tag %s: was %s, now %s", tag, localTag, remoteTag)
-				tagCommit, _ = gitx.RevParse(x.dir, "refs/tags/"+tag+"^{commit}")
-			}
-		}
-	}
+	// Nothing here detects or arbitrates a tag rewrite, and that is the point:
+	// the fetch already did both, for every workflow alike (DESIGN §5.2). This
+	// used to re-derive it — ls-remote the tag, compare against the local one,
+	// consult force_pull — which was a second, vendor-only answer to a question
+	// `tags`/`force_tags` now answer once for every repo. Deleting it costs
+	// nothing, because the *ref* already encodes the verdict:
+	//
+	//	tag moved, unblessed → the fetch refused it, so refs/tags/<pin> still
+	//	                       holds the reviewed object and checking it out
+	//	                       lands on the reviewed content, unchanged
+	//	tag moved, blessed   → the fetch followed it and reported the move with
+	//	                       both object ids, so checking it out lands on the
+	//	                       new content, as asked, and visibly
+	//
+	// The old "stopped" branch was therefore doing by hand what not moving a ref
+	// does by itself — and doing it *only* for vendor, so the identical rewrite
+	// went unmentioned on an upstream-push repo.
 
 	if head, _ := gitx.RevParse(x.dir, "HEAD"); head == tagCommit {
 		x.add("pinned at %s", tag)

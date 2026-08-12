@@ -174,7 +174,7 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 				prev = a.At
 			}
 			for _, b := range r.Branches {
-				fmt.Fprintf(w, "    %s %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
+				fmt.Fprintf(w, "    %s %s: %s\n", color(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Label(), b.Summary)
 			}
 		}
 		fmt.Fprintln(w)
@@ -186,7 +186,7 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 			// The empty workflow cell keeps a branch's summary under the repo
 			// details it elaborates, rather than under the workflow column.
 			for _, b := range r.Branches {
-				fmt.Fprintf(tw, "    %s\t  %s\t\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Name, b.Summary)
+				fmt.Fprintf(tw, "    %s\t  %s\t\t%s\n", colorCell(outcomeColor(b.Outcome), syncGlyph(b.Outcome)), b.Label(), b.Summary)
 			}
 		}
 		tw.Flush()

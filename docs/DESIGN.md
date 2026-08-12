@@ -316,12 +316,15 @@ has actually diverged:
 
 - **`force_push`** — local rewrote its own history (rebase/amend); the listed
   branches may be force-pushed over the remote's version.
-- **`force_pull`** — the remote rewrote (someone force-pushed, or a `vendor` tag
-  moved); the listed branches (or pins) may be reset/re-checked-out to match,
-  clobbering the local copy.
+- **`force_pull`** — the remote rewrote (someone force-pushed); the listed branches
+  may be reset to match, clobbering the local copy.
+- **`force_tags`** — the remote moved a tag it had already published; the listed
+  tags may be overwritten to match, discarding the object they named. The tag
+  counterpart to `force_pull`, and the only setting that follows a moved tag —
+  in every workflow, `vendor` included.
 
-Both default to empty, everywhere: no forced overwrite in either direction is ever
-attempted without an explicit, per-branch opt-in. Full mechanics, including the
+All three default to empty, everywhere: no forced overwrite in any direction is
+ever attempted without an explicit, per-ref opt-in. Full mechanics, including the
 never-clobber-unpushed-work rail, are in §5.2.
 
 **`tags`** and **`force_tags`** are the same split applied to tags, and they are
@@ -620,7 +623,7 @@ most of what this section is for:
 | `upstream-push`       | `origin/<branch>`       | FF from origin when behind; ahead-only → per `push` (default `manual`) | diverged → `force_pull` decides, else skip+report |
 | `fork-pr`             | `upstream/<branch>`     | FF to upstream, then push to fork per `push` (default `auto`); via `gh repo sync` when available | local commits ahead of *upstream* → always report (a PR, not a push, lands those); fork push not FF → `force_push` decides, else skip+report |
 | `supply-chain-mirror` | `origin/<branch>` (the fork) — `untrusted` is fetched and compared, **never merged** | FF from origin when behind; ahead-only → per `push` (default `never`); `untrusted` only ever advances via `repo review` (§5.4), independent of `push` | diverged from origin → `force_pull` decides, else skip+report; `untrusted` ahead of origin → "review pending" |
-| `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → per `push` (default `never`, *"consider changing workflow"*); pin moved on a diverged tag → `force_pull` decides |
+| `vendor`              | the `pin`               | branch→FF; tag→checkout; `latest-tag`→re-resolve, checkout, report bump | local commits → per `push` (default `never`, *"consider changing workflow"*); a moved pin tag → `force_tags` decides, at fetch time, as on every other workflow |
 
 Task branches (any branch not in `branches`) are handled per `task_branches`
 (§3.6) uniformly across workflows. A task branch's findings are reported the
@@ -710,11 +713,11 @@ A non-fast-forward is a divergence in one of two directions, each governed by it
 own glob list of branch names (§3.6), both empty (no branch, i.e. never) by
 default:
 
-- **`force_pull`** — the *remote* rewrote (someone force-pushed, or a `vendor`
-  pinned tag's content moved). A branch matching the list is reset/re-checked-out
-  to the remote's version without manual intervention, **but always surfaces that
-  it happened.** A branch *not* matching is skipped and surfaced prominently
-  instead — the right default for supply-chain safety.
+- **`force_pull`** — the *remote* rewrote (someone force-pushed). A branch matching
+  the list is reset to the remote's version without manual intervention, **but
+  always surfaces that it happened.** A branch *not* matching is skipped and
+  surfaced prominently instead — the right default for supply-chain safety.
+  Branches only: a moved *tag* is `force_tags` (§3.6), in every workflow.
 - **`force_push`** — the *local* copy rewrote (rebase/amend). A branch matching the
   list may be force-pushed over the remote's version. A branch not matching is
   skipped and surfaced, same as an unmatched `force_pull` — `sync` never
@@ -736,29 +739,38 @@ glob match — never clobber work you haven't pushed anywhere:
   strictly *less* recoverable than a commit, so it gets the same protection.
 
 The notice fires on *detection*, so
-blessed branches still report every rewrite; you just needn't act. Applies to tags
-too — a `vendor` pinned tag whose content moves is a rewrite matched against the
-pin name (a normal *new higher* tag is an ordinary advance, not a rewrite).
+blessed branches still report every rewrite; you just needn't act.
 
-**A followed tag move always reports the object it moved away from**, and stays
-on the repo's row alongside whatever else happened rather than competing with it
-for the one detail slot. That id is not decoration: `refs/tags` has no reflog, so
-once the fetch lands it exists nowhere else, and it is the only way back to the
-content the tag used to name. `force_tags` therefore says "stop stopping for
-this", never "stop telling me" — the same bargain `force_pull` makes for
-branches, and what makes the setting safe to put on an upstream you don't
-control.
+**Tags take the same shape through `force_tags`, and it is the same shape for
+every workflow.** A tag the list does not name is refused by the fetch and
+reported; a tag it names is overwritten and reported, always with the object it
+moved away from — `refs/tags` has no reflog, so once the fetch lands that id
+exists nowhere else, and it is the only route back to the content the tag used
+to name. `force_tags` therefore says "stop stopping for this", never "stop
+telling me".
 
-This is also how the `vendor` review gate survives `force_tags` instead of being
-disarmed by it. That gate used to detect a rewrite by comparing the local tag
-against `ls-remote`; once a fetch is allowed to follow the move, the two agree
-and the comparison sees nothing. The fetch is the only thing that still knows, so
-the pin consults *it*: a pinned tag the fetch followed is reported as a finding
-with both object ids and the checkout proceeds, while an unblessed one takes the
-older path and still stops. Refusing to sync a vendored repo because its upstream
-rewrote a tag would be the wrong answer anyway — not controlling that upstream is
-the whole reason it is vendored — but *silently* following one would be worse,
-and neither is what happens.
+Each moved tag reports on **its own row**, through the same notes that carry
+branch findings (§5.6), because an upstream that retags every build moves a
+dozen at once and a list of them squeezed into the repo's one detail cell is
+unreadable exactly when it matters. A lone moved tag still folds onto the repo
+row, named — a tag is never "the only tag", so an unnamed summary would not say
+which one moved. Where a run's findings are a mix, the row rolls up as *refs*
+rather than calling a moved tag a branch and sending someone to `git branch` to
+look for it.
+
+**`vendor` gets no separate tag handling, and used to.** It once re-derived a
+rewrite for itself — `ls-remote` the pinned tag, compare against the local one,
+consult `force_pull` — which was a second, vendor-only answer to the question
+`force_tags` now answers once. It went beyond a differing *default*, which is
+all a workflow is supposed to be (§3.6), and it bought nothing: the ref already
+encodes the verdict. An unblessed moved tag is refused by the fetch, so
+`refs/tags/<pin>` still names the reviewed object and checking it out lands on
+the reviewed content — the old "stopped" branch was doing by hand what not
+moving a ref does by itself, and doing it *only* for vendor, so the identical
+rewrite went unmentioned on an `upstream-push` repo. Refusing to sync a vendored
+repo because its upstream rewrote a tag would be the wrong answer anyway — not
+controlling that upstream is the whole reason it is vendored — but following one
+silently would be worse, and now neither happens anywhere.
 
 **A tag the upstream moved stops the tag, not the repo.** `--tags` asks for
 `refs/tags/*:refs/tags/*` with no leading `+`, so git declines to overwrite a tag

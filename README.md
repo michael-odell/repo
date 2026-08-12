@@ -127,7 +127,7 @@ table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`
 | `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `tags`       | list of tag-name globs                          | which tags to fetch at all (default `["*"]`, i.e. every tag; `[]` fetches none) (§3.6) |
-| `force_tags` | list of tag-name globs                          | of those, which may be overwritten when upstream moves a tag it already published (default `[]`, i.e. never) (§5.2) |
+| `force_tags` | list of tag-name globs                          | of those, which may be overwritten when upstream moves a tag it already published — the tag counterpart to `force_pull`, and the only setting that follows a moved tag, in every workflow (default `[]`, i.e. never) (§5.2) |
 | `expected_untracked` | list of path globs                      | untracked files that are expected rather than notable — suppresses the report, never the data-safety rules (§3.6) |
 | `expected_uncommitted` | list of path globs                    | as above, for tracked files with local modifications (§3.6) |
 | `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 1000 (§5.3) |

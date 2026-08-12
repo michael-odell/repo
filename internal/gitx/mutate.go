@@ -374,21 +374,3 @@ func TagAtHead(dir string) string {
 	}
 	return out
 }
-
-// RemoteTagSHA returns the object id a remote advertises for a tag, and whether
-// the remote has it. Compared against the local tag to detect a moved tag
-// (a rewrite: DESIGN §5.2).
-func RemoteTagSHA(dir, remote, tag string) (string, bool) {
-	out, err := run(dir, "ls-remote", "--tags", remote, "refs/tags/"+tag)
-	if err != nil || out == "" {
-		return "", false
-	}
-	return strings.Fields(out)[0], true
-}
-
-// ForceFetchTag overwrites a local tag with the remote's, used only when
-// force_pull matches a moved vendor tag (DESIGN §5.2).
-func ForceFetchTag(dir, remote, tag string) error {
-	_, err := run(dir, "fetch", "--force", remote, "refs/tags/"+tag+":refs/tags/"+tag)
-	return err
-}

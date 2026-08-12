@@ -83,9 +83,32 @@ type Action struct {
 // which also elevates the repo's own Outcome to match — a notable branch is
 // exactly as capable of flagging the repo as any other Outcome source.
 type BranchNote struct {
+	Kind    RefKind
 	Name    string
 	Summary string
 	Outcome Outcome
+}
+
+// RefKind is what a note is about. Tags share the branch machinery rather than
+// getting a parallel one: a tag that moved is the same kind of report event as a
+// branch that did — one ref, one finding, one line — and the counting, folding
+// and `show_branches` filtering below are worth having once. What they cannot
+// share is the *name*, since a tag and a branch may both be called `v1.0`, so
+// the kind travels with the note and Label speaks it.
+type RefKind int
+
+const (
+	RefBranch RefKind = iota // zero value: an unqualified note is a branch
+	RefTag
+)
+
+// Label is the note's name as a reader should see it. Tags are qualified
+// because a bare name in a list of branches reads as a branch.
+func (b BranchNote) Label() string {
+	if b.Kind == RefTag {
+		return "tag " + b.Name
+	}
+	return b.Name
 }
 
 type pendingMigration struct {
@@ -191,12 +214,6 @@ type run struct {
 	// a non-branch fact that ties a branch's rank (see finalizeBranches).
 	detailIsBranch bool
 
-	// tagMoves are the tags force_tags let this run's fetches overwrite, kept so
-	// a vendor pin can tell "upstream moved this tag and we followed it" from
-	// "nothing happened" — after the fetch, the local tag and the remote's agree
-	// either way, so the fetch is the only thing that still knows.
-	tagMoves []gitx.TagMove
-
 	// started is when this repo's sync began, so every trace line can carry the
 	// offset at which it was recorded.
 	started time.Time
@@ -240,7 +257,6 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 	x.hooks()
 	x.observe()
 	x.finalizeBranches()
-	x.finalizeTagMoves()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()
 	}
@@ -476,88 +492,48 @@ func (x *run) fetchRemote(remote string) bool {
 		return false
 	}
 	x.add("fetched %s; %s", remote, err)
-	x.attention(movedTagsDetail(moved.Tags))
+	x.recordRefusedTags(moved.Tags)
 	return true
 }
 
-// recordTagMoves reports every tag force_tags let this fetch overwrite, and
-// keeps them for the vendor pin to consult.
+// recordTagMoves reports every tag force_tags let this fetch overwrite, one row
+// per tag.
 //
 // A followed move is the one operation in a sync that destroys something with
 // no way back — refs/tags has no reflog — so it is never merely counted. Each
-// one names the object the tag pointed at *before*, which after the fetch
+// row names the object the tag pointed at *before*, which after the fetch
 // exists nowhere else: that id is what turns "upstream moved a tag" from a
-// notification into something you can actually go and look at.
+// notification into something you can go and look at.
 //
-// Blessing a tag says "stop stopping for this", not "stop telling me". That is
-// the same bargain force_pull makes for branches (DESIGN §5.2: surface always,
-// force only when named), and it is what lets `force_tags` be safe to set on a
-// repo whose upstream you do not control.
+// Blessing a tag says "stop stopping for this", not "stop telling me" — the
+// same bargain force_pull makes for branches (DESIGN §5.2: surface always,
+// force only when named), and what lets force_tags be safe to set on an
+// upstream you do not control.
 func (x *run) recordTagMoves(moves []gitx.TagMove) {
-	if len(moves) == 0 {
-		return
-	}
-	x.tagMoves = append(x.tagMoves, moves...)
 	for _, m := range moves {
-		x.add("followed moved tag %s (was %s)", m.Tag, m.From)
+		x.refMark(RefTag, m.Tag, Updated, fmt.Sprintf("moved %s → %s (followed)",
+			shortSHA(m.From), shortSHA(m.To)))
+		x.add("followed moved tag %s: was %s, now %s", m.Tag, m.From, m.To)
 	}
-	// On a repo whose whole purpose is reviewing what upstream ships, a moved
-	// tag is the finding; elsewhere it is bookkeeping the user asked for and
-	// must not outrank a real one.
-	if x.r.Workflow == model.Vendor || x.r.Workflow == model.SupplyChainMirror {
-		x.attention(tagMovesDetail(moves))
-		return
-	}
-	x.updated(tagMovesDetail(moves))
 }
 
-// finalizeTagMoves keeps a followed move on the repo's row whatever else
-// happened to it.
-//
-// mark() lets an equal-ranked fact replace the row's detail, which is right for
-// facts that compete to explain a repo — but a followed tag move doesn't
-// compete, it accompanies. A repo that fast-forwarded *and* had a tag rewritten
-// under it would otherwise report only the fast-forward, and the compact report
-// is what a sweep actually shows: the trace would hold the move and nobody
-// would read it. So the move is appended rather than allowed to win or lose,
-// using the same "·" composition branchMark uses for a cloned repo.
-func (x *run) finalizeTagMoves() {
-	if len(x.tagMoves) == 0 || x.res.Err != nil {
-		return
+// recordRefusedTags reports the tags upstream moved that nothing blessed, one
+// row per tag. They get their own rows for the same reason branches do: a repo
+// whose upstream retags every build can move a dozen at once, and a list of
+// them crammed into the repo's one detail cell is unreadable at exactly the
+// moment it matters. finalizeBranches folds the single-tag case back onto the
+// row, so the common case still costs one line.
+func (x *run) recordRefusedTags(tags []string) {
+	for _, t := range tags {
+		x.refMark(RefTag, t, Attention, "moved upstream — not followed")
 	}
-	detail := tagMovesDetail(x.tagMoves)
-	if x.res.Detail == "" || strings.Contains(x.res.Detail, detail) {
-		return // nothing else claimed the row, or this move already owns it
-	}
-	x.res.Detail += " · " + detail
 }
 
-// tagMovesDetail names one move in full — the interesting case, and the one
-// worth reading a hash for — and counts several.
-func tagMovesDetail(moves []gitx.TagMove) string {
-	if len(moves) == 1 {
-		return "followed " + moves[0].String()
+func shortSHA(s string) string {
+	if len(s) > 8 {
+		return s[:8]
 	}
-	return fmt.Sprintf("followed %d moved tags", len(moves))
-}
-
-// tagMove returns the move this run followed for a named tag, if it did.
-func (x *run) tagMove(tag string) (gitx.TagMove, bool) {
-	for _, m := range x.tagMoves {
-		if m.Tag == tag {
-			return m, true
-		}
-	}
-	return gitx.TagMove{}, false
-}
-
-// movedTagsDetail names the moved tags when there are few enough to read in a
-// report row, and counts them otherwise.
-func movedTagsDetail(tags []string) string {
-	if len(tags) <= 2 {
-		return fmt.Sprintf("tag %s moved upstream — not followed", strings.Join(tags, ", "))
-	}
-	return fmt.Sprintf("%d tags moved upstream — not followed", len(tags))
+	return s
 }
 
 // fetchWorktreeRemotes ensures origin (and upstream, for a fork) are set and
@@ -959,6 +935,15 @@ func (x *run) add(format string, a ...any) {
 // mark() kept the Attention. Equal ranks still replace, which is what makes the
 // fork-pr case above read as the fuller description rather than the first step.
 func (x *run) branchMark(name string, o Outcome, detail string) {
+	x.refMark(RefBranch, name, o, detail)
+}
+
+// refMark is branchMark for any kind of ref. A tag note behaves identically —
+// it competes for the row, replaces a milder note of the same name, and is
+// enumerated or folded by finalizeBranches — except that identity is
+// (kind, name), since a tag and a branch may share a name and are not the same
+// ref.
+func (x *run) refMark(kind RefKind, name string, o Outcome, detail string) {
 	if o == Updated && x.res.Cloned {
 		detail = "cloned · " + detail
 	}
@@ -971,15 +956,16 @@ func (x *run) branchMark(name string, o Outcome, detail string) {
 	if o == UpToDate {
 		return
 	}
+	note := BranchNote{Kind: kind, Name: name, Summary: detail, Outcome: o}
 	for i, b := range x.res.Branches {
-		if b.Name == name {
+		if b.Kind == kind && b.Name == name {
 			if rank(o) >= rank(b.Outcome) {
-				x.res.Branches[i] = BranchNote{Name: name, Summary: detail, Outcome: o}
+				x.res.Branches[i] = note
 			}
 			return
 		}
 	}
-	x.res.Branches = append(x.res.Branches, BranchNote{Name: name, Summary: detail, Outcome: o})
+	x.res.Branches = append(x.res.Branches, note)
 }
 
 // finalizeBranches decides, once every important and task branch has
@@ -1013,10 +999,13 @@ func (x *run) finalizeBranches() {
 		x.res.Branches = kept
 	}
 
-	findings := 0
+	findings, tagFindings := 0, 0
 	for _, b := range x.res.Branches {
 		if rank(b.Outcome) > rank(UpToDate) {
 			findings++
+			if b.Kind == RefTag {
+				tagFindings++
+			}
 		}
 	}
 
@@ -1028,8 +1017,8 @@ func (x *run) finalizeBranches() {
 	// which is precisely what this mode cannot promise.
 	if x.r.ShowBranches == showNone {
 		x.res.Branches = nil
-		if findings > 0 && x.detailIsBranch && x.totalBranches > 1 {
-			x.res.Detail = rollup(findings, x.res.Outcome)
+		if findings > 0 && x.detailIsBranch && (x.totalBranches > 1 || tagFindings > 0) {
+			x.res.Detail = rollup(findings, tagFindings, x.res.Outcome)
 		}
 		return
 	}
@@ -1052,9 +1041,11 @@ func (x *run) finalizeBranches() {
 			// rather than being silently dropped.
 			return
 		}
-		if x.totalBranches > 1 {
-			b := x.res.Branches[0]
-			x.res.Detail = b.Name + ": " + b.Summary
+		// A tag is always named: "the only branch" is an inference the reader
+		// can make about a single-branch repo, but a tag is never the only tag,
+		// so an unnamed tag summary would say nothing about which one moved.
+		if b := x.res.Branches[0]; b.Kind == RefTag || x.totalBranches > 1 {
+			x.res.Detail = b.Label() + ": " + b.Summary
 		}
 		x.res.Branches = nil
 
@@ -1065,20 +1056,30 @@ func (x *run) finalizeBranches() {
 		// work into an alarm. A repo whose only lines are observations keeps
 		// whatever its own row already said.
 		if findings > 0 && x.detailIsBranch {
-			x.res.Detail = rollup(findings, x.res.Outcome)
+			x.res.Detail = rollup(findings, tagFindings, x.res.Outcome)
 		} else if findings == 0 && x.res.Outcome == UpToDate && x.totalBranches > 1 {
 			x.res.Detail = fmt.Sprintf("%d branches up to date", x.totalBranches)
 		}
 	}
 }
 
-// rollup phrases the repo row's count of notable branches by the worst Outcome
-// among them.
-func rollup(n int, o Outcome) string {
-	if n == 1 {
-		return "1 branch " + rollupVerb(o)
+// rollup phrases the repo row's count of notable refs by the worst Outcome
+// among them. The noun follows what is actually being counted: calling a moved
+// tag a "branch" would send someone looking through `git branch` for something
+// that was never there, and "refs" is only reached for a genuinely mixed run,
+// where naming either kind would be the wrong half of the story.
+func rollup(n, tags int, o Outcome) string {
+	noun, plural := "branch", "branches"
+	switch {
+	case tags == n:
+		noun, plural = "tag", "tags"
+	case tags > 0:
+		noun, plural = "ref", "refs"
 	}
-	return fmt.Sprintf("%d branches %s", n, rollupWord(o))
+	if n == 1 {
+		return "1 " + noun + " " + rollupVerb(o)
+	}
+	return fmt.Sprintf("%d %s %s", n, plural, rollupWord(o))
 }
 
 // rollupVerb is rollupWord in the singular, so a count of one reads as English
