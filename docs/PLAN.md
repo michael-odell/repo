@@ -90,6 +90,20 @@ narrowed `tags` makes it partial. Read DESIGN §5.3 (the tag constraints under p
 before adding `--prune-tags` or any tag sweep; the short version is that it must be
 an explicit glob list defaulting to nothing, never an inference.
 
+**Prune's own order** (DESIGN §5.3, written before the code and amended as the code
+disagrees with it). Each step is independently useful and leaves prune safer than it
+found it:
+
+1. `--dry-run`, and the journal at `$XDG_DATA_HOME/repo/prune.log` — the record and
+   the preview land *before* anything new can delete.
+2. `prune_keep` / `prune_min_age`, and the tip SHA + ref age they need on the verdict.
+3. `prune` default → `report`, the setting wired to the sweep, and the footer naming
+   what it found. The verdicts get computed once per repo and shared.
+4. The reverse-apply cross-check before every `-D`, timed and reported.
+5. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
+6. `--explain`.
+7. `auto`, last — after the reports above have been watched being right.
+
 ### Stage 6 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`
 fallback -> no-op offline); release automation; the small cold-bootstrap seed + a
