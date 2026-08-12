@@ -94,14 +94,16 @@ an explicit glob list defaulting to nothing, never an inference.
 disagrees with it). Each step is independently useful and leaves prune safer than it
 found it:
 
-1. `--dry-run`, and the journal at `$XDG_DATA_HOME/repo/prune.log` — the record and
-   the preview land *before* anything new can delete.
-2. `prune_keep` / `prune_min_age`, and the tip SHA + ref age they need on the verdict.
-3. `prune` default → `report`, the setting wired to the sweep, and the footer naming
-   what it found. The verdicts get computed once per repo and shared.
-4. `--explain`, then the per-branch walk-through `repo prune --delete` uses it for.
-   Explain comes first because the prompt is the explanation plus a question.
-5. The reverse-apply cross-check before every `-D`, timed and reported.
+1. ✅ `--dry-run`, and the journal at `$XDG_STATE_HOME/repo/prune.log` (state, not
+   data: the spec puts logs and history there) — the record and the preview land
+   *before* anything new can delete.
+2. ✅ `prune_keep` / `prune_min_age`, and the tip SHA + ref age they need on the
+   verdict.
+3. ✅ `prune` default → `report`, the setting wired to the sweep, and the footer
+   naming what it found. The verdicts get computed once per repo and shared.
+4. ✅ `--explain`, then the per-branch walk-through `repo prune --delete` uses it
+   for. Explain comes first because the prompt is the explanation plus a question.
+5. ✅ The reverse-apply cross-check before every `-D`, timed and reported.
 6. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
 7. `prune = "interactive"`: the same walk-through, in the sweep's serial phase,
    TTY-only, degrading to `report` when there is nobody to ask.

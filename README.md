@@ -10,7 +10,7 @@ completion.
 - Implementation plan: [docs/PLAN.md](docs/PLAN.md)
 
 Status: **early implementation.** `status`, `scan`, `sync` (incl. `--fix` layout
-migration), and `apply` work; `clone`, `prune`, `home`, `path`, and `review` are
+migration), `prune`, and `apply` work; `clone`, `home`, `path`, and `review` are
 stubbed.
 
 ## Membership: declared ∪ discovered
@@ -218,7 +218,41 @@ thing as a rebase or a cherry-pick — the SHA changed and the content landed, a
 anything more specific would be a guess.
 
 These verdicts are the same call `repo prune` acts on, not a lookalike that might
-disagree — so the decision can be watched during ordinary sweeps.
+disagree — so the decision can be watched during ordinary sweeps. Every sweep
+also ends with a count of what prune could remove, so candidates are visible
+without setting `show_branches = "all"`:
+
+```
+0 failed · 3 flagged · 0 review pending · 0 deferred · 1 updated · 20 up to date
+12 branch(es) prunable across 3 repo(s) — repo prune
+```
+
+### Pruning: what it takes to remove a branch
+
+A landed branch is removed with `git branch -d` wherever git's own ancestry
+check agrees, so two independent judgements stand behind the deletion. The
+rewritten tiers need `-D`, where that second judgement isn't available — so
+before any force-delete, `repo` corroborates by a different route entirely:
+it reverse-applies the branch's whole diff to a scratch index built from the
+important branch (`git apply --cached --check -R`, sharing no code with the
+patch-id tiers). If that fails, the branch stays. Nothing in your repo takes
+part — not the index, not any working tree.
+
+Every deletion is written to `$XDG_STATE_HOME/repo/prune.log` (default
+`~/.local/state/repo/prune.log`) — tab-separated, one line per branch:
+
+```
+2026-08-12T09:14:03Z  acme/noodle  refactor-auth  9f3a1c2…  merged (rewritten)  --delete  git branch refactor-auth 9f3a1c2…
+```
+
+The restore command is in the record because the moment you need it is the
+moment you least want to reconstruct it. A journal that can't be written stops
+the run rather than deleting unrecorded.
+
+Two settings hold branches back regardless of what the tiers concluded:
+`prune_keep` (name globs) and `prune_min_age` (how long a ref must have sat
+still). They don't dispute the merge verdict — a held branch still reads
+`merged — kept (prune_keep)`.
 
 Note this is *not* `task_branches`, which decides what `sync` **does** with
 those branches (push them, leave them, keep them pulled). `show_branches`
@@ -256,8 +290,13 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
 - `list` — enumerate the declared ∪ discovered union (for completion)
 - `resolve` — resolve a declared or discovered repo's name to its physical URL
   (debug)
+- `prune` — report which local branches have landed, and remove them when asked.
+  Report-only by default. `--delete` asks per branch with the evidence in front
+  of you (`y`/`n`/`a`/`q`); `--yes` skips the questions; `--dry-run` shows what
+  deleting would do without touching anything; `--explain <branch>` prints the
+  reasoning behind one verdict. Every deletion is recorded (below).
 - `version` — print version information
-- `clone`, `prune`, `home`, `path`, `review` — planned, not yet implemented
+- `clone`, `home`, `path`, `review` — planned, not yet implemented
 
 ## Build
 
