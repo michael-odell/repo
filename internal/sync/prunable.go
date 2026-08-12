@@ -58,6 +58,17 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 	if base == "" {
 		return nil, fmt.Errorf("no important branch to measure against")
 	}
+	// A base that doesn't resolve is one fact about the repo, not one per
+	// branch: every tier measures against it, so without it the answer is the
+	// same for all of them. Established once and reported once, because the
+	// alternative — letting each branch fail its own rev-list — repeats git's
+	// "ambiguous argument" for every branch in the repo and names the missing
+	// branch nowhere. Why it's missing is config's business (a stated
+	// `branches` outranks what the clone says, §3.6), so this reports what is
+	// so rather than guessing which end is wrong.
+	if _, ok := gitx.RevParse(container, base); !ok {
+		return nil, fmt.Errorf("no local branch %q to measure against", base)
+	}
 	important := map[string]bool{}
 	for _, b := range r.Branches {
 		important[b] = true

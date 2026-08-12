@@ -85,7 +85,16 @@ func runPrune(w io.Writer, selected []model.Repo, opts pruneOpts) error {
 			continue
 		}
 		verdicts, err := syncpkg.Classify(container, r)
-		if err != nil || len(verdicts) == 0 {
+		if err != nil {
+			// A repo prune cannot answer for is reported, not skipped: silence
+			// here is indistinguishable from a repo with nothing to prune, and
+			// the one thing worth knowing is that this repo was *not* examined
+			// (DESIGN §5.3 — not knowing is something wrong, not something
+			// parked).
+			fmt.Fprintf(tw, "  %s\n    ✗\t  %s\n", repoName(r), err)
+			continue
+		}
+		if len(verdicts) == 0 {
 			continue
 		}
 		base := primaryBranch(r)

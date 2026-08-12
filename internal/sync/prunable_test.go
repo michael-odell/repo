@@ -223,3 +223,22 @@ func hasAction(res Result, want string) bool {
 // mainRepo is the minimal model.Repo Classify needs: the important-branch list
 // it measures everything else against.
 func mainRepo() model.Repo { return model.Repo{Branches: []string{"main"}} }
+
+// TestClassifyNamesAMissingBase: when the important branch doesn't exist in
+// this clone, nothing can be measured — and the useful thing to say is which
+// branch is missing, once, rather than letting every branch fail its own
+// rev-list and repeat git's "ambiguous argument" with the name buried in it.
+func TestClassifyNamesAMissingBase(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main", ".")
+	writeCommit(t, dir, "f", "x\n", "one")
+	git(t, dir, "checkout", "-q", "-b", "feature")
+
+	_, err := Classify(dir, model.Repo{Branches: []string{"trunk"}})
+	if err == nil {
+		t.Fatal("classified a repo whose important branch it does not have")
+	}
+	if !strings.Contains(err.Error(), `"trunk"`) {
+		t.Errorf("the error does not name the missing branch: %v", err)
+	}
+}
