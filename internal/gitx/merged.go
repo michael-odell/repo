@@ -79,6 +79,33 @@ func (m MergeState) String() string {
 	}
 }
 
+// Evidence is the record of how a classification reached its answer: which
+// tiers ran, what each of them found, and which one settled it.
+//
+// It is filled in by the same pass that decides, never reconstructed
+// afterwards. An explanation assembled by a second function that re-derives the
+// steps would be a plausible account of what *would* have happened, and would
+// go on being plausible after the two drifted apart — which is the one thing an
+// explanation must not do.
+type Evidence struct {
+	Ahead, Behind int
+	Steps         []Step
+}
+
+// Step is one tier's attempt, in the order it was made.
+type Step struct {
+	Tier     string // "ancestry", "each patch", "whole diff"
+	Found    string // what it established, in its own terms
+	Answered bool   // whether this is the tier that settled the verdict
+}
+
+func (e *Evidence) step(tier, found string, answered bool) {
+	if e == nil {
+		return
+	}
+	e.Steps = append(e.Steps, Step{Tier: tier, Found: found, Answered: answered})
+}
+
 // MergedState classifies branch against base, trying each tier in turn and
 // stopping at the first that confirms — cheapest first, so the common answers
 // cost the least and only a genuinely unmerged branch pays for all three.
@@ -96,14 +123,26 @@ func (m MergeState) String() string {
 // answer is per repo — the monorepo that needs it raised and the archive that
 // needs it off are usually in the same sweep.
 func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
+	return MergedStateEvidence(dir, branch, base, scanLimit, nil)
+}
+
+// MergedStateEvidence is MergedState, recording into ev how it got there when
+// one is supplied. Callers that want to explain a verdict pass one; callers that
+// only want the verdict pass nil and pay nothing.
+func MergedStateEvidence(dir, branch, base string, scanLimit int, ev *Evidence) (MergeState, error) {
 	// Tier 1: ancestry. Also the answer for a branch with nothing of its own.
 	ahead, behind, err := AheadBehindRefs(dir, base, branch)
 	if err != nil {
 		return Unmerged, err
 	}
+	if ev != nil {
+		ev.Ahead, ev.Behind = ahead, behind
+	}
 	if ahead == 0 {
+		ev.step("ancestry", fmt.Sprintf("%s contains every commit of %s", base, branch), true)
 		return MergedAncestor, nil
 	}
+	ev.step("ancestry", fmt.Sprintf("%s holds %d commit(s) %s does not", branch, ahead, base), false)
 
 	// Tiers 2 and 3 are patch-id comparisons: `git cherry` generates and hashes
 	// the diff of every commit on *both* sides of the divergence, so their cost
@@ -114,9 +153,11 @@ func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
 	// instead, and say so: an unanswered branch is reported and never pruned,
 	// which is the safe direction (DESIGN §5.3).
 	if scanLimit == ScanNever {
+		ev.step("each patch", "declined: merge_scan_limit = 0 switches the patch tiers off", false)
 		return Unmerged, fmt.Errorf("%w: patch tiers off for this repo (merge_scan_limit)", ErrTooFarDiverged)
 	}
 	if scanLimit != ScanUnlimited && ahead+behind > scanLimit {
+		ev.step("each patch", fmt.Sprintf("declined: %d commits apart, limit %d", ahead+behind, scanLimit), false)
 		return Unmerged, fmt.Errorf("%w: %d commits apart, limit %d (raise merge_scan_limit or %s)",
 			ErrTooFarDiverged, ahead+behind, scanLimit, scanLimitEnv)
 	}
@@ -127,9 +168,22 @@ func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
 	// which makes "every commit landed" a claim about only the commits it looked
 	// at, and the merges have to be accounted for separately.
 	if unmatched, err := cherryUnmatched(dir, base, branch); err == nil && unmatched == 0 {
-		if held, err := mergesHoldOwnWork(dir, base, branch); err == nil && !held {
+		held, err := mergesHoldOwnWork(dir, base, branch)
+		switch {
+		case err != nil:
+			ev.step("each patch", "every commit's patch is in "+base+
+				", but the merge commits could not be checked: "+err.Error(), false)
+		case held:
+			ev.step("each patch", "every commit's patch is in "+base+
+				", but a merge commit carries a combined diff of its own", false)
+		default:
+			ev.step("each patch", "every commit's patch is already in "+base, true)
 			return MergedPatch, nil
 		}
+	} else if err != nil {
+		ev.step("each patch", "could not compare patches: "+err.Error(), false)
+	} else {
+		ev.step("each patch", fmt.Sprintf("%d commit(s) carry a patch %s does not have", unmatched, base), false)
 	}
 
 	// Tier 3: the branch's whole diff as one patch-id.
@@ -146,8 +200,12 @@ func MergedState(dir, branch, base string, scanLimit int) (MergeState, error) {
 		return Unmerged, err
 	}
 	if unmatched, err := cherryUnmatched(dir, base, synthetic); err == nil && unmatched == 0 {
+		ev.step("whole diff", fmt.Sprintf("rebuilt as one commit (%s) on %s, and that patch is in %s",
+			shortSHA(synthetic), shortSHA(mergeBase), base), true)
 		return MergedSquash, nil
 	}
+	ev.step("whole diff", fmt.Sprintf("rebuilt as one commit (%s) on %s, and %s does not have that patch",
+		shortSHA(synthetic), shortSHA(mergeBase), base), false)
 	return Unmerged, nil
 }
 

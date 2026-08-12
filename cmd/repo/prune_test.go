@@ -69,7 +69,7 @@ func TestDryRunDeletesNothing(t *testing.T) {
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	if err := runPrune(&out, selectedRepo(t, wd, dir), pruneOpts{DryRun: true}); err != nil {
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,11 +96,11 @@ func TestDryRunAsksNothing(t *testing.T) {
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	if err := runPrune(&out, selectedRepo(t, wd, dir), pruneOpts{DryRun: true}); err != nil {
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "would ask:") {
-		t.Errorf("dry run did not show the question it would ask:\n%s", out.String())
+	if !strings.Contains(out.String(), "would ask about 1 branch(es)") {
+		t.Errorf("dry run did not show that it would ask:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "not a terminal") {
 		t.Errorf("dry run declined for want of a terminal it never needed:\n%s", out.String())
@@ -118,7 +118,7 @@ func TestDeleteRecordsWhatItRemoved(t *testing.T) {
 	sha, _ := gitx.RevParse(dir, "landed")
 
 	var out bytes.Buffer
-	if err := runPrune(&out, selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true}); err != nil {
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,7 +156,7 @@ func TestNothingIsDeletedWithoutAJournal(t *testing.T) {
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	err := runPrune(&out, selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true})
+	err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true})
 	if err == nil {
 		t.Fatal("prune deleted branches it could not record")
 	}
@@ -165,5 +165,168 @@ func TestNothingIsDeletedWithoutAJournal(t *testing.T) {
 	}
 	if !hasBranch(t, dir, "landed") {
 		t.Error("the branch went despite the journal failing")
+	}
+}
+
+// twoLandedBranches gives the walk-through something to walk: two branches,
+// both landed, neither checked out.
+func twoLandedBranches(t *testing.T, wd, name string) string {
+	t.Helper()
+	dir := cloneWithLandedBranch(t, wd, name)
+	git(t, dir, "checkout", "-q", "-b", "second")
+	if err := os.WriteFile(filepath.Join(dir, "h"), []byte("z"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "h")
+	git(t, dir, "commit", "-q", "-m", "three")
+	git(t, dir, "checkout", "-q", "main")
+	git(t, dir, "merge", "-q", "--ff-only", "second")
+	return dir
+}
+
+// TestWalkthroughAsksPerBranch is the whole point of asking one at a time: a
+// yes for one branch is not a yes for the next, so a wrong verdict has to get
+// past a person on its own rather than inside a bulk answer.
+func TestWalkthroughAsksPerBranch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := twoLandedBranches(t, wd, "proj")
+
+	var out bytes.Buffer
+	// Branches are walked in the order Classify returns them (git's ref order):
+	// "landed" then "second". Keep the first, delete the second.
+	err := runPrune(&out, strings.NewReader("n\ny\n"), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !hasBranch(t, dir, "landed") {
+		t.Error("a branch answered n was deleted anyway")
+	}
+	if hasBranch(t, dir, "second") {
+		t.Error("a branch answered y survived")
+	}
+	if !strings.Contains(out.String(), "prune_keep") {
+		t.Errorf("declining did not say how to make the answer permanent:\n%s", out.String())
+	}
+}
+
+// TestWalkthroughShowsEvidenceBeforeAsking: a prompt is an explanation plus a
+// question. Without the evidence it is just a confirmation dialog, which tests
+// nothing about whether the verdict was right.
+func TestWalkthroughShowsEvidenceBeforeAsking(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader("n\n"), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+	for _, want := range []string{"ancestry", "verdict", "removal", "delete landed?"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the question was asked without %q in front of it:\n%s", want, body)
+		}
+	}
+}
+
+// TestWalkthroughQuitStopsEverything: `q` means stop, not skip — a branch after
+// the one you quit on must not be taken while you are walking away.
+func TestWalkthroughQuitStopsEverything(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := twoLandedBranches(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader("q\n"), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasBranch(t, dir, "landed") || !hasBranch(t, dir, "second") {
+		t.Error("quitting still deleted something")
+	}
+}
+
+// TestWalkthroughEndOfInputIsNotConsent: input running out mid-question is not
+// an answer, and must never be read as one.
+func TestWalkthroughEndOfInputIsNotConsent(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasBranch(t, dir, "landed") {
+		t.Error("end-of-input was treated as yes")
+	}
+}
+
+// TestWalkthroughAllCoversOnlyItsRepo: "yes to the rest" is a statement about
+// the repo in front of you; carrying it onward would turn one endorsement into
+// an unbounded one.
+func TestWalkthroughAllCoversOnlyItsRepo(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	first := twoLandedBranches(t, wd, "aaa")
+	second := cloneWithLandedBranch(t, wd, "zzz")
+
+	reg := testRegistry(t, wd)
+	repos := []model.Repo{resolved(t, reg, first), resolved(t, reg, second)}
+
+	var out bytes.Buffer
+	// "a" clears the first repo; the second repo asks again and gets nothing
+	// but an empty line, which is a no.
+	if err := runPrune(&out, strings.NewReader("a\n\n"), repos,
+		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if hasBranch(t, first, "landed") || hasBranch(t, first, "second") {
+		t.Error("\"a\" did not cover the rest of its own repo")
+	}
+	if !hasBranch(t, second, "landed") {
+		t.Error("\"a\" carried into the next repo")
+	}
+}
+
+// TestExplainShowsEachTierItTried: an explanation that listed only the tier
+// that answered would read as a conclusion with its working erased — the tiers
+// that found nothing are most of what makes the answer believable.
+func TestExplainShowsEachTierItTried(t *testing.T) {
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := explainBranch(&out, selectedRepo(t, wd, dir), "landed"); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+	if !strings.Contains(body, "ancestry") {
+		t.Errorf("no tier named in the explanation:\n%s", body)
+	}
+	if !strings.Contains(body, "git branch -d") {
+		t.Errorf("explanation does not say how the branch would be removed:\n%s", body)
+	}
+}
+
+// TestExplainSaysWhenItHasNothingToExplain: silence would read as "nothing to
+// say about that branch", when the truth is usually a typo or an important
+// branch, which is never classified.
+func TestExplainSaysWhenItHasNothingToExplain(t *testing.T) {
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	err := explainBranch(&out, selectedRepo(t, wd, dir), "main")
+	if err == nil {
+		t.Fatal("explaining an important branch reported success")
+	}
+	if !strings.Contains(err.Error(), "important branches") {
+		t.Errorf("the error does not explain why main has no verdict: %v", err)
 	}
 }

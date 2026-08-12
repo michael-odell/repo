@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -28,6 +29,7 @@ func cmdPrune(_ context.Context, args []string) error {
 	del := fs.Bool("delete", false, "actually remove the prunable branches (asks first on a terminal)")
 	yes := fs.Bool("yes", false, "with --delete, skip the confirmation prompt")
 	dry := fs.Bool("dry-run", false, "show what --delete would do, without deleting or recording anything")
+	explain := fs.String("explain", "", "print the evidence behind one branch's verdict, and stop")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,7 +51,14 @@ func cmdPrune(_ context.Context, args []string) error {
 	}
 	sort.Slice(selected, func(i, j int) bool { return repoName(selected[i]) < repoName(selected[j]) })
 
-	return runPrune(os.Stdout, selected, pruneOpts{Delete: *del, Yes: *yes, DryRun: *dry})
+	if *explain != "" {
+		return explainBranch(os.Stdout, selected, *explain)
+	}
+	// Whether anyone is there to answer is settled once, here, rather than
+	// being re-checked wherever a question comes up — the walk-through and the
+	// tests then differ only in what they are reading from.
+	return runPrune(os.Stdout, os.Stdin, selected,
+		pruneOpts{Delete: *del, Yes: *yes, DryRun: *dry, Interactive: isTTY()})
 }
 
 // pruneOpts is what the flags decided, separated from how they were parsed so
@@ -59,6 +68,10 @@ type pruneOpts struct {
 	Delete bool
 	Yes    bool
 	DryRun bool
+	// Interactive is whether there is someone to ask. False means the
+	// walk-through cannot run, which is a reason to delete nothing rather than
+	// a reason to proceed unasked (DESIGN §5.3).
+	Interactive bool
 }
 
 // deleting reports whether this run walks the deletion path at all. --dry-run
@@ -69,7 +82,8 @@ func (o pruneOpts) deleting() bool { return o.Delete || o.DryRun }
 
 // runPrune classifies every selected repo, reports each branch's verdict, and
 // removes the prunable ones when asked.
-func runPrune(w io.Writer, selected []model.Repo, opts pruneOpts) error {
+func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) error {
+	walk := &walkthrough{in: bufio.NewReader(in)}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 	var log *journal.Log
 	defer func() {
@@ -115,21 +129,30 @@ func runPrune(w io.Writer, selected []model.Repo, opts pruneOpts) error {
 			continue
 		}
 		tw.Flush()
-		if !opts.Yes && !confirmPrune(w, repoName(r), prunable, opts) {
+		approved, quit := approve(w, walk, repoName(r), prunable, base, opts)
+		if len(approved) == 0 {
 			fmt.Fprintf(w, "    skipped %s\n", repoName(r))
-			continue
+		}
+		if quit && len(approved) == 0 {
+			break
 		}
 		// The journal opens before the first deletion of the run, and a journal
 		// that cannot be written stops the run rather than being noted and
 		// worked around: the record is what makes a deletion answerable for
 		// afterwards, so proceeding without one would quietly hand back a
 		// weaker promise than the one this command makes (DESIGN §5.3).
-		if log == nil && !opts.DryRun {
+		if log == nil && !opts.DryRun && len(approved) > 0 {
 			if log, err = journal.Open(); err != nil {
 				return fmt.Errorf("cannot open the prune journal, so nothing was deleted: %w", err)
 			}
 		}
-		pruned += pruneRepo(w, r, container, prunable, log, opts)
+		if len(approved) > 0 {
+			pruned += pruneRepo(w, r, container, approved, log, opts)
+		}
+		if quit {
+			fmt.Fprintf(w, "    stopped — %s and everything after it left alone\n", repoName(r))
+			break
+		}
 	}
 	tw.Flush()
 
@@ -201,32 +224,127 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 	return n
 }
 
-// confirmPrune asks before removing branches from one repo. With no TTY it
-// returns false rather than proceeding: a non-interactive run that meant to
-// delete says so with --yes, and one that didn't must not delete by accident
-// (the same contract --lose-ignored uses for a relayout).
+// approve decides which of a repo's prunable branches actually go.
 //
-// A dry run prints the question instead of asking it. Waiting on an answer that
-// changes nothing would only teach the habit of typing y (DESIGN §5.3).
-func confirmPrune(w io.Writer, name string, vs []syncpkg.Verdict, opts pruneOpts) bool {
-	names := make([]string, 0, len(vs))
-	for _, v := range vs {
-		names = append(names, v.Name)
-	}
-	question := fmt.Sprintf("delete %d branch(es) from %s (%s)?", len(vs), name, strings.Join(names, ", "))
-	if opts.DryRun {
-		fmt.Fprintf(w, "  would ask: %s\n", question)
-		return true
-	}
-	if !isTTY() {
+// The default path asks per branch, with the evidence in front of you, because
+// that is the test that transfers: a wrong verdict has to get past a person one
+// branch at a time rather than hiding inside a count. `a` and `q` keep a bulk
+// answer available for the branches you already believe — being asked twelve
+// questions you have already answered is its own way of training someone to
+// stop reading them.
+func approve(w io.Writer, walk *walkthrough, name string, prunable []syncpkg.Verdict, base string, opts pruneOpts) (approved []syncpkg.Verdict, quit bool) {
+	switch {
+	case opts.Yes:
+		return prunable, false
+	case opts.DryRun:
+		// The question is shown, not asked: an answer that changes nothing only
+		// teaches the habit of typing y (DESIGN §5.3).
+		fmt.Fprintf(w, "  would ask about %d branch(es) in %s, one at a time\n", len(prunable), name)
+		return prunable, false
+	case !opts.Interactive:
 		fmt.Fprintf(w, "    (not a terminal — re-run with --yes to delete these)\n")
-		return false
+		return nil, false
 	}
-	fmt.Fprintf(w, "  %s [y/N] ", question)
-	var resp string
-	_, _ = fmt.Scanln(&resp)
-	resp = strings.ToLower(strings.TrimSpace(resp))
-	return resp == "y" || resp == "yes"
+
+	fmt.Fprintf(w, "  %s\n", name)
+	walk.startRepo()
+	for _, v := range prunable {
+		switch walk.ask(w, v, base) {
+		case decideYes:
+			approved = append(approved, v)
+		case decideNo:
+			// Declining is an answer about this run, not a fact stored
+			// anywhere. The glob that would make it permanent is printed
+			// instead, so "stop asking me about this one" stays an edit
+			// someone makes and can read back (DESIGN §5.3).
+			fmt.Fprintf(w, "      kept — to stop being asked, add prune_keep = [%q]\n", v.Name)
+		case decideQuit:
+			return approved, true
+		}
+	}
+	return approved, false
+}
+
+// decision is one answer in the walk-through.
+type decision int
+
+const (
+	decideNo decision = iota
+	decideYes
+	decideQuit
+)
+
+// walkthrough carries the state one prune run's questions share: where answers
+// come from, and whether an `a` has already covered the current repo.
+type walkthrough struct {
+	in  *bufio.Reader
+	all bool
+}
+
+// startRepo forgets a previous repo's bulk answer. "Yes to the rest" is a
+// statement about the repo in front of you — carrying it into the next one
+// would turn one endorsement into an unbounded one.
+func (a *walkthrough) startRepo() { a.all = false }
+
+func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict, base string) decision {
+	if a.all {
+		return decideYes
+	}
+	explainVerdict(w, v, base, "    ")
+	for {
+		fmt.Fprintf(w, "    delete %s? [y/N/a/q] ", v.Name)
+		line, err := a.in.ReadString('\n')
+		if err != nil && line == "" {
+			// Input ended mid-question. Nothing was answered, so nothing is
+			// taken: end-of-file is not consent.
+			fmt.Fprintln(w)
+			return decideQuit
+		}
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "y", "yes":
+			return decideYes
+		case "", "n", "no":
+			return decideNo
+		case "a", "all":
+			a.all = true
+			return decideYes
+		case "q", "quit":
+			return decideQuit
+		default:
+			fmt.Fprintf(w, "    y = delete · n = keep · a = yes to the rest of this repo · q = stop\n")
+		}
+	}
+}
+
+// explainBranch prints the evidence behind one named branch's verdict and
+// stops, deleting nothing. It searches every selected repo rather than
+// requiring the repo be named too: a branch name is usually enough to be
+// unambiguous, and when it isn't, showing both is more useful than an error.
+func explainBranch(w io.Writer, selected []model.Repo, branch string) error {
+	found := 0
+	for _, r := range selected {
+		container := r.Container()
+		if !gitx.IsRepo(container) {
+			continue
+		}
+		verdicts, err := syncpkg.Classify(container, r)
+		if err != nil {
+			continue
+		}
+		for _, v := range verdicts {
+			if v.Name != branch {
+				continue
+			}
+			found++
+			fmt.Fprintf(w, "  %s\n", repoName(r))
+			explainVerdict(w, v, primaryBranch(r), "    ")
+		}
+	}
+	if found == 0 {
+		return fmt.Errorf("no branch named %q among the selected repos "+
+			"(important branches are not classified: they are what the others are measured against)", branch)
+	}
+	return nil
 }
 
 func isTTY() bool {

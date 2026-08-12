@@ -26,6 +26,12 @@ type Verdict struct {
 	Worktree string // the tree holding this branch, "" when none does
 	Prunable bool
 	Blocker  string // why not, when !Prunable
+	// Evidence is how the tiers reached this verdict, recorded by the pass that
+	// decided rather than reconstructed afterwards (DESIGN §5.3). Carried on
+	// every verdict because collecting it costs nothing extra — the tiers ran
+	// anyway — and because an explanation computed later could disagree with
+	// the decision it claims to explain.
+	Evidence gitx.Evidence
 	// Unknown marks a branch git could not answer for at all, as distinct from
 	// one answered "unmerged". Never prunable, and reported as a finding rather
 	// than an observation: not knowing is something wrong, not something parked.
@@ -90,7 +96,8 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		if important[b] {
 			continue
 		}
-		state, err := gitx.MergedState(container, b, base, scanLimitOf(r))
+		var ev gitx.Evidence
+		state, err := gitx.MergedStateEvidence(container, b, base, scanLimitOf(r), &ev)
 		if err != nil {
 			// "Declined to look" and "tried and failed" are both unknown, and
 			// both unprunable, but only one of them is a fault — so the reason
@@ -110,6 +117,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 				Name:     b,
 				SHA:      ref.SHA,
 				Updated:  ref.Updated,
+				Evidence: ev,
 				Unknown:  true,
 				Worktree: gitx.WorktreeFor(container, b),
 				Blocker:  why,
@@ -121,6 +129,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 			Name:     b,
 			SHA:      ref.SHA,
 			Updated:  ref.Updated,
+			Evidence: ev,
 			State:    state,
 			Ahead:    ahead,
 			Worktree: gitx.WorktreeFor(container, b),
