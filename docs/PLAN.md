@@ -99,10 +99,13 @@ found it:
 2. `prune_keep` / `prune_min_age`, and the tip SHA + ref age they need on the verdict.
 3. `prune` default → `report`, the setting wired to the sweep, and the footer naming
    what it found. The verdicts get computed once per repo and shared.
-4. The reverse-apply cross-check before every `-D`, timed and reported.
-5. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
-6. `--explain`.
-7. `auto`, last — after the reports above have been watched being right.
+4. `--explain`, then the per-branch walk-through `repo prune --delete` uses it for.
+   Explain comes first because the prompt is the explanation plus a question.
+5. The reverse-apply cross-check before every `-D`, timed and reported.
+6. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
+7. `prune = "interactive"`: the same walk-through, in the sweep's serial phase,
+   TTY-only, degrading to `report` when there is nobody to ask.
+8. `auto`, last — after the reports above have been watched being right.
 
 ### Stage 6 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`

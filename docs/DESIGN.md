@@ -875,8 +875,17 @@ stands in the way. Important branches are never candidates — they are the
 out in any worktree is blocked regardless of merge state.
 
 `repo prune` is **report-only** unless `--delete` is given, and on a terminal
-`--delete` still confirms per repo (`--yes` skips it; with no TTY it declines
-rather than proceeding). The same verdicts appear during ordinary sweeps under
+`--delete` asks **per branch**, showing the evidence for each before it asks —
+the same walk-through `prune = "interactive"` performs, in the command where
+someone is unambiguously present. The answers are `y` / `n` / `a` (yes to the
+rest of this repo) / `q` (stop here): a bulk answer stays available for the
+branches you already believe, without making it the only thing on offer. `--yes`
+skips the prompting entirely, and with no TTY prune declines rather than
+proceeding — a non-interactive run that meant to delete says so with `--yes`,
+and one that didn't must not delete by accident (the contract `--lose-ignored`
+uses for a relayout).
+
+The same verdicts appear during ordinary sweeps under
 `show_branches = "all"` (§5.6) — the same call, so the line watched during a
 sweep is the decision prune would act on, not a lookalike that might disagree.
 
@@ -909,13 +918,15 @@ answers when a relayout discards a tree — uncommitted or untracked work blocks
 ignored-only residue is discarded on consent — so it is that rule applied to a
 narrower target, not a new judgement about what is safe to lose.
 
-**Three modes, and what makes one safe to automate.** `prune` (§3.4) says who
-decides:
+**Four modes, and what makes one safe to automate.** `prune` (§3.4) says who
+decides, ordered by how much the sweep does without being asked —
+`manual ⊂ report ⊂ interactive ⊂ auto`:
 
 | mode | the sweep | `repo prune` |
 |---|---|---|
 | `manual` | does not classify; says nothing | classifies and reports on request |
 | `report` | classifies, names what it found, deletes nothing | as above, plus `--delete` |
+| `interactive` | …and afterwards walks the candidates, explaining each and asking | as above |
 | `auto` | deletes what clears the bar below; reports the rest | as above |
 
 `report` is the **default**. `auto` is the destination, not the starting point:
@@ -923,6 +934,34 @@ the whole design rests on a classification whose judgement has been watched on
 real repos, and a default that starts deleting on first run would be asking for
 that trust before earning it. The path to `auto` is the point of the reporting —
 see the confidence path below.
+
+**`interactive` is the rung between them**, and the one that actually builds the
+confidence the rest of this section keeps deferring to. The sweep classifies as
+`report` does, then walks each candidate in turn: the branch, its verdict, the
+evidence behind it (the `--explain` output below), and a y/n. Watching a decision
+and being asked to endorse it is a stronger test than reading a list, because a
+wrong verdict has to get past you one branch at a time rather than hiding in a
+count — and unlike `report`, the branches you *do* approve actually go, so
+confidence and cleanup stop being separate errands.
+
+Two rules keep it from becoming a nuisance:
+
+- **It runs after the concurrent phase**, in the same serial window `--fix`'s
+  relayout prompts from (§5.6), never mid-sweep. Six repos in flight cannot each
+  stop to ask a question, and the live progress block stops painting before any
+  prompt so a question is never overwritten.
+- **No TTY, no prompt, no deletion** — it degrades to `report` rather than
+  waiting or assuming. `sync --if-due` is invoked from the shell prompt and may
+  run backgrounded (§5.5); a mode that could block *that* would be a hang with a
+  question nobody can see. This is also why `interactive` is not the default
+  despite being the recommended starting point: the sweep is the wrong place to
+  put a prompt everybody gets, and the deliberate `repo prune --delete` is where
+  a person is already present (below).
+
+Declining a branch is an answer about *that run*, not a fact stored anywhere. A
+decline prints the `prune_keep` glob that would make the answer permanent, so
+"stop asking me about this one" is an edit you make and can read back later,
+never invisible state accumulating in a data directory.
 
 The bar for an **unattended** deletion is narrower than for one someone asked
 for, and the difference is not a preference — it is whether a second, independent
@@ -983,14 +1022,19 @@ no business in a directory whose contract is "safe to delete and regenerate".
 
 **`--dry-run` exists from the first commit**, and is not the same thing as the
 default report. Report-only answers *what is prunable*; `--dry-run` answers
-*what this invocation would do* — the same flags, the same selection, the same
-keep/age filtering, the same per-repo confirmation flow, every deletion line
-printed as it would be, and nothing removed and nothing journalled. The two
-diverge exactly where it matters: `repo prune --delete --dry-run` shows a list
-narrowed by `prune_keep` and `prune_min_age`, while the plain report shows every
-landed branch including the ones policy protects. A flag whose output is
+*what this invocation would do* — the same selection, the same `prune_keep` and
+`prune_min_age` filtering, every deletion line printed as it would be, and
+nothing removed and nothing journalled. The two diverge exactly where it
+matters: a dry run shows a list narrowed by policy, while the plain report shows
+every landed branch *including* the ones policy protects. A flag whose output is
 identical to the default teaches nothing; this one is how you check policy, not
 classification.
+
+It implies the delete path rather than requiring `--delete` alongside it: the
+question `--dry-run` answers is only ever "what would deleting do", so demanding
+both flags would be ceremony. The one thing it does not reproduce is the
+prompting — the question that *would* be asked is printed rather than asked,
+because a prompt whose answer changes nothing only teaches you to say yes.
 
 **`--explain <branch>` shows the evidence, which the verdict deliberately does
 not.** A verdict is a claim and stays terse — `merged (rewritten)` says what is
@@ -1039,15 +1083,23 @@ sweep's observations, the footer, and any auto-prune — the same call, so the
 line you read and the deletion that follows can never disagree, and the tiers
 are not paid for twice.
 
-**The confidence path is the feature, not a preamble to it.** The order is
-deliberate: run `report` with `show_branches = "all"` and watch the verdicts
-against repos whose history you already know; reach for `repo prune --delete`
-when a verdict stops surprising you, and read the journal afterwards; then set
-`prune = "auto"` on the roots where it has been right, per root rather than
-globally, since a monorepo's branch graveyard and a plugins root are different
-questions. Each step is reversible and each produces the evidence for the next
-one. Auto-pruning arriving *late* is not a limitation to apologise for — it is
-the mechanism by which it arrives justified.
+**The confidence path is the feature, not a preamble to it.** The four modes are
+rungs, and the order is deliberate:
+
+1. `report` with `show_branches = "all"` — watch verdicts against repos whose
+   history you already know, deleting nothing.
+2. `repo prune --delete` — the same verdicts, one at a time, each explained
+   before you endorse it. Read the journal afterwards.
+3. `prune = "interactive"` — the walk-through moves into the daily sweep, so
+   confidence accrues from ordinary use rather than a remembered errand.
+4. `prune = "auto"`, **per root rather than globally** — a monorepo's branch
+   graveyard and a plugins root are different questions, and the answer is
+   allowed to differ.
+
+Each rung is reversible, and each produces the evidence for the next: the thing
+that earns `auto` is a run of `interactive` where the answer was always yes.
+Auto-pruning arriving *late* is not a limitation to apologise for — it is the
+mechanism by which it arrives justified.
 
 Still deliberately **not** here: the confirmation queue for branches deleted
 upstream that no tier can confirm landed, and any pruning of tags (below) or
