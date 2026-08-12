@@ -1075,9 +1075,18 @@ in one report would be the row/bullet disagreement that section exists to
 prevent.
 
 That footer is what makes classification cost a *decision* rather than a
-surprise. Under `report`/`auto` the sweep classifies every selected repo, which
-is what `show_branches = "all"` already pays today; `manual` is the escape hatch
-for anyone who finds it too slow, and it means "don't even ask the question".
+surprise. Every mode but `manual` classifies each selected repo, which is what
+`show_branches = "all"` already pays today; `manual` is the escape hatch for
+anyone who finds it too slow.
+
+The two settings are independent inputs to the same question, and either alone
+is reason enough to classify: `show_branches` decides what the sweep *tells*
+you, `prune` decides what it would *do* (§5.6). So `manual` withdraws prune's
+reason, not the report's — a repo set to `manual` with `show_branches = "all"`
+still enumerates its verdicts, because that was asked for separately — and the
+footer's count ignores `show_branches` entirely, since suppressing it there
+would hide prune from exactly the configuration that lists the least.
+
 Within one run the verdicts are computed **once per repo** and shared by the
 sweep's observations, the footer, and any auto-prune — the same call, so the
 line you read and the deletion that follows can never disagree, and the tiers

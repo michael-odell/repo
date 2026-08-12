@@ -338,3 +338,46 @@ func findVerdict(t *testing.T, vs []Verdict, name string) Verdict {
 	t.Fatalf("no verdict for %q in %+v", name, vs)
 	return Verdict{}
 }
+
+// TestPruneManualStopsTheSweepCounting: `manual` is the escape hatch for anyone
+// who finds classification too slow, so it has to actually stop the question
+// being asked — not merely hide the answer.
+func TestPruneManualStopsTheSweepCounting(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `prune = "manual"`+"\n"+`show_branches = "none"`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "f", "work\n", "the work")
+	merge(t, clone, "landed", false)
+
+	if res := run(); res.Prunable != 0 {
+		t.Errorf("Prunable = %d under prune = \"manual\", want 0", res.Prunable)
+	}
+}
+
+// TestTheSweepCountsWhatPruneWouldOffer: the footer's number comes from the
+// same classification the command acts on, so a branch counted here is a branch
+// prune would actually offer to remove.
+func TestTheSweepCountsWhatPruneWouldOffer(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `show_branches = "none"`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "f", "work\n", "the work")
+	merge(t, clone, "landed", false)
+
+	res := run()
+	if res.Prunable != 1 {
+		t.Fatalf("Prunable = %d, want 1 (show_branches must not decide what prune counts)", res.Prunable)
+	}
+}
+
+// TestPruneKeepIsRespectedBySweepCount: policy narrows what prune offers, so it
+// has to narrow the footer too — a count that included branches prune would
+// refuse to touch would send you to a command with nothing to do.
+func TestPruneKeepIsRespectedBySweepCount(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `prune_keep = ["landed"]`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "f", "work\n", "the work")
+	merge(t, clone, "landed", false)
+
+	if res := run(); res.Prunable != 0 {
+		t.Errorf("Prunable = %d with the branch named in prune_keep, want 0", res.Prunable)
+	}
+}

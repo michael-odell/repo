@@ -215,6 +215,28 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	if slow := slowest(results); slow != nil {
 		fmt.Fprintf(w, "slowest: %s %s\n", slow.Name, slow.Elapsed.Round(time.Second))
 	}
+
+	// Landed branches are the one finding a sweep has no other way to mention:
+	// they are observations, not findings, so they never lift a repo's glyph
+	// (§5.6) — and outside show_branches = "all" they have no line either, which
+	// left prune invisible to anyone who hadn't gone looking for it. A count,
+	// not a list: enumerating branches is show_branches' job, and doing it twice
+	// in one report is the row/bullet disagreement §5.6 exists to prevent.
+	if branches, repos := prunableTally(results); branches > 0 {
+		fmt.Fprintf(w, "%d branch(es) prunable across %d repo(s) — repo prune\n", branches, repos)
+	}
+}
+
+// prunableTally totals the branches prune would offer to remove, and how many
+// repos hold them.
+func prunableTally(results []syncpkg.Result) (branches, repos int) {
+	for _, r := range results {
+		if r.Prunable > 0 {
+			branches += r.Prunable
+			repos++
+		}
+	}
+	return branches, repos
 }
 
 // slowestThreshold is where a repo stops being ordinary and starts being the

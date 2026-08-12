@@ -148,7 +148,10 @@ func repoName(r model.Repo) string {
 	return r.ID.OwnerRepo()
 }
 
-const builtinPrune = "auto"
+// builtinPrune mirrors config's builtin for a *discovered* repo. Report, not
+// auto: a repo nobody wrote a line of config about is the last one that should
+// have branches removed from it unattended (DESIGN §5.3).
+const builtinPrune = "report"
 
 // builtinTags mirrors config's builtin for a *discovered* repo, which reaches
 // this path instead of effective(): fetch every tag, since nothing here knows

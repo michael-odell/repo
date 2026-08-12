@@ -57,8 +57,13 @@ type Result struct {
 	// and without this the only way to find that repo is to watch the sweep
 	// happen.
 	Elapsed time.Duration
-	Actions []Action
-	Err     error
+	// Prunable is how many of this repo's task branches prune would offer to
+	// remove. Counted so the sweep's footer can say they exist: before it, prune
+	// candidates were visible only under show_branches = "all", which made the
+	// feature invisible on default settings (DESIGN §5.3).
+	Prunable int
+	Actions  []Action
+	Err      error
 
 	// migrate, when set, defers a --fix-layout conversion to the serial phase
 	// after every repo's network sync has finished (DESIGN §4.1).
@@ -214,6 +219,11 @@ type run struct {
 	// a non-branch fact that ties a branch's rank (see finalizeBranches).
 	detailIsBranch bool
 
+	// classified is this repo's task-branch verdicts, computed at most once per
+	// run and shared by everything that needs them (see run.verdicts).
+	classified  []Verdict
+	classifyErr error
+
 	// started is when this repo's sync began, so every trace line can carry the
 	// offset at which it was recorded.
 	started time.Time
@@ -256,6 +266,7 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 	x.provisionAndUpdate()
 	x.hooks()
 	x.observe()
+	x.countPrunable()
 	x.finalizeBranches()
 	if !opts.DryRun && res.Err == nil {
 		x.writeTimestamp()

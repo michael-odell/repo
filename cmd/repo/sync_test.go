@@ -186,3 +186,39 @@ func TestRenderSyncBranchRowsStayAligned(t *testing.T) {
 		t.Errorf("branch row %q should not repeat the repo's workflow", branch)
 	}
 }
+
+// TestRenderSyncNamesPrunableBranches: landed branches are observations, so
+// they never lift a repo's glyph — and outside show_branches = "all" they get
+// no line either. Without the footer, the only way to learn prune had anything
+// to offer was to already know to ask it.
+func TestRenderSyncNamesPrunableBranches(t *testing.T) {
+	results := []syncpkg.Result{
+		{Name: "acme/one", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: 3},
+		{Name: "acme/two", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: 9},
+		{Name: "acme/three", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate},
+	}
+	var buf bytes.Buffer
+	renderSync(&buf, results, syncpkg.Options{})
+	out := buf.String()
+
+	if !strings.Contains(out, "12 branch(es) prunable across 2 repo(s)") {
+		t.Errorf("footer does not total the prunable branches:\n%s", out)
+	}
+	if !strings.Contains(out, "repo prune") {
+		t.Errorf("footer does not name the command that acts on them:\n%s", out)
+	}
+}
+
+// TestRenderSyncSaysNothingAboutPruningWhenThereIsNothing: a footer that
+// appeared on every clean sweep would be noise, and would teach people to skip
+// the line that matters when it isn't.
+func TestRenderSyncSaysNothingAboutPruningWhenThereIsNothing(t *testing.T) {
+	results := []syncpkg.Result{
+		{Name: "acme/one", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate},
+	}
+	var buf bytes.Buffer
+	renderSync(&buf, results, syncpkg.Options{})
+	if strings.Contains(buf.String(), "prunable") {
+		t.Errorf("footer mentions pruning with nothing to prune:\n%s", buf.String())
+	}
+}

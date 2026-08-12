@@ -35,7 +35,7 @@ func (x *run) observe() {
 		return // no reference branch to measure against
 	}
 
-	verdicts, err := Classify(x.container, x.r)
+	verdicts, err := x.verdicts()
 	if err != nil {
 		return
 	}
@@ -79,4 +79,56 @@ func (x *run) hasNote(name string) bool {
 		}
 	}
 	return false
+}
+
+// prune modes (DESIGN §5.3), ordered by how much the sweep does unasked:
+// manual ⊂ report ⊂ interactive ⊂ auto.
+const (
+	pruneManual      = "manual"      // don't classify, don't offer
+	pruneReport      = "report"      // classify and name what was found
+	pruneInteractive = "interactive" // …and walk it with whoever is there
+	pruneAuto        = "auto"        // …and remove what clears the unattended bar
+)
+
+// verdicts classifies the repo's task branches, once per run.
+//
+// Two independent things want this answer — `show_branches` deciding what to
+// enumerate (§5.6) and `prune` deciding what to do (§5.3) — and the tiers are
+// the expensive part of a sweep. Computing it once means they cannot disagree
+// about a branch either: the line you read and the deletion that follows come
+// from the same call, which is the property §5.3 leans on.
+func (x *run) verdicts() ([]Verdict, error) {
+	if x.classified == nil && x.classifyErr == nil {
+		x.classified, x.classifyErr = Classify(x.container, x.r)
+		if x.classified == nil && x.classifyErr == nil {
+			// No task branches: remember that, rather than reclassifying each
+			// time something asks.
+			x.classified = []Verdict{}
+		}
+	}
+	return x.classified, x.classifyErr
+}
+
+// countPrunable records how many branches prune would offer to remove, for the
+// footer that tells you they are there (DESIGN §5.3).
+//
+// It runs under every mode but `manual`, which is the one that says "don't ask
+// the question". `show_branches` is not consulted: what a sweep *tells* you and
+// what prune *would do* are different questions (§5.6), so a repo listing no
+// branch lines still contributes its count — the footer is one line either way,
+// and suppressing it would hide the feature from exactly the configuration that
+// enumerates the least.
+func (x *run) countPrunable() {
+	if x.res.Err != nil || x.branch == "" || x.r.Prune == pruneManual {
+		return
+	}
+	verdicts, err := x.verdicts()
+	if err != nil {
+		return
+	}
+	for _, v := range verdicts {
+		if v.Prunable {
+			x.res.Prunable++
+		}
+	}
 }

@@ -112,7 +112,11 @@ var builtinDefaults = model.Repo{
 	Layout:    model.LayoutFlat,
 	Worktrees: false,
 	Branches:  []string{"main"},
-	Prune:     "auto",
+	// Report rather than auto. The setting predates anything reading it, and
+	// wiring it up on the old default would have had every repo on the machine
+	// deleting branches on the next sweep — asking for trust the classification
+	// has not yet been watched earning (DESIGN §5.3, the confidence path).
+	Prune: "report",
 	// Every tag, and none of them forced. Tags are not narrowed by default
 	// because `repo` itself reads them in exactly one place — a vendor `pin`
 	// resolving through refs/tags — and everywhere else they exist for whoever
