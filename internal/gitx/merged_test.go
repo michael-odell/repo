@@ -271,3 +271,71 @@ func assertState(t *testing.T, dir, branch, base string, want MergeState) {
 func writeFileRaw(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
+
+// TestReverseApplyCorroboratesASquashMerge: the -D path's second opinion. The
+// patch tiers found this merge by hashing patch ids; reverse application asks
+// a different question with different code — can base undo this change — and
+// has to agree before a force-delete goes ahead.
+func TestReverseApplyCorroboratesASquashMerge(t *testing.T) {
+	dir := newRepo(t)
+	gitT(t, dir, "merge", "-q", "--squash", "feature")
+	gitT(t, dir, "commit", "-q", "-m", "squashed")
+
+	state, err := MergedState(dir, "feature", "main", ScanUnlimited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state != MergedSquash && state != MergedPatch {
+		t.Fatalf("state = %v, want a rewritten-tier merge (the case needing -D)", state)
+	}
+
+	ok, err := ReverseApplies(dir, "feature", "main")
+	if err != nil {
+		t.Fatalf("cross-check failed to run: %v", err)
+	}
+	if !ok {
+		t.Error("main holds the branch's whole diff but the cross-check did not corroborate it")
+	}
+}
+
+// TestReverseApplyWithholdsUnlandedWork: the check's only job is to be able to
+// say no. A branch whose work is not in base must not reverse-apply, or the
+// second opinion is worth nothing.
+func TestReverseApplyWithholdsUnlandedWork(t *testing.T) {
+	dir := newRepo(t) // feature is two commits ahead and never merged
+
+	ok, err := ReverseApplies(dir, "feature", "main")
+	if err != nil {
+		t.Fatalf("cross-check failed to run: %v", err)
+	}
+	if ok {
+		t.Error("the cross-check corroborated a branch whose work is not in main")
+	}
+}
+
+// TestReverseApplyLeavesTheRepoAlone: it runs against a scratch index, so a
+// working tree with uncommitted work — the thing prune must never touch — is
+// neither consulted nor disturbed.
+func TestReverseApplyLeavesTheRepoAlone(t *testing.T) {
+	dir := newRepo(t)
+	gitT(t, dir, "merge", "-q", "--squash", "feature")
+	gitT(t, dir, "commit", "-q", "-m", "squashed")
+
+	local := "base\none\ntwo\nlocal edit\n"
+	writeFile(t, filepath.Join(dir, "f"), local)
+
+	if _, err := ReverseApplies(dir, "feature", "main"); err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != local {
+		t.Errorf("the working tree changed under the cross-check: %q", body)
+	}
+	if out, _ := run(dir, "status", "--porcelain"); out == "" {
+		t.Error("the uncommitted change was staged or lost by the cross-check")
+	}
+}

@@ -330,3 +330,82 @@ func TestExplainSaysWhenItHasNothingToExplain(t *testing.T) {
 		t.Errorf("the error does not explain why main has no verdict: %v", err)
 	}
 }
+
+// squashMergedRepo leaves `feature` landed by squash: the content is in main
+// under a different SHA, so only the rewritten tiers see it and removal needs
+// -D — the case the cross-check exists for.
+func squashMergedRepo(t *testing.T, wd, name string) string {
+	t.Helper()
+	dir := cloneWithLandedBranch(t, wd, name)
+	git(t, dir, "checkout", "-q", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "h"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "h")
+	git(t, dir, "commit", "-q", "-m", "first")
+	if err := os.WriteFile(filepath.Join(dir, "h"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "commit", "-qam", "second")
+	git(t, dir, "checkout", "-q", "main")
+	git(t, dir, "merge", "-q", "--squash", "feature")
+	git(t, dir, "commit", "-q", "-m", "squashed feature")
+	return dir
+}
+
+// TestForceDeleteIsCrossChecked: -D is where git's own check stops standing
+// behind the decision, so something else has to. The report says so out loud,
+// with what it cost — the check's price is the open question about it.
+func TestForceDeleteIsCrossChecked(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := squashMergedRepo(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+
+	if hasBranch(t, dir, "feature") {
+		t.Fatalf("a corroborated squash merge was not deleted:\n%s", body)
+	}
+	if !strings.Contains(body, "cross-checked") {
+		t.Errorf("no cross-check reported for a -D deletion:\n%s", body)
+	}
+	if !strings.Contains(body, "cross-checked 1 branch(es) in ") {
+		t.Errorf("the run did not say what corroboration cost:\n%s", body)
+	}
+	// The ancestry-tier branch goes without one: git's -d already agrees there,
+	// so a second opinion would be a third.
+	if strings.Count(body, "reverse-applies") != 1 {
+		t.Errorf("the cross-check ran for a branch that did not need it:\n%s", body)
+	}
+}
+
+// TestCrossCheckWithholdsWhatItCannotCorroborate: the check's only power is to
+// refuse. If it cannot establish the content is in main, the branch stays —
+// "could not corroborate" is never evidence the work is missing, and never a
+// reason to delete anyway.
+func TestCrossCheckWithholdsWhatItCannotCorroborate(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := squashMergedRepo(t, wd, "proj")
+
+	// main moves on: the squashed content is reverted, so the branch's diff no
+	// longer reverse-applies even though the patch tiers already answered.
+	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "commit", "-qam", "back that out")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasBranch(t, dir, "feature") {
+		t.Errorf("a branch the cross-check could not corroborate was deleted anyway:\n%s", out.String())
+	}
+}

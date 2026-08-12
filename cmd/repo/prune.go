@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/journal"
@@ -84,6 +85,7 @@ func (o pruneOpts) deleting() bool { return o.Delete || o.DryRun }
 // removes the prunable ones when asked.
 func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) error {
 	walk := &walkthrough{in: bufio.NewReader(in)}
+	cc := &crossCheckTally{}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 	var log *journal.Log
 	defer func() {
@@ -147,7 +149,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 			}
 		}
 		if len(approved) > 0 {
-			pruned += pruneRepo(w, r, container, approved, log, opts)
+			pruned += pruneRepo(w, r, container, approved, log, opts, cc)
 		}
 		if quit {
 			fmt.Fprintf(w, "    stopped — %s and everything after it left alone\n", repoName(r))
@@ -169,14 +171,62 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 			fmt.Fprintf(w, "recorded in %s\n", log.Path())
 		}
 	}
+	cc.report(w)
 	return nil
+}
+
+// crossCheckTally accumulates what the -D corroboration cost across a run. The
+// check's price is the open question about it (DESIGN §5.3), so it is measured
+// and stated rather than assumed to be small — and stated even when it was
+// cheap, since a number nobody sees is not a measurement.
+type crossCheckTally struct {
+	branches int
+	spent    time.Duration
+}
+
+func (c *crossCheckTally) report(w io.Writer) {
+	if c == nil || c.branches == 0 {
+		return
+	}
+	fmt.Fprintf(w, "cross-checked %d branch(es) in %s\n",
+		c.branches, c.spent.Round(time.Millisecond))
+}
+
+// crossCheck corroborates a rewritten-tier verdict by a route that shares no
+// code with the patch-id tiers that produced it, and reports whether the
+// deletion may go ahead (DESIGN §5.3).
+//
+// Only the -D path needs it: where git's own `-d` would agree, two independent
+// judgements already stand behind the deletion. Failure withholds the branch —
+// "could not corroborate" is never evidence that the work is missing, only a
+// reason not to act unilaterally on the tiers' word.
+func crossCheck(w io.Writer, container string, v syncpkg.Verdict, base string, cc *crossCheckTally) bool {
+	start := time.Now()
+	ok, err := gitx.ReverseApplies(container, v.Name, base)
+	took := time.Since(start)
+	if cc != nil {
+		cc.branches++
+		cc.spent += took
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(w, "    ✗ %s: cross-check could not run (%v) — not deleted\n", v.Name, err)
+		return false
+	case !ok:
+		fmt.Fprintf(w, "    ✗ %s: %s does not reverse-apply this branch's diff — not deleted (%s)\n",
+			v.Name, base, took.Round(time.Millisecond))
+		return false
+	}
+	fmt.Fprintf(w, "    ✓ %s: cross-checked — %s reverse-applies its whole diff (%s)\n",
+		v.Name, base, took.Round(time.Millisecond))
+	return true
 }
 
 // pruneRepo removes (or, under --dry-run, reports) one repo's prunable
 // branches, returning how many went. Every deletion is recorded before it is
 // announced, and the SHA is read *before* the branch goes: it is the whole
 // value of the record, and reading it back afterwards is not an option.
-func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.Verdict, log *journal.Log, opts pruneOpts) int {
+func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.Verdict, log *journal.Log, opts pruneOpts, cc *crossCheckTally) int {
 	n := 0
 	for _, v := range prunable {
 		// The SHA came out of classification, which read it before anything was
@@ -188,6 +238,12 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 			// one this command makes. Reaching here means classification could
 			// not read the ref at all, which is itself worth seeing.
 			fmt.Fprintf(w, "    ✗ %s: no object recorded for this ref — not deleted\n", v.Name)
+			continue
+		}
+		// The corroboration runs before the deletion, and before the dry run's
+		// claim that a deletion would happen: a preview that skipped it would
+		// promise removals the real run then refuses.
+		if syncpkg.NeedsForceDelete(v) && !crossCheck(w, container, v, primaryBranch(r), cc) {
 			continue
 		}
 		if opts.DryRun {

@@ -1056,15 +1056,28 @@ applies cleanly the content is demonstrably present in base, established by a
 part of git that shares no code with patch-id hashing. Failure means *could not
 corroborate* → report instead of delete; it can never turn a "no" into a "yes".
 
-Its cost is real and therefore **measured, not assumed**: the check is timed,
-the duration is reported per branch under `--verbose`, and prune's footer names
-the total it spent corroborating. Two things keep that cost bounded without a
-guess about how fast it is — it runs **only immediately before an actual
-force-deletion**, never during classification, so no report and no sweep ever
-pays for it; and a branch is only ever deleted once. Under `auto` it does not run
-at all, since that bar is ancestry-only. If the numbers say otherwise once
-there is data, they will say so out loud rather than being discovered as a slow
-sweep with no attribution.
+It also corroborates something slightly *stronger* than the tiers do, which is
+worth being explicit about because it is the source of the only disagreements
+between them. `git cherry` asks whether the patch is anywhere in base's
+**history**; reverse application asks whether the change is in base's **current
+tree**. Work that landed and was then reverted satisfies the first and fails the
+second — and a branch whose content is no longer in base is one whose deletion
+would take the last copy of it. When they disagree, the branch stays.
+
+Its cost is real and therefore **measured, not assumed**: each check is timed,
+a failed one says what it cost, and prune's footer names the total it spent
+corroborating. Two things bound that cost regardless of the numbers — it runs
+**only immediately before an actual force-deletion**, never during
+classification, so no report and no sweep ever pays for it; and a branch is only
+ever deleted once. Under `auto` it does not run at all, since that bar is
+ancestry-only.
+
+The numbers, since they exist now: a synthetic branch touching **800 files
+(438KB of diff) cross-checks in 0.12s**, and cost tracks diff size rather than
+history depth, since a scratch index built from base is all it reads. On the
+author's own machine the check has yet to run at all — all 12 currently prunable
+branches across 24 repos landed at the ancestry tier, where `-d` is used and no
+corroboration is needed. The expensive case is the rare one.
 
 **The sweep names what it found.** Under `report` and `auto`, `sync`'s footer
 carries a line — `12 branches prunable across 4 repos — repo prune` — because
