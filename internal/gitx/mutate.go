@@ -103,14 +103,24 @@ func EnsureRemote(dir, name, url string) (changed bool, err error) {
 // its own voice, and says nothing about *why* upstream moved them: a rewritten
 // tag is what git observed, and whether that was a release process or something
 // worth alarm is not a thing a fetch can establish.
+//
+// Each entry carries the object the tag is left at (From) and the object
+// upstream wants it to be (To) — reusing TagMove's shape, since a refused move
+// and a followed one are the same fact with a different verdict, and the local
+// tag pointing nowhere else means From is still the only route back to what a
+// reader would otherwise have to `git rev-parse` themselves to see.
 type MovedTagsError struct {
 	Remote string
-	Tags   []string // local tag names left at their old value
+	Tags   []TagMove // local tags left at their old value
 }
 
 func (e *MovedTagsError) Error() string {
+	names := make([]string, len(e.Tags))
+	for i, t := range e.Tags {
+		names[i] = t.Tag
+	}
 	return fmt.Sprintf("%s moved %d existing tag(s), not followed: %s",
-		e.Remote, len(e.Tags), strings.Join(e.Tags, ", "))
+		e.Remote, len(e.Tags), strings.Join(names, ", "))
 }
 
 // TagPolicy is which tags a fetch should ask for and which of those it may
@@ -253,7 +263,12 @@ func followedTags(porcelain string) []TagMove {
 // returns the rejected tags, plus whether *every* rejection was a tag. A
 // rejected branch means something else went wrong, and the caller must keep
 // treating that as a failure rather than shrugging it off with the tags.
-func rejectedTags(porcelain string) (tags []string, onlyTags bool) {
+//
+// <old> and <new> on a rejected line are the local tag's current object and
+// the object upstream wanted it to be — the same pair followedTags reads off
+// a "t" line, just with git having declined to make the move. Carrying them
+// lets the caller say what was refused, not just that something was.
+func rejectedTags(porcelain string) (tags []TagMove, onlyTags bool) {
 	for _, line := range splitLines(porcelain) {
 		if !strings.HasPrefix(line, "!") {
 			continue
@@ -266,7 +281,7 @@ func rejectedTags(porcelain string) (tags []string, onlyTags bool) {
 		if !strings.HasPrefix(ref, "refs/tags/") {
 			return nil, false
 		}
-		tags = append(tags, strings.TrimPrefix(ref, "refs/tags/"))
+		tags = append(tags, TagMove{Tag: strings.TrimPrefix(ref, "refs/tags/"), From: f[1], To: f[2]})
 	}
 	return tags, true
 }

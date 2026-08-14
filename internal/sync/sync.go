@@ -534,9 +534,15 @@ func (x *run) recordTagMoves(moves []gitx.TagMove) {
 // them crammed into the repo's one detail cell is unreadable at exactly the
 // moment it matters. finalizeBranches folds the single-tag case back onto the
 // row, so the common case still costs one line.
-func (x *run) recordRefusedTags(tags []string) {
+//
+// Each row names the object the tag is still at and the object upstream
+// wanted it to be — unlike a followed move, From isn't lost (the local tag
+// still points at it), but it's the same "go look at this" fact a reader
+// would otherwise have to `git rev-parse` themselves to get.
+func (x *run) recordRefusedTags(tags []gitx.TagMove) {
 	for _, t := range tags {
-		x.refMark(RefTag, t, Attention, "moved upstream — not followed")
+		x.refMark(RefTag, t.Tag, Attention, fmt.Sprintf("moved %s → %s — not followed",
+			shortSHA(t.From), shortSHA(t.To)))
 	}
 }
 
@@ -851,7 +857,10 @@ func (x *run) applyRewrite(ref string) {
 		x.branchMark(x.ub, Updated, "followed rewrite")
 		return
 	}
-	x.branchMark(x.ub, Attention, fmt.Sprintf("rewritten/diverged (+%d/-%d) — stopped", ahead, behind))
+	local, _ := gitx.RevParse(x.dir, x.ub)
+	remote, _ := gitx.RevParse(x.dir, ref)
+	x.branchMark(x.ub, Attention, fmt.Sprintf("rewritten %s → %s (+%d/-%d) — stopped",
+		shortSHA(local), shortSHA(remote), ahead, behind))
 	x.add("non-fast-forward on %s (no force_pull match): stopped", ref)
 }
 

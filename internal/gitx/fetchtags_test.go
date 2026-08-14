@@ -47,11 +47,16 @@ func TestFetchMovedTagIsTyped(t *testing.T) {
 	if !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want *MovedTagsError", err)
 	}
-	if len(moved.Tags) != 1 || moved.Tags[0] != "independent.latest" {
+	if len(moved.Tags) != 1 || moved.Tags[0].Tag != "independent.latest" {
 		t.Errorf("Tags = %v, want [independent.latest]", moved.Tags)
 	}
 	if moved.Remote != "origin" {
 		t.Errorf("Remote = %q, want origin", moved.Remote)
+	}
+	// The refused tag's local object is still there to name — nothing was
+	// destroyed — but the caller can't say what upstream wanted without it.
+	if m := moved.Tags[0]; m.From == "" || m.To == "" || m.From == m.To {
+		t.Errorf("Tags[0] = %+v; want distinct non-empty From/To", m)
 	}
 }
 
@@ -124,8 +129,9 @@ func TestRejectedTagsRefusesBranches(t *testing.T) {
 	if tags, only := rejectedTags(porcelain); only {
 		t.Errorf("rejectedTags = %v, true; a rejected branch must not read as tags-only", tags)
 	}
-	if tags, only := rejectedTags("! 1 2 refs/tags/a\n* 0 3 refs/tags/b\n"); !only || len(tags) != 1 || tags[0] != "a" {
-		t.Errorf("rejectedTags = %v, %v; want [a], true", tags, only)
+	if tags, only := rejectedTags("! 1 2 refs/tags/a\n* 0 3 refs/tags/b\n"); !only || len(tags) != 1 ||
+		tags[0].Tag != "a" || tags[0].From != "1" || tags[0].To != "2" {
+		t.Errorf("rejectedTags = %v, %v; want [{a 1 2}], true", tags, only)
 	}
 }
 
@@ -183,7 +189,7 @@ func TestForceTagsFollowsOnlyWhatItNames(t *testing.T) {
 	if !errors.As(err, &moved) {
 		t.Fatalf("Fetch = %v; want v1.0 still refused", err)
 	}
-	if len(moved.Tags) != 1 || moved.Tags[0] != "v1.0" {
+	if len(moved.Tags) != 1 || moved.Tags[0].Tag != "v1.0" {
 		t.Errorf("refused = %v, want [v1.0] only", moved.Tags)
 	}
 	// …while the blessed one was followed.
