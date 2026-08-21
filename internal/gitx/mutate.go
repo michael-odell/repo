@@ -138,12 +138,15 @@ type TagPolicy struct {
 //	--tags                                     every tag, none overwritable
 //	--no-tags +refs/tags/v*:refs/tags/v*       only v*, and v* may be overwritten
 //
-// A forced pattern is listed *in addition to* the unforced scope rather than
-// instead of it: git applies the more specific forced refspec to the tags it
-// names and the plain one to the rest, so one invocation both follows the
-// blessed tags and keeps refusing every other. --no-tags is what makes a
-// narrowed scope real — without it git auto-follows any tag reachable from the
-// branches it fetched, and the list would quietly not be a list.
+// A forced pattern is listed *before* the unforced scope rather than after it:
+// when a ref is named by both, git decides its fate from whichever refspec it
+// reaches first, not from which is more specific — a plain refspec seen first
+// rejects a non-fast-forward outright, and a "+" for that same ref later in
+// the same invocation has nothing left to override. Forced-first is what
+// actually lets a narrowed `tags` compose with `force_tags`; forced-after-plain
+// silently loses every move `force_tags` was meant to allow. --no-tags is what
+// makes a narrowed scope real — without it git auto-follows any tag reachable
+// from the branches it fetched, and the list would quietly not be a list.
 //
 // The branch refspec is restated here whenever any tag refspec is passed,
 // because **naming a refspec on the command line replaces the remote's
@@ -159,14 +162,6 @@ func (p TagPolicy) fetchArgs(remote string) []string {
 	}
 
 	args := []string{"+refs/heads/*:refs/remotes/" + remote + "/*"}
-	if all {
-		args = append(args, "--tags")
-	} else {
-		args = append(args, "--no-tags")
-		for _, g := range p.Fetch {
-			args = append(args, "refs/tags/"+g+":refs/tags/"+g)
-		}
-	}
 	// A forced pattern outside the fetched scope is not an error: it simply
 	// names nothing, the same way force_pull may name a branch that doesn't
 	// exist. Skipping them all when no tags are fetched keeps git from being
@@ -174,6 +169,14 @@ func (p TagPolicy) fetchArgs(remote string) []string {
 	if len(p.Fetch) != 0 || all {
 		for _, g := range p.Force {
 			args = append(args, "+refs/tags/"+g+":refs/tags/"+g)
+		}
+	}
+	if all {
+		args = append(args, "--tags")
+	} else {
+		args = append(args, "--no-tags")
+		for _, g := range p.Fetch {
+			args = append(args, "refs/tags/"+g+":refs/tags/"+g)
 		}
 	}
 	return args

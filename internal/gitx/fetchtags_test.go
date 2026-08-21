@@ -155,13 +155,16 @@ func TestFetchArgsShapes(t *testing.T) {
 			TagPolicy{Fetch: []string{}}, heads + " --no-tags"},
 		{"a forced pattern rides alongside the full scope",
 			TagPolicy{Force: []string{"*.latest"}},
-			heads + " --tags +refs/tags/*.latest:refs/tags/*.latest"},
+			heads + " +refs/tags/*.latest:refs/tags/*.latest --tags"},
 		{"a narrowed scope suppresses auto-following",
 			TagPolicy{Fetch: []string{"v*"}},
 			heads + " --no-tags refs/tags/v*:refs/tags/v*"},
-		{"scope and force compose",
+		{"scope and force compose, forced first",
 			TagPolicy{Fetch: []string{"v*"}, Force: []string{"v*-rc"}},
-			heads + " --no-tags refs/tags/v*:refs/tags/v* +refs/tags/v*-rc:refs/tags/v*-rc"},
+			heads + " +refs/tags/v*-rc:refs/tags/v*-rc --no-tags refs/tags/v*:refs/tags/v*"},
+		{"a literal name in force is no different from a glob — still forced first",
+			TagPolicy{Fetch: []string{"v*"}, Force: []string{"v1.0"}},
+			heads + " +refs/tags/v1.0:refs/tags/v1.0 --no-tags refs/tags/v*:refs/tags/v*"},
 		{"no tags fetched means nothing to force",
 			TagPolicy{Fetch: []string{}, Force: []string{"*"}}, heads + " --no-tags"},
 	} {
@@ -226,5 +229,37 @@ func TestNarrowedTagsExcludesTheRest(t *testing.T) {
 	}
 	if _, ok := RevParse(clone, "refs/tags/v1.0"); !ok {
 		t.Error("v1.0 did not arrive despite matching tags")
+	}
+}
+
+// TestForceTagsFollowsWithinNarrowedScope: setting `tags` must not defeat
+// `force_tags` for a tag both name — whether force_tags names it with a glob or
+// by its literal name. Before the refspecs were reordered so the forced one is
+// listed first, a narrowed `tags` and an overlapping `force_tags` produced two
+// refspecs for the same ref — one plain, one "+" — and git honoured whichever
+// it reached first: the plain one, which rejected the non-fast-forward and
+// left the tag stuck, reporting it as an unblessed move even though
+// force_tags named it. This held regardless of which of the two spelled the
+// tag as a glob and which spelled it by name, since the ordering bug never
+// cared which refspec text matched — only which one git saw first.
+func TestForceTagsFollowsWithinNarrowedScope(t *testing.T) {
+	for _, force := range [][]string{{"v*"}, {"v1.0"}} {
+		t.Run(strings.Join(force, ","), func(t *testing.T) {
+			origin, clone := originWithClone(t, "v1.0")
+			moveTag(t, origin, "v1.0")
+
+			policy := TagPolicy{Fetch: []string{"v*"}, Force: force}
+			res, err := Fetch(clone, "origin", policy)
+			if err != nil {
+				t.Fatalf("Fetch = %v; want v1.0 followed, not refused", err)
+			}
+			head, _ := RevParse(clone, "refs/remotes/origin/main")
+			if got, _ := RevParse(clone, "refs/tags/v1.0"); got != head {
+				t.Errorf("v1.0 = %s, want %s — force_tags should have followed it despite the narrowed tags scope", got, head)
+			}
+			if len(res.Followed) != 1 || res.Followed[0].Tag != "v1.0" {
+				t.Errorf("Followed = %v, want one move of v1.0", res.Followed)
+			}
+		})
 	}
 }
