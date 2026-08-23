@@ -119,7 +119,22 @@ never the remote name. `sync --fix` now renames a stale `upstream` to
 `untrusted` on a hardening clone (or, if a plain sync already created
 `untrusted` alongside it, removes the now-redundant `upstream` instead of
 attempting an impossible rename); without `--fix` the mismatch is reported
-every run, the same as a layout mismatch.
+every run — but, corrected the same day on live use, *not* via `x.attention`:
+that outranks `ReviewPending` (rank/mark), so on a real mirror whose old
+`upstream` was already ahead of origin, the very fix meant to make review-gate
+detection work again buried it behind a "rename this remote" notice instead —
+worse than before the fix, and a "green ✓ up to date" is exactly how a repo
+with a masked ReviewPending reads. Layout mismatches earn `x.attention`
+because nothing else can proceed until they're fixed; a stale remote name
+blocks nothing (DESIGN §4.1 calls remote reconciliation low-risk), so
+detecting it is now a trace line only. Separately, every provisioning path's
+fetch of the second remote had always swallowed its error silently — inert
+for a remote with years of successful fetches behind it, but exactly what a
+*newly created* `untrusted` remote's first fetch now goes through for anyone
+upgrading from an `upstream`-named clone; a failure there left nothing for
+`mirrorReview` to compare against, which also reads as a clean "up to date"
+rather than "the review gate couldn't check its source". That fetch now
+reports failure as Attention.
 
 Still open:
 - `--fix`'s other two DESIGN §4.1 reconciliations: general remote-contract

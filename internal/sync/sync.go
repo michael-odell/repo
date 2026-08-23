@@ -469,7 +469,7 @@ func (x *run) provisionWorktree() bool {
 		return false
 	}
 	if secondName != "" {
-		_, _ = gitx.Fetch(x.container, secondName, x.tagPolicy())
+		x.fetchSecondRemote(x.container, secondName)
 	}
 	x.res.Cloned = true
 	// Before syncWorktree adds a worktree per important branch — adding one for
@@ -582,9 +582,7 @@ func (x *run) fetchWorktreeRemotes() bool {
 		if changed {
 			x.add("set %s = %s", name, second)
 		}
-		if _, err := gitx.Fetch(x.container, name, x.tagPolicy()); err == nil {
-			x.add("fetched %s", name)
-		}
+		x.fetchSecondRemote(x.container, name)
 	}
 	return true
 }
@@ -659,6 +657,16 @@ func siblingRemoteName(name string) string {
 // already exists too (a plain sync will have created it, since this check does
 // not gate that), in which case the now-redundant stale one is removed instead
 // — renaming onto an existing name is not possible.
+//
+// Detecting it is deliberately quiet (a trace line, not x.attention): DESIGN
+// §4.1 calls remote reconciliation "a metadata change (low risk)", unlike a
+// layout mismatch, which does raise Attention because nothing else about that
+// repo can safely proceed until it's resolved. A stale remote name blocks
+// nothing — ensureSecondRemote below has already given this run a working
+// canonically-named remote regardless — so letting it outrank whatever the
+// branches beneath it actually found (rank(Attention) > rank(ReviewPending),
+// per mark/rank) would bury the more urgent, more specific finding under a
+// tidiness note every single run until someone thinks to pass --fix.
 func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
 	name = x.remoteName()
 	stale := siblingRemoteName(name)
@@ -673,11 +681,33 @@ func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
 			}
 		} else {
 			x.add("remote %s should be %s for %s — run: sync --fix", stale, name, x.r.Workflow)
-			x.attention(fmt.Sprintf("remote %s should be %s — run: sync --fix", stale, name))
 		}
 	}
 	changed, _ = gitx.EnsureRemote(dir, name, url)
 	return name, changed
+}
+
+// fetchSecondRemote fetches the workflow's second remote and reports failure
+// instead of swallowing it. Every call site here used to ignore this fetch's
+// error entirely (`if _, err := gitx.Fetch(...); err == nil { ... }`, nothing
+// on the else), unlike fetchRemote's handling of origin — harmless when the
+// remote had years of prior successful fetches behind it, but this is also
+// what a brand-new "untrusted"/"upstream" remote's very first fetch goes
+// through (e.g. right after ensureSecondRemote creates one), where a failure
+// leaves nothing to compare against at all. mirrorReview and updateForkPR's
+// upstream comparison both fail closed on a missing ref — no ReviewPending, no
+// "to PR" note, nothing — so a transient failure here reads as "up to date"
+// rather than "the review gate couldn't check its source", the opposite of
+// what the workflow exists to guarantee. Unlike origin, this failure doesn't
+// stop the sweep — origin-side branch reconciliation is still valid — but it
+// is exactly as Attention-worthy as any other fetch failure once surfaced.
+func (x *run) fetchSecondRemote(dir, name string) {
+	if _, err := gitx.Fetch(dir, name, x.tagPolicy()); err != nil {
+		x.add("fetch %s failed: %v", name, err)
+		x.attention(fmt.Sprintf("fetch %s failed: %v", name, err))
+		return
+	}
+	x.add("fetched %s", name)
 }
 
 // writeGitFile writes the container's `.git` file pointing at the bare repo, so
@@ -755,10 +785,7 @@ func (x *run) provision() bool {
 			return false
 		}
 		if x.r.Fork != nil {
-			name := x.remoteName()
-			if _, err := gitx.Fetch(x.container, name, x.tagPolicy()); err == nil {
-				x.add("fetched %s", name)
-			}
+			x.fetchSecondRemote(x.container, x.remoteName())
 		}
 	}
 

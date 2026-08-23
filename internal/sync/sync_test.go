@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,9 +117,9 @@ func TestFixReconcilesStaleUpstreamOnMirror(t *testing.T) {
 		precreateUntrusted bool
 		fix                bool
 		wantUpstream       bool
-		wantAttention      bool
+		wantReported       bool // the "should be untrusted" trace line, without --fix
 	}{
-		{name: "plain sync reports, does not rename", wantUpstream: true, wantAttention: true},
+		{name: "plain sync reports, does not rename", wantUpstream: true, wantReported: true},
 		{name: "--fix renames when untrusted absent", fix: true},
 		{name: "--fix removes stale when untrusted already exists", precreateUntrusted: true, fix: true},
 	} {
@@ -173,8 +174,22 @@ branches = ["main"]
 			if len(results) != 1 {
 				t.Fatalf("got %d results, want 1", len(results))
 			}
-			if gotAttention := results[0].Outcome == Attention; gotAttention != tc.wantAttention {
-				t.Errorf("outcome = %v, want Attention=%v; actions=%v", results[0].Outcome, tc.wantAttention, results[0].Actions)
+			// The stale-name report must never itself raise Attention — DESIGN
+			// §4.1 calls remote reconciliation low-risk, and a repo whose branches
+			// are otherwise fine must not read as needing intervention over a
+			// leftover remote name (that finding would also outrank, and so bury,
+			// a genuine one — see TestStaleUpstreamNeverMasksReviewPending).
+			if results[0].Outcome == Attention {
+				t.Errorf("outcome = Attention, want the stale-name report to never drive it; actions=%v", results[0].Actions)
+			}
+			gotReported := false
+			for _, a := range results[0].Actions {
+				if strings.Contains(a.Text, "should be untrusted") {
+					gotReported = true
+				}
+			}
+			if gotReported != tc.wantReported {
+				t.Errorf("reported the stale name = %v, want %v; actions=%v", gotReported, tc.wantReported, results[0].Actions)
 			}
 
 			_, upErr := exec.Command("git", "-C", clone, "remote", "get-url", "upstream").Output()
@@ -189,6 +204,135 @@ branches = ["main"]
 				t.Errorf("untrusted = %q, want %q", got, up)
 			}
 		})
+	}
+}
+
+// TestStaleUpstreamNeverMasksReviewPending is the regression this fix exists
+// for: a pre-fix mirror clone (a stale "upstream" remote, untrusted genuinely
+// ahead of origin) synced with the fixed code, no --fix, must still surface
+// ReviewPending as the repo's headline outcome. An earlier version of this fix
+// reported the stale name via x.attention, which outranks ReviewPending
+// (rank(Attention) > rank(ReviewPending) in mark/rank) and silently buried the
+// review-pending finding behind a "rename this remote" notice on every run.
+func TestStaleUpstreamNeverMasksReviewPending(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	up := filepath.Join(remotes, "up", "proj")
+	fork := filepath.Join(remotes, "fork", "proj")
+	must(t, os.MkdirAll(filepath.Dir(up), 0o755))
+	must(t, os.MkdirAll(filepath.Dir(fork), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", up)
+	git(t, T, "init", "-q", "-b", "main", "--bare", fork)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", up, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+	git(t, seed, "push", "-q", fork, "main") // fork = reviewed point (commit 1)
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\ntwo\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "two")
+	git(t, seed, "push", "-q", "origin", "main") // up = reviewed point +1
+
+	// A clone built the old way: origin=fork, "upstream"=definitive, fetched —
+	// the state any mirror clone managed before this fix is in.
+	clone := filepath.Join(T, "clones", "proj")
+	must(t, os.MkdirAll(filepath.Dir(clone), 0o755))
+	git(t, T, "clone", "-q", fork, clone)
+	git(t, clone, "remote", "add", "upstream", up)
+	git(t, clone, "fetch", "-q", "upstream")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:up/proj"
+fork = "local:fork/proj"
+workflow = "supply-chain-mirror"
+branches = ["main"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Outcome != ReviewPending {
+		t.Errorf("outcome = %v, want ReviewPending; actions=%v", results[0].Outcome, results[0].Actions)
+	}
+}
+
+// TestSecondRemoteFetchFailureIsReported is the other half of the silent-fetch
+// gap this fix closes: every provisioning path used to ignore a failed fetch of
+// the second (upstream/untrusted) remote entirely — `if _, err := gitx.Fetch
+// (...); err == nil { ... }`, nothing on the else. Harmless for a remote with
+// years of prior successful fetches sitting behind it, but ensureSecondRemote
+// can now hand a *brand-new*, empty remote to this exact call (created moments
+// earlier for a clone that predates this fix), whose first fetch failing left
+// nothing to compare against — mirrorReview and updateForkPR both fail closed
+// on a missing ref, so the repo read as a clean "up to date" instead of "the
+// review gate couldn't check its source". A repo whose second remote points at
+// nothing must come back Attention, not a silent pass.
+func TestSecondRemoteFetchFailureIsReported(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	fork := filepath.Join(remotes, "fork", "proj")
+	must(t, os.MkdirAll(filepath.Dir(fork), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", fork)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", fork, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:up/does-not-exist"
+fork = "local:fork/proj"
+workflow = "supply-chain-mirror"
+branches = ["main"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	// Fresh provisioning: origin (the fork) clones fine, but the definitive
+	// source doesn't exist, so the untrusted fetch fails.
+	results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Outcome != Attention {
+		t.Errorf("outcome = %v, want Attention; actions=%v", results[0].Outcome, results[0].Actions)
+	}
+	found := false
+	for _, a := range results[0].Actions {
+		if strings.Contains(a.Text, "fetch untrusted failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no 'fetch untrusted failed' trace line; actions=%v", results[0].Actions)
 	}
 }
 
