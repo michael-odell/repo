@@ -315,7 +315,10 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   positional root/path/name selectors. While it runs, a live block on stderr
   shows progress and gives every repo in flight its own line with how long it
   has been running; `--verbose` explains the decision for every repo and gives
-  each one's duration.
+  each one's duration. `-n`/`--dry-run` still fetches for real (branches only,
+  never tags, never a remote it would have to create) so its report reflects
+  current upstream state rather than the last real sync's — it just never
+  moves a branch, pushes, converts a layout, checks out a pin, or runs a hook.
 - `apply` — regenerate the shell navigation/completion artifacts into `$REPO_OUT`
   from the declared ∪ discovered union
 - `list` — enumerate the declared ∪ discovered union (for completion)

@@ -478,8 +478,21 @@ func (x *run) provisionWorktree() bool {
 	return true
 }
 
-// tagPolicy is the repo's tag settings in the form gitx.Fetch wants.
+// tagPolicy is the repo's tag settings in the form gitx.Fetch wants. Under
+// --dry-run this asks for no tags at all (Fetch: []string{}, i.e. --no-tags —
+// nil would mean "every tag"), even though the fetch itself now runs for real
+// (below): dropping force_tags alone would still let an ordinary, unforced tag
+// refspec *create* a tag that doesn't exist locally yet, and -n promises to
+// change nothing, full stop, not just nothing destructive. Nothing this fixes
+// needs a tag: DESIGN §5.4's review-gate comparisons, and every branch-based
+// workflow, read remote-tracking *branches*, never tags. The one thing this
+// leaves exactly as stale as before the fix is a `vendor` repo pinned to
+// latest-tag — resolving "the latest tag" needs a tag fetch, so its --dry-run
+// preview can't be more current without writing a tag first.
 func (x *run) tagPolicy() gitx.TagPolicy {
+	if x.opts.DryRun {
+		return gitx.TagPolicy{Fetch: []string{}}
+	}
 	return gitx.TagPolicy{Fetch: x.r.Tags, Force: x.r.ForceTags}
 }
 
@@ -560,30 +573,39 @@ func shortSHA(s string) string {
 // fetchWorktreeRemotes ensures origin (and the workflow's second remote, for a
 // fork) are set and fetched for an already-provisioned worktree container — the
 // network step every sync needs, mirroring provision()'s fetch for a single
-// tree (dry-run only reports intent). provisionWorktree covers this on an
-// initial clone; this covers every sync after.
+// tree. This always fetches for real, --dry-run included (DESIGN §5.4:
+// "periodic sync always fetches"; see tagPolicy for what keeps that fetch from
+// writing anything under --dry-run) — it only skips *writing* a remote, which
+// is why a clone with nothing configured yet for a fork can't be assessed
+// until a real sync (or --fix) establishes it. provisionWorktree covers this
+// on an initial clone; this covers every sync after.
 func (x *run) fetchWorktreeRemotes() bool {
 	origin, second, ok := x.resolveRemotes()
 	if !ok {
 		return false
 	}
-	if x.opts.DryRun {
-		x.add("would fetch %s", x.fetchTargets())
-		return true
-	}
-	if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
-		x.add("set origin = %s", origin)
+	if !x.opts.DryRun {
+		if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
+			x.add("set origin = %s", origin)
+		}
 	}
 	if !x.fetchRemote("origin") {
 		return false
 	}
-	if second != "" {
-		name, changed := x.ensureSecondRemote(x.container, second)
-		if changed {
-			x.add("set %s = %s", name, second)
-		}
-		x.fetchSecondRemote(x.container, name)
+	if second == "" {
+		return true
 	}
+	if x.opts.DryRun {
+		if name := x.dryRunSecondRemoteName(x.container); name != "" {
+			x.fetchSecondRemote(x.container, name)
+		}
+		return true
+	}
+	name, changed := x.ensureSecondRemote(x.container, second)
+	if changed {
+		x.add("set %s = %s", name, second)
+	}
+	x.fetchSecondRemote(x.container, name)
 	return true
 }
 
@@ -630,14 +652,6 @@ func (x *run) remoteName() string {
 	return "upstream"
 }
 
-// fetchTargets is the dry-run fetch-intent line's remote list.
-func (x *run) fetchTargets() string {
-	if x.r.Fork != nil {
-		return "origin and " + x.remoteName()
-	}
-	return "origin"
-}
-
 // siblingRemoteName is the other workflow's name for the same remote slot — the
 // name a hardening (or loosening) clone would still be carrying it under.
 func siblingRemoteName(name string) string {
@@ -645,6 +659,42 @@ func siblingRemoteName(name string) string {
 		return "untrusted"
 	}
 	return "upstream"
+}
+
+// secondRemoteRefName is the git remote name to actually read the workflow's
+// second remote from, right now, on this disk: the canonical name when it's
+// configured, else the sibling name when that's what's there instead — a
+// clone reported but not yet --fix'd (DESIGN §3.6, §4.1), or, under --dry-run,
+// any clone at all, since dry-run never creates or renames a remote (only
+// reads one that already exists — see ensureSecondRemote, tagPolicy). Used
+// everywhere the second remote is fetched or read from, so a mid-migration
+// clone is assessed against whatever is actually there instead of silently
+// against a name that was never populated. In a real sync, ensureSecondRemote
+// has already guaranteed the canonical name exists by the time this is
+// called, so it resolves to canonical there regardless.
+func (x *run) secondRemoteRefName(dir string) string {
+	name := x.remoteName()
+	if _, ok := gitx.RemoteURL(dir, name); ok {
+		return name
+	}
+	stale := siblingRemoteName(name)
+	if _, ok := gitx.RemoteURL(dir, stale); ok {
+		return stale
+	}
+	return name
+}
+
+// dryRunSecondRemoteName resolves the name to fetch the second remote from
+// under --dry-run, which — unlike a real sync's ensureSecondRemote — never
+// creates one (DESIGN §5.7): "" with a trace line explaining why stands in for
+// "nothing configured yet to read".
+func (x *run) dryRunSecondRemoteName(dir string) string {
+	name := x.secondRemoteRefName(dir)
+	if _, ok := gitx.RemoteURL(dir, name); !ok {
+		x.add("%s not yet configured — can't check without a real sync", name)
+		return ""
+	}
+	return name
 }
 
 // ensureSecondRemote sets the workflow-correct second remote (upstream for
@@ -777,15 +827,21 @@ func (x *run) provision() bool {
 		}
 	}
 
-	// Fetch (dry-run assesses against existing refs without touching the network).
-	if x.opts.DryRun {
-		x.add("would fetch %s", x.fetchTargets())
-	} else {
-		if !x.fetchRemote("origin") {
-			return false
+	// Fetch. Always for real, --dry-run included (DESIGN §5.4: "periodic sync
+	// always fetches"; see tagPolicy for what keeps that fetch from writing
+	// anything under --dry-run) — only the remote-ensuring above is skipped,
+	// so a fork whose second remote isn't configured yet can't be assessed
+	// until a real sync (or --fix) establishes it.
+	if !x.fetchRemote("origin") {
+		return false
+	}
+	if x.r.Fork != nil {
+		name := x.remoteName()
+		if x.opts.DryRun {
+			name = x.dryRunSecondRemoteName(x.container)
 		}
-		if x.r.Fork != nil {
-			x.fetchSecondRemote(x.container, x.remoteName())
+		if name != "" {
+			x.fetchSecondRemote(x.container, name)
 		}
 	}
 
@@ -982,7 +1038,7 @@ func (x *run) mirrorReview() {
 	if x.r.Workflow != model.SupplyChainMirror || x.r.Fork == nil {
 		return
 	}
-	untrustedRef := x.remoteName() + "/" + x.ub
+	untrustedRef := x.secondRemoteRefName(x.dir) + "/" + x.ub
 	if _, ok := gitx.RevParse(x.dir, untrustedRef); !ok {
 		return
 	}

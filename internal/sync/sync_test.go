@@ -336,6 +336,232 @@ branches = ["main"]
 	}
 }
 
+// TestDryRunFetchesRealDataForReview is the regression this whole --dry-run
+// investigation was chasing: --dry-run must fetch for real, not assess against
+// whatever the last real sync happened to leave behind. The clone below is
+// built to represent exactly that "last real sync" snapshot — untrusted
+// already fetched once, matching origin — and then untrusted advances with no
+// further real sync ever happening. A --dry-run that skipped fetching would
+// see the stale, matching refs and report "up to date"; DESIGN §5.7 says it
+// must fetch branches for real and catch this.
+func TestDryRunFetchesRealDataForReview(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	up := filepath.Join(remotes, "up", "proj")
+	fork := filepath.Join(remotes, "fork", "proj")
+	must(t, os.MkdirAll(filepath.Dir(up), 0o755))
+	must(t, os.MkdirAll(filepath.Dir(fork), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", up)
+	git(t, T, "init", "-q", "-b", "main", "--bare", fork)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", up, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+	git(t, seed, "push", "-q", fork, "main")
+
+	// Simulate the state right after a real sync: origin and untrusted both
+	// fetched, both at "one" — a clean, matching snapshot.
+	clone := filepath.Join(T, "clones", "proj")
+	must(t, os.MkdirAll(filepath.Dir(clone), 0o755))
+	git(t, T, "clone", "-q", fork, clone)
+	git(t, clone, "remote", "add", "untrusted", up)
+	git(t, clone, "fetch", "-q", "untrusted")
+
+	// Now untrusted advances, with no real sync in between.
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\ntwo\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "two")
+	git(t, seed, "push", "-q", "origin", "main")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:up/proj"
+fork = "local:fork/proj"
+workflow = "supply-chain-mirror"
+branches = ["main"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	before, err := exec.Command("git", "-C", clone, "rev-parse", "HEAD").Output()
+	must(t, err)
+
+	results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour, DryRun: true})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].Outcome != ReviewPending {
+		t.Errorf("outcome = %v, want ReviewPending (dry-run must fetch for real); actions=%v", results[0].Outcome, results[0].Actions)
+	}
+
+	// The fetch itself must have actually happened (untrusted/main advanced
+	// locally) — proving the report isn't a fluke of stale data by coincidence.
+	out, err := exec.Command("git", "-C", clone, "rev-parse", "untrusted/main").Output()
+	must(t, err)
+	wantHead, err := exec.Command("git", "-C", seed, "rev-parse", "HEAD").Output()
+	must(t, err)
+	if trim(string(out)) != trim(string(wantHead)) {
+		t.Errorf("untrusted/main = %s, want it to match upstream's real HEAD %s", out, wantHead)
+	}
+
+	// Nothing about the user's own data moved: HEAD is unchanged, tree is clean.
+	after, err := exec.Command("git", "-C", clone, "rev-parse", "HEAD").Output()
+	must(t, err)
+	if string(before) != string(after) {
+		t.Errorf("HEAD moved under --dry-run: %s -> %s", before, after)
+	}
+	status, err := exec.Command("git", "-C", clone, "status", "--porcelain").Output()
+	must(t, err)
+	if len(status) != 0 {
+		t.Errorf("working tree dirty after --dry-run: %q", status)
+	}
+}
+
+// TestDryRunNeverTouchesTags pins DESIGN §5.7's tag rule: --dry-run must never
+// create or move a local tag, even though a real sync — with no force_tags at
+// all — would happily create one that doesn't exist locally yet. Tags have no
+// reflog (§5.2), so an inert preview command leaving one behind would have no
+// trail back to what created it.
+func TestDryRunNeverTouchesTags(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	origin := filepath.Join(remotes, "acme", "proj")
+	must(t, os.MkdirAll(filepath.Dir(origin), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", origin)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", origin, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+
+	// Clone before the tag exists upstream, so the clone genuinely starts with
+	// none — `git clone` always fetches every tag reachable at clone time,
+	// which a tag pushed afterward wouldn't be.
+	clone := filepath.Join(T, "clones", "proj")
+	must(t, os.MkdirAll(filepath.Dir(clone), 0o755))
+	git(t, T, "clone", "-q", origin, clone)
+
+	git(t, seed, "tag", "v1.0.0")
+	git(t, seed, "push", "-q", "origin", "v1.0.0")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:acme/proj"
+branches = ["main"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	preTags, err := exec.Command("git", "-C", clone, "tag", "-l").Output()
+	must(t, err)
+	if len(preTags) != 0 {
+		t.Fatalf("clone already has tags before the test: %q", preTags)
+	}
+
+	Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour, DryRun: true})
+
+	postTags, err := exec.Command("git", "-C", clone, "tag", "-l").Output()
+	must(t, err)
+	if len(postTags) != 0 {
+		t.Errorf("--dry-run created tag(s): %q", postTags)
+	}
+
+	// Confirm this is dry-run-specific: a real sync (no force_tags at all)
+	// does pick up the tag, so the assertion above isn't vacuous.
+	Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour})
+	postRealTags, err := exec.Command("git", "-C", clone, "tag", "-l").Output()
+	must(t, err)
+	if trim(string(postRealTags)) != "v1.0.0" {
+		t.Fatalf("a real sync should have fetched tag v1.0.0, got %q (test setup problem, not the fix)", postRealTags)
+	}
+}
+
+// TestDryRunNeverPushes: an upstream-push repo with local commits ahead of
+// origin must report the ahead count under --dry-run without ever pushing —
+// the one part of this design nothing about the fetch fix should touch.
+func TestDryRunNeverPushes(t *testing.T) {
+	T := t.TempDir()
+	remotes := filepath.Join(T, "remotes")
+	origin := filepath.Join(remotes, "acme", "proj")
+	must(t, os.MkdirAll(filepath.Dir(origin), 0o755))
+	git(t, T, "init", "-q", "-b", "main", "--bare", origin)
+
+	seed := filepath.Join(T, "seed")
+	git(t, T, "clone", "-q", origin, seed)
+	git(t, seed, "checkout", "-q", "-b", "main")
+	must(t, os.WriteFile(filepath.Join(seed, "a"), []byte("one\n"), 0o644))
+	git(t, seed, "add", "a")
+	git(t, seed, "commit", "-qm", "one")
+	git(t, seed, "push", "-q", "origin", "main")
+
+	clone := filepath.Join(T, "clones", "proj")
+	must(t, os.MkdirAll(filepath.Dir(clone), 0o755))
+	git(t, T, "clone", "-q", origin, clone)
+	must(t, os.WriteFile(filepath.Join(clone, "b"), []byte("local\n"), 0o644))
+	git(t, clone, "add", "b")
+	git(t, clone, "commit", "-qm", "local work")
+
+	regPath := filepath.Join(T, "registry.toml")
+	must(t, os.WriteFile(regPath, []byte(`
+[hosts.local]
+base = "`+remotes+`/"
+[root.clones]
+dir = "`+filepath.Join(T, "clones")+`"
+[[root.clones.repo]]
+id = "local:acme/proj"
+push = "auto"
+branches = ["main"]
+`), 0o644))
+
+	reg, err := config.Load([]string{regPath})
+	must(t, err)
+	repos, err := reg.Repos()
+	must(t, err)
+
+	results := Run(reg, repos, Options{StateDir: filepath.Join(T, "out"), Frequency: time.Hour, DryRun: true})
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	found := false
+	for _, a := range results[0].Actions {
+		if strings.Contains(a.Text, "would push") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no 'would push' trace line; actions=%v", results[0].Actions)
+	}
+
+	out, err := exec.Command("git", "-C", origin, "rev-list", "--count", "main").Output()
+	must(t, err)
+	if trim(string(out)) != "1" {
+		t.Errorf("origin advanced to %s commits, want 1 (--dry-run must never push)", out)
+	}
+}
+
 // TestDiscoveredRepoFlagsUnresolvedImportantBranch: a discovered repo (Dir
 // set) whose important branch couldn't be inferred — no origin default-branch
 // symref, no known mainline name — must be flagged for an explicit `branches`

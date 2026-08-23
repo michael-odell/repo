@@ -14,7 +14,7 @@ import (
 // so it is used unconditionally; a server-side gh fast path is a future
 // optimization, not a second code path.
 func (x *run) updateForkPR() {
-	upRef := "upstream/" + x.ub
+	upRef := x.secondRemoteRefName(x.dir) + "/" + x.ub
 	if _, ok := gitx.RevParse(x.dir, upRef); !ok {
 		// No fork/upstream fetched — behave like a plain origin-tracking repo.
 		x.updateTracking("origin/" + x.ub)

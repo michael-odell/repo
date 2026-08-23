@@ -136,6 +136,19 @@ upgrading from an `upstream`-named clone; a failure there left nothing for
 rather than "the review gate couldn't check its source". That fetch now
 reports failure as Attention.
 
+**Also fixed, same investigation:** `sync -n`/`--dry-run` never fetched at
+all, on any workflow — it assessed against whatever the last real sync left
+behind, which is exactly how a mirror repo whose `untrusted` had genuinely
+advanced still read "up to date" under `--dry-run` moments before a real sync
+found it review-pending. DESIGN §5.7 (new) settles what `--dry-run` may
+fetch — real for remote-tracking branches (tool-owned, reflogged, already
+rewritten by every real sync regardless of `-n`), never for tags (no reflog,
+human-addressable — `force_tags` doesn't even get a turn) — and confirms
+nothing else changes: no branch move, no push, no remote created, no worktree
+written, no pin checked out, no hook run. `vendor` + `latest-tag`'s `--dry-run`
+preview stays exactly as stale as before, a named exception, since resolving
+"the latest tag" needs the tag fetch this deliberately withholds.
+
 Still open:
 - `--fix`'s other two DESIGN §4.1 reconciliations: general remote-contract
   repair (a wrong URL, beyond the untrusted/upstream rename) and location —
