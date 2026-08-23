@@ -209,6 +209,11 @@ A repo's container is therefore a pure function of its root's `dir`, its effecti
 root says `owner`, or under the wrong root) is just another config↔disk mismatch,
 reconciled by `--fix` (§4.1).
 
+This is exactly why §3.9's finer-grained `[dir.*]` override may not set `layout`
+but may set `worktrees`: `layout` decides the *path* this section derives;
+`worktrees` decides what's built once that path is resolved. Only one of the two
+axes is load-bearing for where a repo lives.
+
 ### 3.6 Workflows
 
 Each workflow defines a **remote contract**: the named remotes it *manages* and
@@ -511,6 +516,78 @@ Resolution rule: `overrides[id]` → else `via + owner/repo` if matched by
 `apply_to` (root names or `*`) → else `hosts[id.host].base + owner/repo`. (`via`
 avoids the word "mirror", which is reserved for the workflow.)
 
+### 3.9 `dir`: a settings overlay without a second scan location
+
+A `[root.*]` conflates two things: a *scan location* (§3.2's scan set — `repo`
+walks it looking for repos) and a settings node (§3.4's `dir`-prefix chain). That's
+fine at root granularity, but under `layout = owner` the individual owner
+directories inside a root are exactly where per-owner convention lives (an org's
+branch naming, its pin policy, its push posture) — and today, scoping settings to
+just one owner means declaring a whole new `[root.*]`: inventing a name, retyping
+the parent path by hand, and turning that subtree into a second, redundant walk
+(the parent root already covers it, §3.2).
+
+`[dir.<name>]` is that override without the scan side-effect: a `dir` (required,
+home-relative like a root's) plus any part of the settings bundle, folded into the
+*same* `dir`-prefix chain as roots (§3.4) —
+
+    [defaults] → root chain (shallowest → deepest) → dir chain (shallowest → deepest)
+                 → the repo's own entry
+
+— but never entered in the scan set: `[dir.*]` only ever narrows ground the
+containing root already walks, never claims territory the root didn't already
+cover. `<name>` is a label, not a path — nothing requires it to match the
+directory it names. A directory-shaped TOML key would have forced either a bare
+owner name (not every host's owner names are valid bare TOML keys) or quoting
+whichever ones aren't — coupling the section header to a filesystem string for no
+resolution benefit, since resolution is purely geometric (by `dir`, not by name)
+regardless. For the same reason, `[dir.*]` names are flat, not nested per parent
+root: nesting would only be a naming convenience over geometry that already
+decides everything, at the cost of exactly the coupling this section exists to
+avoid. `[dir.*]` and `[root.*]` are separate namespaces — a `[dir.contrib]` and a
+`[root.contrib]` may coexist without collision.
+
+`[dir.*]` carries the full settings bundle (§3.4) **except `layout`.** §3.5
+established that a repo's container path is a pure function of its *root's* `dir`,
+its *root-resolved* `layout`, and its identity — never of anything nested under
+the root. Keeping `layout` root-only preserves that: `--fix`'s location
+reconciliation (§4.1) can always compute where a repo belongs without first
+knowing which `[dir.*]` node's boundary it will land inside, which would
+otherwise be circular for a repo not there yet — a misplaced repo can't be
+resolved against an override that only becomes reachable once the repo is already
+correctly placed. `worktrees` carries no such hazard and **is** overridable
+per-`dir`: it decides what's built *inside* the container, never which container
+(§3.5) — a `worktrees` mismatch is a shape conversion in place, not a move, so
+it's visible to `--fix` identically whether or not a `[dir.*]` node applies.
+
+One aliasing case is worth knowing rather than guarding against: under
+`layout = owner`, a `[dir.*]` node's path (`~/contrib/prometheus`) is, as a
+string, indistinguishable from where a *flat-layout repo literally named*
+`prometheus` would sit. A repo currently misplaced at exactly that path — found
+flat, not yet relocated under its own owner directory — would transiently pick up
+the override meant for the owner subtree, until `--fix` moves it one level deeper
+and the ambiguity resolves itself. Narrow and self-correcting, but real; `repo
+scan` could eventually flag a `[dir.*]`/`[root.*]` whose `dir` is itself a git
+repository as likely aliasing rather than an owner bucket.
+
+Membership works the same as a root's (§3.4): `repos` for the common case,
+`[[dir.<name>.repo]]` for exceptions — both for *declared* repos. A discovered
+repo already sitting under a `[dir.*]` node's `dir` picks up its settings by
+prefix-match with no entry required, exactly like a root.
+
+```toml
+[root.contrib]
+dir      = "~/contrib"
+layout   = "owner"
+workflow = "upstream-push"
+
+[dir.contrib-prometheus]        # settings-only: not a scan location
+dir      = "~/contrib/prometheus"
+workflow = "vendor"
+pin      = "latest-tag"
+repos    = ["github:prometheus/prometheus", "github:prometheus/alertmanager"]
+```
+
 ## 4. On-disk layouts
 
 `fork-pr`, `layout = owner`, `worktrees = true` — directory named by the **definitive**
@@ -565,7 +642,9 @@ already surfaced** — nothing is found only under `--fix`.
   reconciles *only* the managed names and never deletes an unmanaged remote.
 - **Location** — the container sits at the wrong path for its root's `dir` +
   `layout` + identity (flat where `owner` is configured, or under the wrong root).
-  `--fix` moves it.
+  `--fix` moves it. This is always computable from the root chain alone: `[dir.*]`
+  nodes (§3.9) can't set `layout`, so a misplaced repo's target path never depends
+  on an override reachable only after it's already there.
 
 On a mismatch, plain `sync` reconciles *as far as the on-disk shape allows* — so
 data still flows — but **never reorganizes on its own**: it surfaces `run: sync
@@ -1431,6 +1510,12 @@ CLI (initial):
   remove (confirming per repo), `--dry-run` to see what a given invocation would
   do, `--explain <branch>` for the evidence behind one verdict (§5.3).
 - `repo list` — enumerate the declared ∪ discovered union for completion (§3.2).
+- `repo config <id | path>` — print one repo's fully resolved settings as TOML:
+  config in, config out — the same shape you'd paste as an explicit `[[root.*.
+  repo]]` override to freeze this repo's behavior exactly as inherited.
+  `--explain` instead prints, per field, which link in its `root`/`dir` chain
+  (§3.4, §3.9) last set it — verbose by design, so it's opt-in, but the fastest
+  way to see why an override isn't landing (a typo'd `dir`, a shadowing root).
 - `repo review <name>` — supply-chain-mirror review gate (§5.4).
 
 ## 8. Strangulation / migration order
@@ -1503,3 +1588,14 @@ toggle — empty by default (no forced overwrite either direction), naming exact
 which branches may absorb a rewrite in which direction, which a single enum
 couldn't express per-branch. Drift detection now also covers untracked
 (non-ignored) files, not just tracked-file dirtiness.
+**`[dir.<name>]` overlays settings on part of a root's tree without becoming a
+second scan location (§3.9):** it requires an explicit `dir`, carries the full
+settings bundle except `layout` (`worktrees` stays overridable — it reshapes the
+container in place, never relocates it, unlike `layout`), never appears in the
+scan set, and lives in its own flat namespace — separate from `[root.*]` names,
+and not nested under a parent root's table, since the chain is decided by `dir`
+geometry, not by declared parenthood. `repo config <id>` (§7) prints a repo's
+fully resolved settings as TOML by default — config in, config out — with
+per-field chain provenance moved behind `--explain` rather than shown up front,
+since it's the more useful default for a quick look and `--explain` the more
+useful one for tracking down why a value didn't take.

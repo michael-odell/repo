@@ -77,9 +77,27 @@ slice validating the whole architecture end to end.**
 declared ∪ discovered union (DESIGN §3.2), the same set as `status`, via a shared
 `unionRepos` builder. Discovered-only repos carry their real on-disk location and
 existing origin; unsupported workflows (`fork-pr`, `vendor`, worktrees) are still
-deferred, not attempted, until Stage 5.
+deferred, not attempted, until Stage 6.
 
-### Stage 5 — worktrees, fork-pr/vendor, work strangulation  ⏭ next
+### Stage 5 — `[dir.*]` overlays + `repo config`  ⏭ next
+`[dir.*]` settings-only nodes (DESIGN §3.9): parse, validate (`dir` required,
+`layout` rejected, name namespace separate from `[root.*]`), fold into the same
+`dir`-prefix chain `RootFor`/`effective` already compute for roots, and keep out
+of `ScanRoots()`. `repo config <id | path>` (DESIGN §7): resolve a repo (declared
+member or on-disk discovery) and print its fully resolved settings as TOML by
+default (config in, config out); `--explain` instead prints, per field, which
+link in the chain last set it. Both are config/CLI-layer only — no git-layer
+changes — so this lands ahead of Stage 6 per the read-only-first ordering, and
+gives Stage 6 a way to inspect resolved settings while building it.
+**Proof:** a `[dir.contrib-prometheus]` node scoped under an owner-layout root
+overrides `workflow`/`pin`/`branches` for just that owner without adding a walk;
+`repo config prometheus/prometheus` prints a TOML block with `workflow = "vendor"`
+for a repo that inherited it three links deep, `--explain` shows that value as
+`workflow: vendor (dir.contrib-prometheus)`, and a deliberately mistyped `dir`
+shows up as the override simply never appearing in either output — the failure
+mode this stage exists to make visible.
+
+### Stage 6 — worktrees, fork-pr/vendor, work strangulation
 bare+worktree provisioning; `fork-pr` push (+ `gh repo sync` when present); `vendor`
 pins; `repo prune` confirmation UX; `repo home`/`path`. Then `wd-repos-update` ->
 `repo sync --tag work`.
@@ -109,7 +127,7 @@ found it:
    TTY-only, degrading to `report` when there is nobody to ask.
 8. `auto`, last — after the reports above have been watched being right.
 
-### Stage 6 — distribution hardening
+### Stage 7 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`
 fallback -> no-op offline); release automation; the small cold-bootstrap seed + a
 real container test of it.
