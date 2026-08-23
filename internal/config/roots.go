@@ -31,19 +31,24 @@ func (reg *Registry) ScanRoots() []ScanRoot {
 	return out
 }
 
-// RootFor returns the name of the root whose `dir` is the deepest path-prefix of
-// dir, and the ordered inheritance chain (shallowest → deepest) for a repo found
-// there — used to resolve a discovered repo's settings. The name is "" when no
-// root covers the path.
+// RootFor returns the chain-name of the deepest node — a root, or a [dir.*]
+// overlay (DESIGN §3.9) — whose `dir` is a path-prefix of dir, and the ordered
+// inheritance chain (shallowest → deepest) for a repo found there — used to
+// resolve a discovered repo's settings. name is "" when nothing covers the
+// path. A [dir.*] node is never itself a scan location (ScanRoots excludes it),
+// but a repo discovered under one still resolves through it here, same as any
+// root — the two differ in what causes a walk, not in what settings apply once
+// something is found.
 func (reg *Registry) RootFor(dir string) (name string, chain []string) {
+	nodes := reg.allNodes()
 	target := expandHome(dir)
-	for n, r := range reg.roots {
+	for n, r := range nodes {
 		if r.Dir != "" && pathHasPrefix(target, expandHome(r.Dir)) {
 			chain = append(chain, n)
 		}
 	}
 	sort.Slice(chain, func(i, j int) bool {
-		return len(expandHome(reg.roots[chain[i]].Dir)) < len(expandHome(reg.roots[chain[j]].Dir))
+		return len(expandHome(nodes[chain[i]].Dir)) < len(expandHome(nodes[chain[j]].Dir))
 	})
 	if len(chain) > 0 {
 		name = chain[len(chain)-1] // deepest prefix

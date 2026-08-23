@@ -9,8 +9,10 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -95,6 +97,7 @@ type file struct {
 	Defaults Settings        `toml:"defaults"`
 	Hosts    map[string]Host `toml:"hosts"`
 	Roots    map[string]Root `toml:"root"`
+	Dirs     map[string]Root `toml:"dir"`
 	Resolve  *Resolve        `toml:"resolve"`
 }
 
@@ -104,6 +107,13 @@ type Registry struct {
 	Resolve  *Resolve
 	defaults Settings
 	roots    map[string]Root
+	// dirs are [dir.<name>] nodes (DESIGN §3.9): a settings overlay on part of a
+	// root's tree, shaped exactly like a Root (same fields, same merge), but
+	// never a scan location (ScanRoots ignores it) and never nested per parent
+	// root — its name is a label, unrelated to any directory or root name. Kept
+	// in a separate map, not folded into roots, because the two are separate
+	// namespaces: a dir and a root may share a name without colliding.
+	dirs map[string]Root
 }
 
 // builtinDefaults apply when a field is set nowhere.
@@ -161,6 +171,7 @@ func Load(paths []string) (*Registry, error) {
 	reg := &Registry{
 		Hosts: map[string]Host{},
 		roots: map[string]Root{},
+		dirs:  map[string]Root{},
 	}
 	read := map[string]bool{}
 	for _, p := range paths {
@@ -236,20 +247,66 @@ func fragmentFiles(p string) ([]string, error) {
 }
 
 // merge folds one fragment into the registry: defaults are field-level last-wins;
-// hosts union with later keys winning; roots merge by name (settings overlay,
-// later `dir` wins, members append); resolve merges (via/apply_to last-wins,
-// overrides unioned).
+// hosts union with later keys winning; roots and dirs each merge by name within
+// their own namespace (settings overlay, later `dir` wins, members append);
+// resolve merges (via/apply_to last-wins, overrides unioned).
 func (reg *Registry) merge(f file) {
 	reg.defaults = overlay(reg.defaults, f.Defaults)
-	for k, v := range f.Hosts {
-		reg.Hosts[k] = v
-	}
+	maps.Copy(reg.Hosts, f.Hosts)
 	for name, r := range f.Roots {
 		reg.roots[name] = mergeRoot(reg.roots[name], r)
+	}
+	for name, d := range f.Dirs {
+		reg.dirs[name] = mergeRoot(reg.dirs[name], d)
 	}
 	if f.Resolve != nil {
 		reg.mergeResolve(f.Resolve)
 	}
+}
+
+// dirChainPrefix qualifies a [dir.*] name for use as a chain-name — everywhere a
+// repo's inheritance chain is recorded (model.Repo.Roots, RootFor's chain, the
+// name checkCollisions/Explain report). A bare TOML key can never contain a
+// literal dot, so this can never collide with a declared root name (DESIGN §3.9).
+const dirChainPrefix = "dir."
+
+// node resolves a chain-name to its settings-bearing entry — a bare root name,
+// or a dirChainPrefix-qualified [dir.*] name.
+func (reg *Registry) node(name string) (Root, bool) {
+	if n, ok := strings.CutPrefix(name, dirChainPrefix); ok {
+		r, ok := reg.dirs[n]
+		return r, ok
+	}
+	r, ok := reg.roots[name]
+	return r, ok
+}
+
+// allNodes returns every settings-bearing node — roots and dirs together — keyed
+// by chain-name, for the prefix-matching chain/RootFor share. Dirs are excluded
+// from ScanRoots (they are never a scan location) but participate here exactly
+// like roots (DESIGN §3.9).
+func (reg *Registry) allNodes() map[string]Root {
+	out := make(map[string]Root, len(reg.roots)+len(reg.dirs))
+	maps.Copy(out, reg.roots)
+	for n, d := range reg.dirs {
+		out[dirChainPrefix+n] = d
+	}
+	return out
+}
+
+// homeRootDir returns the dir of the deepest *actual* root (never a [dir.*]
+// node) in a chain — the dir a repo's container path is computed from. A
+// [dir.*] node never contributes to placement, only to settings (DESIGN §3.9),
+// so this deliberately skips past any in the chain rather than taking the
+// deepest entry outright: taking a [dir.*] node's own dir here would double up
+// the owner segment Container() already appends for a `layout = owner` root.
+func (reg *Registry) homeRootDir(chain []string) string {
+	for _, n := range slices.Backward(chain) {
+		if r, ok := reg.roots[n]; ok {
+			return r.Dir
+		}
+	}
+	return ""
 }
 
 func mergeRoot(base, over Root) Root {
@@ -272,28 +329,42 @@ func (reg *Registry) mergeResolve(r *Resolve) {
 	if len(r.ApplyTo) > 0 {
 		reg.Resolve.ApplyTo = r.ApplyTo
 	}
-	for k, v := range r.Overrides {
-		reg.Resolve.Overrides[k] = v
-	}
+	maps.Copy(reg.Resolve.Overrides, r.Overrides)
 }
 
-// members returns every declared repo across all roots, with the root each is
-// nested under, in a stable order (root name, then declaration order).
+// members returns every declared repo across all roots and dirs, with the
+// chain-name each is nested under, in a stable order (roots before dirs, each
+// alphabetically by name, then declaration order). A [dir.*] node holds members
+// the same way a root does — `repos`/`[[dir.*.repo]]` — for provisioning a repo
+// whose settings should come from that overlay (DESIGN §3.9).
 func (reg *Registry) members() []member {
-	names := make([]string, 0, len(reg.roots))
-	for n := range reg.roots {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	var out []member
-	for _, n := range names {
-		r := reg.roots[n]
-		for _, id := range r.Repos {
-			out = append(out, member{entry: RepoEntry{ID: id}, root: n})
-		}
-		for _, e := range r.RepoTabs {
-			out = append(out, member{entry: e, root: n})
-		}
+	rootNames := make([]string, 0, len(reg.roots))
+	for n := range reg.roots {
+		rootNames = append(rootNames, n)
+	}
+	sort.Strings(rootNames)
+	for _, n := range rootNames {
+		out = append(out, membersOf(reg.roots[n], n)...)
+	}
+	dirNames := make([]string, 0, len(reg.dirs))
+	for n := range reg.dirs {
+		dirNames = append(dirNames, n)
+	}
+	sort.Strings(dirNames)
+	for _, n := range dirNames {
+		out = append(out, membersOf(reg.dirs[n], dirChainPrefix+n)...)
+	}
+	return out
+}
+
+func membersOf(r Root, chainName string) []member {
+	var out []member
+	for _, id := range r.Repos {
+		out = append(out, member{entry: RepoEntry{ID: id}, root: chainName})
+	}
+	for _, e := range r.RepoTabs {
+		out = append(out, member{entry: e, root: chainName})
 	}
 	return out
 }
@@ -312,23 +383,27 @@ func (reg *Registry) Repos() ([]model.Repo, error) {
 	return out, nil
 }
 
-// chain returns the inheritance chain for a repo nested under root `name`: every
-// root whose `dir` is a path-prefix of that root's `dir` (its dir-ancestors,
-// including itself), ordered shallowest → deepest. Longest prefix therefore wins.
+// chain returns the inheritance chain for a repo nested under node `name` (a
+// root, or a dirChainPrefix-qualified dir): every node whose `dir` is a
+// path-prefix of that node's own `dir` (its dir-ancestors, including itself),
+// ordered shallowest → deepest. Longest prefix therefore wins. Roots and dirs
+// share this one chain (DESIGN §3.9) — only ScanRoots and homeRootDir tell them
+// apart.
 func (reg *Registry) chain(name string) []string {
-	self, ok := reg.roots[name]
+	nodes := reg.allNodes()
+	self, ok := nodes[name]
 	if !ok {
 		return nil
 	}
 	target := expandHome(self.Dir)
 	var names []string
-	for n, r := range reg.roots {
+	for n, r := range nodes {
 		if pathHasPrefix(target, expandHome(r.Dir)) {
 			names = append(names, n)
 		}
 	}
 	sort.Slice(names, func(i, j int) bool {
-		return len(expandHome(reg.roots[names[i]].Dir)) < len(expandHome(reg.roots[names[j]].Dir))
+		return len(expandHome(nodes[names[i]].Dir)) < len(expandHome(nodes[names[j]].Dir))
 	})
 	return names
 }
@@ -371,7 +446,8 @@ type Inherited struct {
 func (reg *Registry) StatedBranches(chain []string, entry Settings) []string {
 	s := reg.defaults
 	for _, n := range chain {
-		s = overlay(s, reg.roots[n].Settings)
+		r, _ := reg.node(n)
+		s = overlay(s, r.Settings)
 	}
 	return overlay(s, entry).Branches
 }
@@ -381,7 +457,8 @@ func (reg *Registry) StatedBranches(chain []string, entry Settings) []string {
 func (reg *Registry) InheritedFor(chain []string) Inherited {
 	s := reg.defaults
 	for _, n := range chain {
-		s = overlay(s, reg.roots[n].Settings)
+		r, _ := reg.node(n)
+		s = overlay(s, r.Settings)
 	}
 	return Inherited{
 		Workflow:            strOr(s.Workflow, ""),
@@ -428,7 +505,8 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 	chain := reg.chain(m.root)
 	s := reg.defaults
 	for _, n := range chain {
-		s = overlay(s, reg.roots[n].Settings)
+		r, _ := reg.node(n)
+		s = overlay(s, r.Settings)
 	}
 	s = overlay(s, m.entry.Settings)
 
@@ -452,7 +530,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 	r := model.Repo{
 		ID:                  id,
 		Roots:               chain,
-		HomeRoot:            reg.roots[m.root].Dir,
+		HomeRoot:            reg.homeRootDir(chain),
 		Workflow:            workflow,
 		Layout:              strOr(s.Layout, builtinDefaults.Layout),
 		Worktrees:           boolOr(s.Worktrees, builtinDefaults.Worktrees),
@@ -517,6 +595,89 @@ func workflowNeedsFork(w string) bool {
 	return w == model.ForkPR || w == model.SupplyChainMirror
 }
 
+// settingsField probes one Settings field for the walk Explain does — named for
+// display, and tested for "did this link set it" without reflection, matching
+// overlay's own explicit field-by-field style.
+type settingsField struct {
+	name string
+	set  func(Settings) bool
+}
+
+// settingsFields lists every inheritable field Explain reports provenance for —
+// the same fields overlay folds, in the same order as the README settings
+// reference table. `host` and `fork_owner` are deliberately absent: neither
+// survives onto a resolved model.Repo (host only matters for resolving a bare
+// clone name; fork_owner only supplies a fork's derivation, and that derivation
+// — explicit fork vs. fork_owner vs. error, DESIGN §3.6 — isn't a single
+// last-writer-wins fold the way every other field here is, so it's out of scope
+// for this per-field walk).
+var settingsFields = []settingsField{
+	{"layout", func(s Settings) bool { return s.Layout != nil }},
+	{"worktrees", func(s Settings) bool { return s.Worktrees != nil }},
+	{"branches", func(s Settings) bool { return s.Branches != nil }},
+	{"workflow", func(s Settings) bool { return s.Workflow != nil }},
+	{"push", func(s Settings) bool { return s.Push != nil }},
+	{"task_branches", func(s Settings) bool { return s.TaskBranches != nil }},
+	{"show_branches", func(s Settings) bool { return s.ShowBranches != nil }},
+	{"force_push", func(s Settings) bool { return s.ForcePush != nil }},
+	{"force_pull", func(s Settings) bool { return s.ForcePull != nil }},
+	{"tags", func(s Settings) bool { return s.Tags != nil }},
+	{"force_tags", func(s Settings) bool { return s.ForceTags != nil }},
+	{"expected_untracked", func(s Settings) bool { return s.ExpectedUntracked != nil }},
+	{"expected_uncommitted", func(s Settings) bool { return s.ExpectedUncommitted != nil }},
+	{"merge_scan_limit", func(s Settings) bool { return s.MergeScanLimit != nil }},
+	{"prune", func(s Settings) bool { return s.Prune != nil }},
+	{"prune_keep", func(s Settings) bool { return s.PruneKeep != nil }},
+	{"prune_min_age", func(s Settings) bool { return s.PruneMinAge != nil }},
+	{"pin", func(s Settings) bool { return s.Pin != nil }},
+	{"hooks", func(s Settings) bool { return s.Hooks != nil }},
+}
+
+// Explain resolves, for one repo's chain (model.Repo.Roots — shallowest →
+// deepest, declared or discovered alike), which link last set each field: the
+// per-field detail behind `repo config --explain` (DESIGN §7, §3.9), moved
+// behind a flag rather than shown by default because it's one line per field
+// rather than one line per repo. The walk is [defaults] → chain → the repo's
+// own declared entry (looked up by id; the zero Settings, contributing nothing,
+// for a discovered repo or a bare `repos = [...]` line), matching effective's
+// own walk exactly. A field neither the chain nor [defaults] set is absent from
+// the result — the caller's builtin default applies, same as everywhere else.
+func (reg *Registry) Explain(id string, chain []string) map[string]string {
+	type link struct {
+		name string
+		s    Settings
+	}
+	links := make([]link, 0, len(chain)+2)
+	links = append(links, link{"defaults", reg.defaults})
+	for _, n := range chain {
+		r, _ := reg.node(n)
+		links = append(links, link{n, r.Settings})
+	}
+	links = append(links, link{"repo", reg.entrySettings(id)})
+
+	out := map[string]string{}
+	for _, f := range settingsFields {
+		for _, l := range links {
+			if f.set(l.s) {
+				out[f.name] = l.name
+			}
+		}
+	}
+	return out
+}
+
+// entrySettings returns the per-repo override Settings a declared repo carries
+// — a [[root.*.repo]]/[[dir.*.repo]] table's fields, or the zero value for a
+// bare `repos` entry or an id with no declaration at all (a discovered repo).
+func (reg *Registry) entrySettings(id string) Settings {
+	for _, m := range reg.members() {
+		if m.entry.ID == id {
+			return m.entry.Settings
+		}
+	}
+	return Settings{}
+}
+
 // Physical resolves a repo's clone URL for this machine (DESIGN §3.7).
 func (reg *Registry) Physical(r model.Repo) (string, error) {
 	return reg.PhysicalID(r.ID, r.Roots)
@@ -544,13 +705,8 @@ func (reg *Registry) PhysicalID(id ident.ID, roots []string) (string, error) {
 
 func (r *Resolve) applies(roots []string) bool {
 	for _, a := range r.ApplyTo {
-		if a == "*" {
+		if a == "*" || slices.Contains(roots, a) {
 			return true
-		}
-		for _, n := range roots {
-			if a == n {
-				return true
-			}
 		}
 	}
 	return false

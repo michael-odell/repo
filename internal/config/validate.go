@@ -45,6 +45,31 @@ func (reg *Registry) Validate() error {
 		checkScanLimit(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkAge(add, fmt.Sprintf("root %q", n), r.Settings)
 	}
+	dirNames := make([]string, 0, len(reg.dirs))
+	for n := range reg.dirs {
+		dirNames = append(dirNames, n)
+	}
+	sort.Strings(dirNames)
+	for _, n := range dirNames {
+		d := reg.dirs[n]
+		where := fmt.Sprintf("dir %q", n)
+		switch {
+		case strings.TrimSpace(d.Dir) == "":
+			add("%s: missing `dir`", where)
+		case !reg.dirNestsUnderARoot(d.Dir):
+			add("%s: dir %q is not under any root's `dir` — a [dir.*] node overlays "+
+				"part of a root's tree (DESIGN §3.9), not a tree of its own", where, d.Dir)
+		}
+		if d.Layout != nil {
+			add("%s: `layout` is root-only — a [dir.*] node can't change where a repo "+
+				"lives, only how it's treated once it's there (DESIGN §3.9)", where)
+		}
+		checkEnums(add, where, d.Settings)
+		checkGlobs(add, where, globsOfSettings(d.Settings))
+		checkScanLimit(add, where, d.Settings)
+		checkAge(add, where, d.Settings)
+	}
+
 	checkEnums(add, "defaults", reg.defaults)
 	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
 	checkScanLimit(add, "defaults", reg.defaults)
@@ -103,6 +128,20 @@ func (reg *Registry) checkCollisions(add func(string, ...any)) {
 				dir, len(decls), strings.Join(distinct(decls), ", "))
 		}
 	}
+}
+
+// dirNestsUnderARoot reports whether dir sits at or below some root's `dir` —
+// the requirement a [dir.*] node's own `dir` must meet (DESIGN §3.9): it
+// overlays part of a root's tree, so a dir claiming ground no root's scan ever
+// reaches would silently never apply to anything a sweep could find.
+func (reg *Registry) dirNestsUnderARoot(dir string) bool {
+	target := expandHome(dir)
+	for _, r := range reg.roots {
+		if r.Dir != "" && pathHasPrefix(target, expandHome(r.Dir)) {
+			return true
+		}
+	}
+	return false
 }
 
 // settingsOf lifts the enum-bearing fields of a resolved repo back into a

@@ -437,3 +437,215 @@ func TestUnknownHost(t *testing.T) {
 		t.Errorf("want unknown-host error, got %v", err)
 	}
 }
+
+// TestDirOverlayOverridesJustItsSubtree (DESIGN §3.9): a [dir.*] node scoped to
+// one owner under an owner-layout root overrides settings for repos declared
+// there, while a repo under the same root but a different owner still gets the
+// root's own settings.
+func TestDirOverlayOverridesJustItsSubtree(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.contrib]
+dir      = "~/contrib"
+layout   = "owner"
+workflow = "upstream-push"
+repos    = ["github:acme/other"]
+
+[dir.contrib-prometheus]
+dir      = "~/contrib/prometheus"
+workflow = "vendor"
+pin      = "latest-tag"
+repos    = ["github:prometheus/prometheus"]
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	prom := repoByShort(t, reg, "prometheus")
+	if prom.Workflow != "vendor" || prom.Pin != "latest-tag" {
+		t.Errorf("prometheus workflow/pin = %q/%q, want vendor/latest-tag (from the dir overlay)",
+			prom.Workflow, prom.Pin)
+	}
+	// The chain still reaches the covering root — a bare root name selects
+	// repos under a nested dir too (cmd/repo's `sync <root>`).
+	if !contains(prom.Roots, "contrib") || !contains(prom.Roots, "dir.contrib-prometheus") {
+		t.Errorf("prometheus chain = %v, want both contrib and dir.contrib-prometheus", prom.Roots)
+	}
+
+	other := repoByShort(t, reg, "other")
+	if other.Workflow != "upstream-push" || other.Pin != "" {
+		t.Errorf("other workflow/pin = %q/%q, want upstream-push/\"\" (untouched by the overlay)",
+			other.Workflow, other.Pin)
+	}
+
+	// The critical placement check: HomeRoot must stay the covering ROOT's dir,
+	// never the dir node's own (deeper) dir, or Container() double-nests the
+	// owner segment (~/contrib/prometheus/prometheus/prometheus instead of
+	// ~/contrib/prometheus/prometheus).
+	home, _ := os.UserHomeDir()
+	if got, want := prom.Container(), filepath.Join(home, "contrib/prometheus/prometheus"); got != want {
+		t.Errorf("prometheus Container() = %q, want %q", got, want)
+	}
+}
+
+// TestDirCannotSetLayout (DESIGN §3.9): layout decides where a repo's container
+// lives, computed from its root alone — a [dir.*] node overriding it would make
+// --fix's placement decision depend on an override only reachable once the
+// repo is already there. Validate rejects it outright rather than resolving it
+// silently one way or the other.
+func TestDirCannotSetLayout(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[root.contrib]
+dir = "~/contrib"
+
+[dir.sub]
+dir    = "~/contrib/sub"
+layout = "flat"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "`layout` is root-only") {
+		t.Fatalf("want a layout-is-root-only error, got %v", err)
+	}
+}
+
+// TestDirWorktreesIsFine: unlike layout, worktrees reshapes a container in
+// place rather than relocating it, so a [dir.*] node may set it freely.
+func TestDirWorktreesIsFine(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.contrib]
+dir = "~/contrib"
+
+[dir.sub]
+dir       = "~/contrib/sub"
+worktrees = true
+repos     = ["github:acme/thing"]
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if r := repoByShort(t, reg, "thing"); !r.Worktrees {
+		t.Errorf("thing.Worktrees = false, want true (from the dir overlay)")
+	}
+}
+
+// TestOrphanDirRejected (DESIGN §3.9): a [dir.*] node overlays part of a root's
+// tree; one that covers ground no root ever walks would never apply to
+// anything a sweep could find, so it's a config error rather than a silent
+// no-op.
+func TestOrphanDirRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[root.contrib]
+dir = "~/contrib"
+
+[dir.orphan]
+dir = "~/elsewhere/sub"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil || !strings.Contains(err.Error(), `dir "orphan": dir "~/elsewhere/sub" is not under any root`) {
+		t.Fatalf("want an orphan-dir error, got %v", err)
+	}
+}
+
+// TestDirAndRootNamespacesAreSeparate (DESIGN §3.9): a [dir.*] and a [root.*]
+// may share a name without colliding — the geometry (each node's own `dir`)
+// decides everything, never the label.
+func TestDirAndRootNamespacesAreSeparate(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.contrib]
+dir      = "~/contrib"
+workflow = "upstream-push"
+
+[dir.contrib]
+dir      = "~/contrib/sub"
+workflow = "vendor"
+repos    = ["github:acme/thing"]
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if r := repoByShort(t, reg, "thing"); r.Workflow != "vendor" {
+		t.Errorf("thing.Workflow = %q, want vendor (the dir node, not the same-named root)", r.Workflow)
+	}
+}
+
+// TestExplainNamesEachLink (DESIGN §7): repo config --explain's per-field
+// provenance — a field set at [defaults], overridden at the root, overridden
+// again at the dir overlay, and overridden a final time on the repo's own
+// entry, with a field nobody touched absent entirely.
+func TestExplainNamesEachLink(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[defaults]
+prune = "auto"
+
+[root.contrib]
+dir   = "~/contrib"
+push  = "manual"
+
+[dir.contrib-sub]
+dir      = "~/contrib/sub"
+workflow = "vendor"
+
+[[dir.contrib-sub.repo]]
+id       = "github:acme/thing"
+workflow = "upstream-push"
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	r := repoByShort(t, reg, "thing")
+	got := reg.Explain(r.ID.String(), r.Roots)
+	want := map[string]string{
+		"prune":    "defaults",
+		"push":     "contrib",
+		"workflow": "repo", // the entry's own override outranks the dir overlay
+	}
+	for field, wantSrc := range want {
+		if got[field] != wantSrc {
+			t.Errorf("Explain()[%q] = %q, want %q", field, got[field], wantSrc)
+		}
+	}
+	if _, ok := got["pin"]; ok {
+		t.Errorf(`Explain()["pin"] = %q, want absent (nothing set it)`, got["pin"])
+	}
+}
