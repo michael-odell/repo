@@ -76,10 +76,11 @@ slice validating the whole architecture end to end.**
 **Update:** `sync` is no longer scoped to plugins — it now operates over the full
 declared ∪ discovered union (DESIGN §3.2), the same set as `status`, via a shared
 `unionRepos` builder. Discovered-only repos carry their real on-disk location and
-existing origin; unsupported workflows (`fork-pr`, `vendor`, worktrees) are still
-deferred, not attempted, until Stage 6.
+existing origin. `fork-pr`, `vendor`, and worktrees, originally deferred to
+Stage 6, are implemented now (see Stage 6 below) — they landed early alongside
+the prune stages, which share the same engine.
 
-### Stage 5 — `[dir.*]` overlays + `repo config`  ⏭ next
+### Stage 5 — `[dir.*]` overlays + `repo config`  ✅ done
 `[dir.*]` settings-only nodes (DESIGN §3.9): parse, validate (`dir` required,
 `layout` rejected, name namespace separate from `[root.*]`), fold into the same
 `dir`-prefix chain `RootFor`/`effective` already compute for roots, and keep out
