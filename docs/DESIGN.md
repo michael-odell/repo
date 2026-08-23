@@ -1247,11 +1247,11 @@ New important branch in registry → `sync` adds its worktree.
 
 ### 5.4 The `supply-chain-mirror` review gate
 
-Periodic sync always *fetches* (all workflows) and *flags* mirror repos whose
-`untrusted` source advanced, but does not advance the mirror or the local clone past
-the last reviewed point. `repo review <repo>` shows the `untrusted` diff over the
-current mirror point and, on approval, pushes to the fork and fast-forwards the local
-clone.
+Sync always *fetches* (all workflows, every trigger, **`--dry-run` included** — §5.7)
+and *flags* mirror repos whose `untrusted` source advanced, but does not advance the
+mirror or the local clone past the last reviewed point. `repo review <repo>` shows the
+`untrusted` diff over the current mirror point and, on approval, pushes to the fork and
+fast-forwards the local clone.
 Trusted workflows (`upstream-push`, `fork-pr`, `vendor`) auto-advance; only
 `supply-chain-mirror` waits for review. This is **trigger-independent**: the startup
 if-due run is not a weaker mode — it does full writes (including fork pushes; it
@@ -1436,6 +1436,53 @@ reporting anything, so it should be findable without competing with the
 finding. All color is conditional on stdout being an actual terminal;
 `NO_COLOR` or piping/redirecting turns it off.
 
+### 5.7 `--dry-run`: what it fetches, and what it never touches
+
+`-n`/`--dry-run` promises to change nothing *you* would notice or could lose —
+not that it touches zero bytes under `.git`. No such promise is achievable and
+still useful: there is no way to answer "is `untrusted` ahead of `origin`"
+without the commits that would prove it, and even git's own `git fetch
+--dry-run` downloads those objects into `.git/objects` — it only skips moving
+the ref. A `--dry-run` that fetched nothing to stay literally inert would
+instead assess against whatever the *last real sync* happened to leave
+behind — silently understating drift the longer it has been since, on every
+workflow's ahead/behind read, not only a mirror's. So `--dry-run` fetches for
+real, same as an ordinary sync (§5.4).
+
+What it fetches, and what it still never writes, is decided by two properties
+of each namespace — whether it is reflogged, and whether anything outside
+`repo` addresses it — not by "is this network activity":
+
+- **Remote-tracking branches** (`refs/remotes/<name>/*`) are tool-owned
+  bookkeeping: nothing outside `repo` reads them by name, an ordinary sync
+  already rewrites them on every run regardless of `-n`, and
+  `core.logAllRefUpdates` reflogs them, so even a surprising update is
+  recorded and reversible. `--dry-run` fetches these for real, on every
+  workflow — this is what lets its ahead/behind, review-pending, and rewrite
+  findings match what a real sync would report, rather than the previous
+  sync's.
+- **Tags** (`refs/tags/*`) fail both tests: a human-addressable, shared
+  namespace (`git checkout v1.2.3`) that **has no reflog at all** (§5.2) — a
+  tag `--dry-run` created or moved as an inert side effect would leave zero
+  trail back to the command that did it, unlike everything else here.
+  `--dry-run` therefore fetches `--no-tags`, full stop; `force_tags` doesn't
+  even get a chance to run. The one place this leaves exactly as stale as
+  before the fix: a `vendor` repo pinned to `latest-tag`, since resolving
+  "the latest tag" is inherently a tag read. Named exception, not an
+  oversight — nothing else `--dry-run` reports needs a tag, since §5.1's
+  review-gate and fast-forward comparisons are all branch reads.
+- **Everything that is your data or a remote-visible action** — branch moves,
+  pushes, worktree creation or conversion, a vendor pin's checkout, hooks —
+  stays exactly as inert as `--dry-run` has always promised. In particular,
+  `--dry-run` never pushes: an ahead count is reported ("would push +N"),
+  never sent, on every push-capable workflow.
+- **A remote's existence** is `.git/config`, not `.git/objects` — a change a
+  person would actually notice (`git remote -v`), unlike an object nobody
+  looks at directly. So `--dry-run` never creates, renames, or removes a
+  remote (§4.1, §3.6's `ensureSecondRemote`): it fetches only a remote that
+  is already configured, and reports rather than assesses when one isn't
+  ("`untrusted` not yet configured — can't check without a real sync").
+
 ## 6. Emitted artifacts (shell contract)
 
 Artifacts live in a machine-local state dir `$REPO_OUT` (default `~/.local/repo`),
@@ -1500,6 +1547,9 @@ CLI (initial):
 - `repo sync [<root> | <path> | <name>] [--if-due] [--force] [--fix] [-n]` — the
   engine above; the positional arg scopes the sweep to a root, a path subtree, or a
   single repo. `--fix` applies the config↔disk reconciliations `sync` surfaces (§4.1).
+  `-n`/`--dry-run` still fetches (branches only, an already-configured remote only) so
+  its report is current rather than stale; see §5.7 for exactly what it does and does
+  not write.
 - `repo status` — drift sweep, no updates.
 - `repo apply` — regenerate artifacts from registry + overlay + disk scan.
 - `repo clone <url> [<root>]` — low-toil clone into the right place (root or,
@@ -1599,3 +1649,14 @@ fully resolved settings as TOML by default — config in, config out — with
 per-field chain provenance moved behind `--explain` rather than shown up front,
 since it's the more useful default for a quick look and `--explain` the more
 useful one for tracking down why a value didn't take.
+**`--dry-run` fetches for real (§5.7):** "changes nothing" turned out to mean
+nothing *you'd* notice or could lose, not zero bytes under `.git` — no
+mechanism, git's own `--dry-run` included, can answer an ahead/behind question
+without downloading the commits that prove it. The boundary is reflog +
+addressability, not "is this a network call": tool-owned, reflogged
+remote-tracking branches are fetched for real on every workflow; tags, which
+have no reflog and are human-addressable, are never fetched (`--no-tags`,
+unconditionally — `force_tags` doesn't get a turn), leaving a `vendor` repo's
+`latest-tag` read as the one named, accepted exception. Branch moves, pushes,
+worktree writes, pin checkouts, hooks, and creating/renaming/removing a remote
+(`.git/config`, not `.git/objects`) all stay exactly as inert as before.
