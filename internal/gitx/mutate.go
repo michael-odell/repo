@@ -68,6 +68,21 @@ func RemoteURL(dir, name string) (string, bool) {
 	return u, true
 }
 
+// RenameRemote renames a remote in place, preserving its URL, refspec, and any
+// remote-tracking refs already fetched under it (DESIGN §3.6: `--fix` renaming
+// `upstream` to `untrusted` when a fork-pr clone hardens into a mirror).
+func RenameRemote(dir, old, new string) error {
+	_, err := run(dir, "remote", "rename", old, new)
+	return err
+}
+
+// RemoveRemote deletes a remote and its remote-tracking refs. Metadata only —
+// no object or local branch is touched.
+func RemoveRemote(dir, name string) error {
+	_, err := run(dir, "remote", "remove", name)
+	return err
+}
+
 // EnsureRemote adds the remote or updates its URL, and normalizes its fetch
 // refspec to the standard remote-tracking mapping so a fetch always populates
 // refs/remotes/<name>/* — including in a bare worktree container, whose clone

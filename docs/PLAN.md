@@ -98,10 +98,40 @@ for a repo that inherited it three links deep, `--explain` shows that value as
 shows up as the override simply never appearing in either output — the failure
 mode this stage exists to make visible.
 
-### Stage 6 — worktrees, fork-pr/vendor, work strangulation
-bare+worktree provisioning; `fork-pr` push (+ `gh repo sync` when present); `vendor`
-pins; `repo prune` confirmation UX; `repo home`/`path`. Then `wd-repos-update` ->
-`repo sync --tag work`.
+### Stage 6 — worktrees, fork-pr/vendor, work strangulation  🚧 in progress
+Landed already, built alongside the prune stages below since they share the
+sync engine and there was no reason to gate worktree-aware repos out of tag/
+prune work: bare+worktree provisioning (`provisionWorktree`/`syncWorktree`,
+DESIGN §4); `fork-pr` push (local fast-forward-then-push; the `gh repo sync`
+fast path stays a deferred optimisation — same fork state either way, so it's
+not required); `vendor` pins (branch/tag/`latest-tag`); `repo prune`'s
+confirmation UX (`--delete`'s per-branch walkthrough, the `-D` cross-check).
+
+**Fixed:** `supply-chain-mirror`'s second remote was being provisioned,
+fetched, and reviewed against as `upstream` — the fork-pr name — instead of
+`untrusted` (DESIGN §3.6). `discover.go` got the `untrusted` name when it was
+introduced (commit `eace548`, 2026-07-12); the sync engine's own provisioning
+and `mirrorReview` never did, so a tool-provisioned mirror could never be
+re-detected as one by `discover`, and every mirror clone carried a remote its
+own contract says it must not have — unnoticed because the existing test
+(`TestMirrorDoesNotAdvancePastReview`) checked the outcome and commit count,
+never the remote name. `sync --fix` now renames a stale `upstream` to
+`untrusted` on a hardening clone (or, if a plain sync already created
+`untrusted` alongside it, removes the now-redundant `upstream` instead of
+attempting an impossible rename); without `--fix` the mismatch is reported
+every run, the same as a layout mismatch.
+
+Still open:
+- `--fix`'s other two DESIGN §4.1 reconciliations: general remote-contract
+  repair (a wrong URL, beyond the untrusted/upstream rename) and location —
+  moving a container found at the wrong root/layout path. Only layout-shape
+  conversion (`relayout.go`) and the untrusted/upstream rename exist so far.
+- Prune's own order (below), items 6-8: worktree removal, `prune =
+  "interactive"` in the sweep, `prune = "auto"`.
+- `repo home`/`repo path`/`repo clone`/`repo review` are still stubs.
+- `wd-repos-update` -> `repo sync work` (the `work` root — tags are gone
+  per DESIGN §10, so this is a root-name selector now, not `--tag work`).
+
 **Proof:** work repos managed as owner-nested worktrees; the PRJPATH script retired.
 **Tags:** whatever `prune` grows here, tags are not branches — no merge question to
 answer, no reflog to recover from, and pruning is scoped to the fetch refspec so a

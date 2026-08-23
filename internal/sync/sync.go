@@ -1,6 +1,9 @@
-// Package sync reconciles repositories toward the registry (DESIGN §5). Stage 4
-// implements single-tree upstream-push and supply-chain-mirror workflows; other
-// workflows and worktrees are deferred (reported, not attempted).
+// Package sync reconciles repositories toward the registry (DESIGN §5). All four
+// workflows and both layouts (single tree, bare+worktree) are implemented. What
+// remains of DESIGN §4.1's "config↔disk mismatch" trio is the general
+// remote-contract and location reconciliations — only layout-shape conversion
+// (relayout.go) and the untrusted/upstream rename exist so far — plus prune's
+// `interactive`/`auto` sweep modes (see docs/PLAN.md Stage 6).
 package sync
 
 import (
@@ -434,7 +437,7 @@ func (x *run) updateUnit(dir, branch, unit string) {
 // worktree per important branch (DESIGN §4). Worktrees are added by syncWorktree
 // after this returns.
 func (x *run) provisionWorktree() bool {
-	origin, upstream, ok := x.resolveRemotes()
+	origin, second, ok := x.resolveRemotes()
 	if !ok {
 		return false
 	}
@@ -458,14 +461,15 @@ func (x *run) provisionWorktree() bool {
 		return false
 	}
 	_, _ = gitx.EnsureRemote(x.container, "origin", origin)
-	if upstream != "" {
-		_, _ = gitx.EnsureRemote(x.container, "upstream", upstream)
+	var secondName string
+	if second != "" {
+		secondName, _ = x.ensureSecondRemote(x.container, second)
 	}
 	if !x.fetchRemote("origin") {
 		return false
 	}
-	if upstream != "" {
-		_, _ = gitx.Fetch(x.container, "upstream", x.tagPolicy())
+	if secondName != "" {
+		_, _ = gitx.Fetch(x.container, secondName, x.tagPolicy())
 	}
 	x.res.Cloned = true
 	// Before syncWorktree adds a worktree per important branch — adding one for
@@ -553,18 +557,18 @@ func shortSHA(s string) string {
 	return s
 }
 
-// fetchWorktreeRemotes ensures origin (and upstream, for a fork) are set and
-// fetched for an already-provisioned worktree container — the network step
-// every sync needs, mirroring provision()'s fetch for a single tree (dry-run
-// only reports intent). provisionWorktree covers this on an initial clone;
-// this covers every sync after.
+// fetchWorktreeRemotes ensures origin (and the workflow's second remote, for a
+// fork) are set and fetched for an already-provisioned worktree container — the
+// network step every sync needs, mirroring provision()'s fetch for a single
+// tree (dry-run only reports intent). provisionWorktree covers this on an
+// initial clone; this covers every sync after.
 func (x *run) fetchWorktreeRemotes() bool {
-	origin, upstream, ok := x.resolveRemotes()
+	origin, second, ok := x.resolveRemotes()
 	if !ok {
 		return false
 	}
 	if x.opts.DryRun {
-		x.add("would fetch origin%s", ifFork(x.r, " and upstream"))
+		x.add("would fetch %s", x.fetchTargets())
 		return true
 	}
 	if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
@@ -573,20 +577,23 @@ func (x *run) fetchWorktreeRemotes() bool {
 	if !x.fetchRemote("origin") {
 		return false
 	}
-	if upstream != "" {
-		if changed, _ := gitx.EnsureRemote(x.container, "upstream", upstream); changed {
-			x.add("set upstream = %s", upstream)
+	if second != "" {
+		name, changed := x.ensureSecondRemote(x.container, second)
+		if changed {
+			x.add("set %s = %s", name, second)
 		}
-		if _, err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
-			x.add("fetched upstream")
+		if _, err := gitx.Fetch(x.container, name, x.tagPolicy()); err == nil {
+			x.add("fetched %s", name)
 		}
 	}
 	return true
 }
 
-// resolveRemotes returns the origin and (when a fork exists) upstream clone URLs
-// for a declared repo, or the discovered origin verbatim.
-func (x *run) resolveRemotes() (origin, upstream string, ok bool) {
+// resolveRemotes returns the origin and (when a fork exists) second-remote clone
+// URLs for a declared repo, or the discovered origin verbatim. The second
+// remote's *name* — upstream or untrusted — is a separate question, decided by
+// remoteName from the workflow, not from how this value was resolved.
+func (x *run) resolveRemotes() (origin, second string, ok bool) {
 	if x.r.OriginURL != "" {
 		return x.r.OriginURL, "", true
 	}
@@ -606,10 +613,71 @@ func (x *run) resolveRemotes() (origin, upstream string, ok bool) {
 	}
 	if x.r.Fork != nil {
 		if up, err := x.reg.PhysicalID(x.r.ID, x.r.Roots); err == nil {
-			upstream = up
+			second = up
 		}
 	}
-	return u, upstream, true
+	return u, second, true
+}
+
+// remoteName is the git remote name for a fork-pr or supply-chain-mirror repo's
+// definitive source: "upstream" for fork-pr, "untrusted" for
+// supply-chain-mirror — self-documenting at the git level, and what makes the
+// workflow detectable from remotes alone (DESIGN §3.6). Only these two
+// workflows ever resolve a Fork; vendor and upstream-push have no second
+// remote, and never call this.
+func (x *run) remoteName() string {
+	if x.r.Workflow == model.SupplyChainMirror {
+		return "untrusted"
+	}
+	return "upstream"
+}
+
+// fetchTargets is the dry-run fetch-intent line's remote list.
+func (x *run) fetchTargets() string {
+	if x.r.Fork != nil {
+		return "origin and " + x.remoteName()
+	}
+	return "origin"
+}
+
+// siblingRemoteName is the other workflow's name for the same remote slot — the
+// name a hardening (or loosening) clone would still be carrying it under.
+func siblingRemoteName(name string) string {
+	if name == "upstream" {
+		return "untrusted"
+	}
+	return "upstream"
+}
+
+// ensureSecondRemote sets the workflow-correct second remote (upstream for
+// fork-pr, untrusted for supply-chain-mirror) to url and returns its name. When
+// the clone instead carries the *other* workflow's name for this same slot —
+// e.g. a fork-pr clone hardening into a mirror, or any clone provisioned before
+// this name became workflow-aware — that is a config↔disk mismatch (DESIGN
+// §3.6, §4.1): always reported, reconciled only under --fix. Reconciling means
+// renaming the stale remote onto the correct name, unless the correct name
+// already exists too (a plain sync will have created it, since this check does
+// not gate that), in which case the now-redundant stale one is removed instead
+// — renaming onto an existing name is not possible.
+func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
+	name = x.remoteName()
+	stale := siblingRemoteName(name)
+	if _, ok := gitx.RemoteURL(dir, stale); ok {
+		if x.opts.FixLayout {
+			if _, canonExists := gitx.RemoteURL(dir, name); canonExists {
+				if err := gitx.RemoveRemote(dir, stale); err == nil {
+					x.add("removed remote %s (superseded by %s)", stale, name)
+				}
+			} else if err := gitx.RenameRemote(dir, stale, name); err == nil {
+				x.add("renamed remote %s → %s", stale, name)
+			}
+		} else {
+			x.add("remote %s should be %s for %s — run: sync --fix", stale, name, x.r.Workflow)
+			x.attention(fmt.Sprintf("remote %s should be %s — run: sync --fix", stale, name))
+		}
+	}
+	changed, _ = gitx.EnsureRemote(dir, name, url)
+	return name, changed
 }
 
 // writeGitFile writes the container's `.git` file pointing at the bare repo, so
@@ -665,15 +733,15 @@ func (x *run) provision() bool {
 		x.adoptClonedBranch()
 	}
 
-	// Ensure remotes: origin, plus upstream when a fork exists.
+	// Ensure remotes: origin, plus the workflow's second remote when a fork exists.
 	if !x.opts.DryRun {
 		if changed, _ := gitx.EnsureRemote(x.container, "origin", originURL); changed {
 			x.add("set origin = %s", originURL)
 		}
 		if x.r.Fork != nil {
 			if up, err := x.reg.PhysicalID(x.r.ID, x.r.Roots); err == nil {
-				if changed, _ := gitx.EnsureRemote(x.container, "upstream", up); changed {
-					x.add("set upstream = %s", up)
+				if name, changed := x.ensureSecondRemote(x.container, up); changed {
+					x.add("set %s = %s", name, up)
 				}
 			}
 		}
@@ -681,14 +749,15 @@ func (x *run) provision() bool {
 
 	// Fetch (dry-run assesses against existing refs without touching the network).
 	if x.opts.DryRun {
-		x.add("would fetch origin%s", ifFork(x.r, " and upstream"))
+		x.add("would fetch %s", x.fetchTargets())
 	} else {
 		if !x.fetchRemote("origin") {
 			return false
 		}
 		if x.r.Fork != nil {
-			if _, err := gitx.Fetch(x.container, "upstream", x.tagPolicy()); err == nil {
-				x.add("fetched upstream")
+			name := x.remoteName()
+			if _, err := gitx.Fetch(x.container, name, x.tagPolicy()); err == nil {
+				x.add("fetched %s", name)
 			}
 		}
 	}
@@ -886,16 +955,16 @@ func (x *run) mirrorReview() {
 	if x.r.Workflow != model.SupplyChainMirror || x.r.Fork == nil {
 		return
 	}
-	upRef := "upstream/" + x.ub
-	if _, ok := gitx.RevParse(x.dir, upRef); !ok {
+	untrustedRef := x.remoteName() + "/" + x.ub
+	if _, ok := gitx.RevParse(x.dir, untrustedRef); !ok {
 		return
 	}
-	n, err := gitx.CountBetween(x.dir, "origin/"+x.ub, upRef)
+	n, err := gitx.CountBetween(x.dir, "origin/"+x.ub, untrustedRef)
 	if err != nil || n == 0 {
 		return
 	}
-	x.add("upstream is %d commit(s) ahead of the reviewed mirror — review pending", n)
-	x.branchMark(x.ub, ReviewPending, fmt.Sprintf("upstream +%d — review pending (repo review %s)", n, x.res.Name))
+	x.add("untrusted is %d commit(s) ahead of the reviewed mirror — review pending", n)
+	x.branchMark(x.ub, ReviewPending, fmt.Sprintf("untrusted +%d — review pending (repo review %s)", n, x.res.Name))
 }
 
 func (x *run) hooks() {
@@ -1231,13 +1300,6 @@ func repoName(r model.Repo) string {
 
 func deferredReason(r model.Repo) string {
 	return "" // every workflow and layout is now reconciled
-}
-
-func ifFork(r model.Repo, s string) string {
-	if r.Fork != nil {
-		return s
-	}
-	return ""
 }
 
 func shorten(p string) string {
