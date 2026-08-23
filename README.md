@@ -10,8 +10,8 @@ completion.
 - Implementation plan: [docs/PLAN.md](docs/PLAN.md)
 
 Status: **early implementation.** `status`, `scan`, `sync` (incl. `--fix` layout
-migration), `prune`, and `apply` work; `clone`, `home`, `path`, and `review` are
-stubbed.
+migration), `prune`, `apply`, and `config` work; `clone`, `home`, `path`, and
+`review` are stubbed.
 
 ## Membership: declared ∪ discovered
 
@@ -110,10 +110,41 @@ that subtree with no new mechanism. A root holds its declared members two ways:
   derived (a `workflow` not yet detectable, a non-default `branches`, an off-pattern
   `fork`). The `id` field is required; everything derivable is still derived.
 
+`[dir.<name>]` is a lighter sibling: a settings-only overlay on part of a root's
+tree, for when a subtree deserves its own settings but not a second scan location
+— the owner-layout case, where one owner under a root wants its own `workflow`/
+`pin`/`branches` without inventing a whole new root name and re-walking ground the
+parent root already covers:
+
+```toml
+[root.contrib]
+dir      = "~/contrib"
+layout   = "owner"
+workflow = "upstream-push"
+
+[dir.contrib-prometheus]   # settings-only: not a scan location
+dir      = "~/contrib/prometheus"
+workflow = "vendor"
+pin      = "latest-tag"
+repos    = ["github:prometheus/prometheus"]
+```
+
+It takes a `dir` (required, and must sit under some root's `dir`) plus the same
+settings bundle and membership shape as a root — except `layout`, which stays
+root-only: a repo's container path is computed from its root's `dir` + `layout` +
+identity alone, never from anything nested under it, so `sync --fix`'s location
+reconciliation never depends on an override only reachable once a repo is already
+there. `worktrees` has no such restriction — it reshapes a container in place
+rather than relocating it. `[dir.*]` names are their own namespace, unrelated to
+`[root.*]` names or to any directory name; a `[dir.contrib]` and a `[root.contrib]`
+may coexist without colliding.
+
 ### Settings reference
 
-Every field below is valid in `[defaults]`, any `[root.*]`, or a `[[root.*.repo]]`
-table (a repo table also takes `id` and `fork`; a root also takes `dir`, `repos`).
+Every field below is valid in `[defaults]`, any `[root.*]` or `[dir.*]`, or a
+`[[root.*.repo]]`/`[[dir.*.repo]]` table (a repo table also takes `id` and `fork`;
+a root or dir also takes `dir`, `repos`) — except `layout`, which `[dir.*]`
+cannot set.
 
 | field        | values                                          | meaning |
 |--------------|-------------------------------------------------|---------|
@@ -290,6 +321,10 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
 - `list` — enumerate the declared ∪ discovered union (for completion)
 - `resolve` — resolve a declared or discovered repo's name to its physical URL
   (debug)
+- `config <id|name|path>` — print one repo's fully resolved settings as TOML
+  (config in, config out) — the same shape you could paste as a
+  `[[root.*.repo]]`/`[[dir.*.repo]]` override. `--explain` instead prints one line
+  per field: its value, and which link in the root/dir chain last set it.
 - `prune` — report which local branches have landed, and remove them when asked.
   Report-only by default. `--delete` asks per branch with the evidence in front
   of you (`y`/`n`/`a`/`q`); `--yes` skips the questions; `--dry-run` shows what

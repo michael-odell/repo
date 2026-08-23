@@ -30,6 +30,8 @@ var commands = []command{
 		help: "usage: repo version"},
 	{name: "list", summary: "enumerate known repos (for completion)", run: cmdList,
 		help: "usage: repo list\n\nPrint every repo — declared in the registry or discovered on disk — with its\nid, workflow, and resolved physical URL."},
+	{name: "config", summary: "print one repo's fully resolved settings", run: cmdConfig,
+		help: "usage: repo config [--explain] <id|name|path>\n\nPrint one repo's fully resolved settings — [defaults], its root/dir chain, and\nits own entry, all folded together — as TOML: config in, config out, the same\nshape you could paste as a [[root.*.repo]]/[[dir.*.repo]] override.\n\nflags:\n  --explain  one line per field: its value, and which link in the chain set it"},
 	{name: "resolve", summary: "resolve a repo id to its physical URL (debug)", run: cmdResolve,
 		help: "usage: repo resolve <id|name>\n\nResolve a logical id (github:owner/repo) or short name — declared or\ndiscovered — to the clone URL this machine would use, applying any [resolve]\noverlay."},
 	{name: "status", summary: "report drift across repos (read-only)", run: cmdStatus,
