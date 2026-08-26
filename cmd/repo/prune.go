@@ -184,6 +184,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 // cheap, since a number nobody sees is not a measurement.
 type crossCheckTally struct {
 	branches int
+	withheld int
 	spent    time.Duration
 }
 
@@ -193,6 +194,13 @@ func (c *crossCheckTally) report(w io.Writer) {
 	}
 	fmt.Fprintf(w, "cross-checked %d branch(es) in %s\n",
 		c.branches, c.spent.Round(time.Millisecond))
+	// A withheld branch is the one outcome the deleted-count cannot show: the
+	// run reads as "0 branch(es) deleted" whether nothing was prunable or
+	// everything was held back, and those are not the same news.
+	if c.withheld > 0 {
+		fmt.Fprintf(w, "%d held back — the work was not found in the base branch's current tree\n",
+			c.withheld)
+	}
 }
 
 // crossCheck corroborates a rewritten-tier verdict by routes that share no code
@@ -216,6 +224,9 @@ func crossCheck(w io.Writer, container string, v syncpkg.Verdict, base string, c
 		fmt.Fprintf(w, "    ✗ %s: cross-check could not run (%v) — not deleted\n", v.Name, err)
 		return false
 	case !c.OK:
+		if cc != nil {
+			cc.withheld++
+		}
 		// "could not corroborate", never "does not reverse-apply": the latter
 		// named a cause the check cannot establish, dressing the routes' silence
 		// as a finding about the branch. What each route actually reported goes

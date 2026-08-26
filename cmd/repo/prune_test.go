@@ -420,4 +420,9 @@ func TestCrossCheckWithholdsWhatItCannotCorroborate(t *testing.T) {
 			t.Errorf("the withheld branch did not report the %s route:\n%s", route, body)
 		}
 	}
+	// "0 branch(es) deleted" reads the same whether nothing was prunable or
+	// everything was held back, so the footer has to say which happened.
+	if !strings.Contains(body, "1 held back") {
+		t.Errorf("the footer did not say a branch was held back:\n%s", body)
+	}
 }

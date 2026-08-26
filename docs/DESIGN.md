@@ -1203,7 +1203,8 @@ base's tree is a tree that already exists.
 
 Its cost is real and therefore **measured, not assumed**: each check is timed,
 a failed one says what it cost, and prune's footer names the total it spent
-corroborating. Three things bound that cost regardless of the numbers — it runs
+corroborating — and, when any branch was withheld, how many, since "0 branch(es)
+deleted" reads the same whether nothing was prunable or everything was held back. Three things bound that cost regardless of the numbers — it runs
 **only immediately before an actual force-deletion**, never during
 classification, so no report and no sweep ever pays for it; a branch is only
 ever deleted once; and route 2 runs only where route 1 has already failed, so
