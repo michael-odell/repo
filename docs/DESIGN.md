@@ -1129,34 +1129,80 @@ checked.
 **The `-D` path gets its second opinion back.** Tiers 2 and 3 both rest on
 `git cherry`'s patch-ids, so their agreement proves only that one mechanism is
 consistent with itself. Before a force-delete, prune therefore corroborates by a
-different route: take the branch's whole diff against the merge base and
-reverse-apply it against the base tip (`git apply --check -R`). If it reverse-
-applies cleanly the content is demonstrably present in base, established by a
-part of git that shares no code with patch-id hashing. Failure means *could not
-corroborate* → report instead of delete; it can never turn a "no" into a "yes".
+different route — and the question it asks is deliberately *stronger* than what
+the tiers ask. `git cherry` asks whether the patch is anywhere in base's
+**history**; corroboration asks whether the change is in base's **tree now**.
+Work that landed and was then reverted satisfies the first and fails the second,
+and a branch whose content is no longer in base is one whose deletion would take
+the last copy of it. When they disagree, the branch stays.
 
-It also corroborates something slightly *stronger* than the tiers do, which is
-worth being explicit about because it is the source of the only disagreements
-between them. `git cherry` asks whether the patch is anywhere in base's
-**history**; reverse application asks whether the change is in base's **current
-tree**. Work that landed and was then reverted satisfies the first and fails the
-second — and a branch whose content is no longer in base is one whose deletion
-would take the last copy of it. When they disagree, the branch stays.
+Corroboration is attempted by two independent routes, in order of strictness.
+Either one succeeding is enough; both failing means *could not corroborate* →
+report instead of delete. Neither can turn a "no" into a "yes".
+
+1. **Reverse-apply** (`git apply --cached --check -R`) — take the branch's whole
+   diff against the merge base and undo it against a scratch index built from
+   the base tip. Exact and cheap, and it proves presence outright: a patch only
+   reverse-applies where its post-image is actually sitting.
+
+2. **Merge-tree** (`git merge-tree --write-tree <base> <branch>`, its result
+   compared against base's own tree) — ask whether merging the branch into base
+   would change base at all. If the merge produces base's tree byte for byte,
+   the branch contributes nothing base does not already have.
+
+Route 1 alone was the whole check until it turned out to fail a case it was
+never meant to reject. It is a *textual* application, so it needs the three
+context lines around every hunk to still match the base tip — and a branch far
+enough behind will have had base edit inside that window since the fork. The
+threshold is exactly the context window: measured against a branch whose work
+was verifiably still present in base, a later edit 1–3 lines from the hunk fails
+and one 4 or more lines away passes. A branch 1294 commits behind therefore
+reads as "could not corroborate" essentially always, which strands it — the
+sweep goes on advertising it as prunable and prune goes on refusing to remove
+it, with no flag able to break the tie.
+
+Route 2 repairs that without loosening either thing route 1 protects, because it
+compares *content* rather than context. It is a three-way merge, so it shares no
+code with patch-id hashing and the independence requirement still holds. It
+keeps the revert property: where work landed and was then reverted, the base
+side is back at the merge base while the branch side still carries the change,
+so the merge re-introduces it, the result differs from base, and the branch is
+withheld. A merge conflict is likewise a withhold, as is a `merge-tree` that
+cannot run at all — so the gate is never weaker than route 1 alone, on any
+version of git.
+
+**`git apply --3way` is the trap, and is not used.** It is the obvious repair
+for route 1's context problem, and it is actively unsafe here: it treats
+"already un-applied" as success, so it reverse-applies cleanly against a base
+that never had the work *and* against one that reverted it. Both danger cases
+pass. Paired with a tier that has already said "merged", it would force-delete
+the last copy of reverted content — precisely the outcome this gate exists to
+prevent.
+
+Nothing in the repo takes part in either route. Route 1 uses a scratch index and
+a temp file; route 2 touches neither the index nor any working tree, and in the
+case that matters it writes no new object either, since a merge result equal to
+base's tree is a tree that already exists.
 
 Its cost is real and therefore **measured, not assumed**: each check is timed,
 a failed one says what it cost, and prune's footer names the total it spent
-corroborating. Two things bound that cost regardless of the numbers — it runs
+corroborating. Three things bound that cost regardless of the numbers — it runs
 **only immediately before an actual force-deletion**, never during
-classification, so no report and no sweep ever pays for it; and a branch is only
-ever deleted once. Under `auto` it does not run at all, since that bar is
-ancestry-only.
+classification, so no report and no sweep ever pays for it; a branch is only
+ever deleted once; and route 2 runs only where route 1 has already failed, so
+the ordinary case pays for one route. Under `auto` it does not run at all, since
+that bar is ancestry-only.
 
 The numbers, since they exist now: a synthetic branch touching **800 files
 (438KB of diff) cross-checks in 0.12s**, and cost tracks diff size rather than
-history depth, since a scratch index built from base is all it reads. On the
-author's own machine the check has yet to run at all — all 12 currently prunable
-branches across 24 repos landed at the ancestry tier, where `-d` is used and no
-corroboration is needed. The expensive case is the rare one.
+history depth, since a scratch index built from base is all it reads.
+
+**A withheld branch says what was tried, not what is wrong with it.** "master
+does not reverse-apply this branch's diff" named a cause the check cannot
+establish: it reads as a finding about the branch, when all that actually
+happened is that corroboration was not obtained. The line is *could not
+corroborate*, followed by what each route reported — so the distinction the
+design insists on is the one the output makes.
 
 **The sweep names what it found.** Under `report` and `auto`, `sync`'s footer
 carries a line — `12 branches prunable across 4 repos — repo prune` — because

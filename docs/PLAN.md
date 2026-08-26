@@ -180,7 +180,8 @@ found it:
    naming what it found. The verdicts get computed once per repo and shared.
 4. ✅ `--explain`, then the per-branch walk-through `repo prune --delete` uses it
    for. Explain comes first because the prompt is the explanation plus a question.
-5. ✅ The reverse-apply cross-check before every `-D`, timed and reported.
+5. ✅ The cross-check before every `-D`, timed and reported — reverse-apply,
+   falling back to `merge-tree` where base drifting over the hunk defeats it.
 6. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
 7. `prune = "interactive"`: the same walk-through, in the sweep's serial phase,
    TTY-only, degrading to `report` when there is nobody to ask.
