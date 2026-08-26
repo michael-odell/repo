@@ -2,6 +2,7 @@ package gitx
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -272,11 +273,11 @@ func writeFileRaw(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// TestReverseApplyCorroboratesASquashMerge: the -D path's second opinion. The
-// patch tiers found this merge by hashing patch ids; reverse application asks
-// a different question with different code — can base undo this change — and
-// has to agree before a force-delete goes ahead.
-func TestReverseApplyCorroboratesASquashMerge(t *testing.T) {
+// TestCorroborateASquashMerge: the -D path's second opinion. The patch tiers
+// found this merge by hashing patch ids; corroboration asks a different question
+// with different code — is the change in base's tree — and has to agree before a
+// force-delete goes ahead. Base has not moved since, so route 1 settles it.
+func TestCorroborateASquashMerge(t *testing.T) {
 	dir := newRepo(t)
 	gitT(t, dir, "merge", "-q", "--squash", "feature")
 	gitT(t, dir, "commit", "-q", "-m", "squashed")
@@ -289,43 +290,156 @@ func TestReverseApplyCorroboratesASquashMerge(t *testing.T) {
 		t.Fatalf("state = %v, want a rewritten-tier merge (the case needing -D)", state)
 	}
 
-	ok, err := ReverseApplies(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main")
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
-	if !ok {
-		t.Error("main holds the branch's whole diff but the cross-check did not corroborate it")
+	if !c.OK {
+		t.Fatalf("main holds the branch's whole diff but nothing corroborated it: %v", c.Tried)
+	}
+	if c.Via != "reverse-apply" {
+		t.Errorf("Via = %q, want reverse-apply to settle an undrifted base", c.Via)
 	}
 }
 
-// TestReverseApplyWithholdsUnlandedWork: the check's only job is to be able to
-// say no. A branch whose work is not in base must not reverse-apply, or the
-// second opinion is worth nothing.
-func TestReverseApplyWithholdsUnlandedWork(t *testing.T) {
+// TestCorroborateSurvivesBaseDriftingOverTheHunk is the case that stranded a
+// branch. The work landed and is still in main, but main has since edited inside
+// the diff's context window, so reverse application — being textual — cannot
+// apply the patch. That is not evidence about whether the work landed, and route
+// 2 compares content rather than context, so it still corroborates.
+//
+// Without this, a branch far enough behind reads as "could not corroborate"
+// forever: the sweep goes on advertising it as prunable and prune goes on
+// refusing to remove it, with no flag able to break the tie (DESIGN §5.3).
+func TestCorroborateSurvivesBaseDriftingOverTheHunk(t *testing.T) {
+	dir := driftedRepo(t)
+
+	// The work really is still there — the premise of the whole test.
+	body, err := os.ReadFile(filepath.Join(dir, "f"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "DEV_CLUSTER") {
+		t.Fatal("setup is wrong: main no longer holds the branch's work")
+	}
+
+	c, err := Corroborate(dir, "feature", "main")
+	if err != nil {
+		t.Fatalf("cross-check failed to run: %v", err)
+	}
+	if !c.OK {
+		t.Fatalf("the branch's work is still in main but nothing corroborated it: %v", c.Tried)
+	}
+	if c.Via != "merge-tree" {
+		t.Errorf("Via = %q, want merge-tree — reverse-apply cannot survive the drift", c.Via)
+	}
+}
+
+// TestCorroborateWithholdsUnlandedWork: the check's only job is to be able to
+// say no. A branch whose work is not in base must corroborate by no route, or
+// the second opinion is worth nothing.
+//
+// Both routes are asserted to have been consulted and declined. That is the
+// guard worth having: `git apply --3way` would make route 1 pass here, and a
+// future attempt to "fix" drift that way has to break this test to land.
+func TestCorroborateWithholdsUnlandedWork(t *testing.T) {
 	dir := newRepo(t) // feature is two commits ahead and never merged
 
-	ok, err := ReverseApplies(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main")
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
-	if ok {
-		t.Error("the cross-check corroborated a branch whose work is not in main")
+	if c.OK {
+		t.Errorf("corroborated a branch whose work is not in main, via %s", c.Via)
+	}
+	if len(c.Tried) != 2 {
+		t.Errorf("tried %v, want both routes consulted before withholding", c.Tried)
 	}
 }
 
-// TestReverseApplyLeavesTheRepoAlone: it runs against a scratch index, so a
-// working tree with uncommitted work — the thing prune must never touch — is
-// neither consulted nor disturbed.
-func TestReverseApplyLeavesTheRepoAlone(t *testing.T) {
+// TestCorroborateWithholdsRevertedWork is where corroboration is deliberately
+// stronger than the tiers. `git cherry` asks whether the patch is anywhere in
+// main's history and says yes; the branch is nonetheless the last copy of the
+// content, because main put it in and then took it back out. Deleting it would
+// lose the work outright.
+//
+// This is the case `git apply --3way` gets wrong — it counts "already
+// un-applied" as success — which is why that is not the repair for drift.
+func TestCorroborateWithholdsRevertedWork(t *testing.T) {
 	dir := newRepo(t)
 	gitT(t, dir, "merge", "-q", "--squash", "feature")
 	gitT(t, dir, "commit", "-q", "-m", "squashed")
+	commit(t, dir, "f", "base\n", "revert it again")
 
-	local := "base\none\ntwo\nlocal edit\n"
+	// The patch tiers still call this merged, which is what makes it dangerous.
+	state, err := MergedState(dir, "feature", "main", ScanUnlimited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == Unmerged {
+		t.Fatalf("state = %v, want the tiers to still call this merged", state)
+	}
+
+	c, err := Corroborate(dir, "feature", "main")
+	if err != nil {
+		t.Fatalf("cross-check failed to run: %v", err)
+	}
+	if c.OK {
+		t.Errorf("corroborated via %s a branch holding the last copy of the work", c.Via)
+	}
+	if len(c.Tried) != 2 {
+		t.Errorf("tried %v, want both routes consulted before withholding", c.Tried)
+	}
+}
+
+// driftedRepo builds the case that stranded a branch: feature's work landed in
+// main (rewritten, so the -D path applies) and is still there, but main has
+// since edited a line three away from the hunk — inside the three lines of
+// context a textual reverse-apply needs, and outside the region a content merge
+// would call a conflict.
+func driftedRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	gitT(t, dir, "init", "-q", "-b", "main", ".")
+	gitT(t, dir, "config", "user.email", "a@b")
+	gitT(t, dir, "config", "user.name", "A")
+
+	var lines []string
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, fmt.Sprintf("line%d", i))
+	}
+	orig := strings.Join(lines, "\n") + "\n"
+	commit(t, dir, "f", orig, "base")
+
+	gitT(t, dir, "checkout", "-q", "-b", "feature")
+	withWork := strings.Replace(orig, "line30\n", "line30\nDEV_CLUSTER\n", 1)
+	commit(t, dir, "f", withWork, "add the dev cluster")
+
+	gitT(t, dir, "checkout", "-q", "main")
+	gitT(t, dir, "merge", "-q", "--squash", "feature")
+	gitT(t, dir, "commit", "-q", "-m", "squashed")
+
+	drifted := strings.Replace(withWork, "line33\n", "line33-EDITED\n", 1)
+	commit(t, dir, "f", drifted, "later work on main, near the hunk")
+	return dir
+}
+
+// TestCorroborateLeavesTheRepoAlone: it runs against a scratch index and, on
+// route 2, against the object store alone — so a working tree with uncommitted
+// work, the thing prune must never touch, is neither consulted nor disturbed.
+// The drifted repo is used so both routes actually run.
+func TestCorroborateLeavesTheRepoAlone(t *testing.T) {
+	dir := driftedRepo(t)
+
+	local := "scratch edit nobody asked for\n"
 	writeFile(t, filepath.Join(dir, "f"), local)
 
-	if _, err := ReverseApplies(dir, "feature", "main"); err != nil {
+	c, err := Corroborate(dir, "feature", "main")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !c.OK {
+		t.Fatalf("expected the drifted repo to corroborate, got %v", c.Tried)
 	}
 
 	body, err := os.ReadFile(filepath.Join(dir, "f"))

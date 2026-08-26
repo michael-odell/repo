@@ -192,9 +192,9 @@ func (c *crossCheckTally) report(w io.Writer) {
 		c.branches, c.spent.Round(time.Millisecond))
 }
 
-// crossCheck corroborates a rewritten-tier verdict by a route that shares no
-// code with the patch-id tiers that produced it, and reports whether the
-// deletion may go ahead (DESIGN §5.3).
+// crossCheck corroborates a rewritten-tier verdict by routes that share no code
+// with the patch-id tiers that produced it, and reports whether the deletion may
+// go ahead (DESIGN §5.3).
 //
 // Only the -D path needs it: where git's own `-d` would agree, two independent
 // judgements already stand behind the deletion. Failure withholds the branch —
@@ -202,7 +202,7 @@ func (c *crossCheckTally) report(w io.Writer) {
 // reason not to act unilaterally on the tiers' word.
 func crossCheck(w io.Writer, container string, v syncpkg.Verdict, base string, cc *crossCheckTally) bool {
 	start := time.Now()
-	ok, err := gitx.ReverseApplies(container, v.Name, base)
+	c, err := gitx.Corroborate(container, v.Name, base)
 	took := time.Since(start)
 	if cc != nil {
 		cc.branches++
@@ -212,13 +212,20 @@ func crossCheck(w io.Writer, container string, v syncpkg.Verdict, base string, c
 	case err != nil:
 		fmt.Fprintf(w, "    ✗ %s: cross-check could not run (%v) — not deleted\n", v.Name, err)
 		return false
-	case !ok:
-		fmt.Fprintf(w, "    ✗ %s: %s does not reverse-apply this branch's diff — not deleted (%s)\n",
-			v.Name, base, took.Round(time.Millisecond))
+	case !c.OK:
+		// "could not corroborate", never "does not reverse-apply": the latter
+		// named a cause the check cannot establish, dressing the routes' silence
+		// as a finding about the branch. What each route actually reported goes
+		// underneath, so the refusal can be checked rather than taken on faith.
+		fmt.Fprintf(w, "    ✗ %s: could not corroborate — not deleted (%s)\n",
+			v.Name, took.Round(time.Millisecond))
+		for _, note := range c.Tried {
+			fmt.Fprintf(w, "        %s\n", note)
+		}
 		return false
 	}
-	fmt.Fprintf(w, "    ✓ %s: cross-checked — %s reverse-applies its whole diff (%s)\n",
-		v.Name, base, took.Round(time.Millisecond))
+	fmt.Fprintf(w, "    ✓ %s: corroborated by %s (%s)\n",
+		v.Name, c.Via, took.Round(time.Millisecond))
 	return true
 }
 

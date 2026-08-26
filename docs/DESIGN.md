@@ -1171,6 +1171,23 @@ withheld. A merge conflict is likewise a withhold, as is a `merge-tree` that
 cannot run at all — so the gate is never weaker than route 1 alone, on any
 version of git.
 
+The window it opens, measured on a branch whose work is verifiably still in
+base, by how far away base's later edit is:
+
+| edit distance from the hunk | 1 | 2 | 3 | 4+ |
+|---|---|---|---|---|
+| route 1 (reverse-apply) | ✗ | ✗ | ✗ | ✓ |
+| route 2 (merge-tree) | ✗ conflict | ✓ | ✓ | ✓ |
+
+Only a directly abutting edit still withholds, and there the two sides really do
+overlap — a conflict is the honest answer rather than a false negative. But the
+distance table understates the gain, because route 1 is **all-or-nothing across
+the whole diff**: every hunk in every file has to still match, so one drifted
+line anywhere sinks the entire branch. A content merge conflicts only on the
+regions that genuinely overlap, which is why it rescues a branch that is
+thousands of commits behind and touches many files — the case the table's single
+hunk cannot show.
+
 **`git apply --3way` is the trap, and is not used.** It is the obvious repair
 for route 1's context problem, and it is actively unsafe here: it treats
 "already un-applied" as success, so it reverse-applies cleanly against a base

@@ -379,7 +379,7 @@ func TestForceDeleteIsCrossChecked(t *testing.T) {
 	}
 	// The ancestry-tier branch goes without one: git's -d already agrees there,
 	// so a second opinion would be a third.
-	if strings.Count(body, "reverse-applies") != 1 {
+	if strings.Count(body, "corroborated by") != 1 {
 		t.Errorf("the cross-check ran for a branch that did not need it:\n%s", body)
 	}
 }
@@ -405,7 +405,19 @@ func TestCrossCheckWithholdsWhatItCannotCorroborate(t *testing.T) {
 		pruneOpts{Delete: true, Yes: true}); err != nil {
 		t.Fatal(err)
 	}
+	body := out.String()
 	if !hasBranch(t, dir, "feature") {
-		t.Errorf("a branch the cross-check could not corroborate was deleted anyway:\n%s", out.String())
+		t.Errorf("a branch the cross-check could not corroborate was deleted anyway:\n%s", body)
+	}
+	// The refusal says corroboration was not obtained — not that the branch is
+	// unmerged, which is a cause the check cannot establish (DESIGN §5.3).
+	if !strings.Contains(body, "could not corroborate") {
+		t.Errorf("the withheld branch did not say corroboration failed:\n%s", body)
+	}
+	// And it shows what each route reported, so the refusal can be checked.
+	for _, route := range []string{"reverse-apply:", "merge-tree:"} {
+		if !strings.Contains(body, route) {
+			t.Errorf("the withheld branch did not report the %s route:\n%s", route, body)
+		}
 	}
 }
