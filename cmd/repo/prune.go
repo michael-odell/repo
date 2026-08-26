@@ -167,7 +167,10 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 		fmt.Fprintf(w, "\n%d branch(es) prunable — re-run with --delete to remove them\n", total)
 	default:
 		fmt.Fprintf(w, "\n%d branch(es) deleted\n", pruned)
-		if log != nil {
+		// Only when something was actually written. The journal opens before the
+		// first deletion is attempted, so a run whose branches were all withheld
+		// still has one — pointing at it would offer a record of nothing.
+		if log != nil && pruned > 0 {
 			fmt.Fprintf(w, "recorded in %s\n", log.Path())
 		}
 	}
