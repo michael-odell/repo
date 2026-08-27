@@ -9,6 +9,7 @@ import (
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
+	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
 
 // cloneWithLandedBranch builds a clone whose `landed` branch is an ancestor of
@@ -384,17 +385,18 @@ func TestForceDeleteIsCrossChecked(t *testing.T) {
 	}
 }
 
-// TestCrossCheckWithholdsWhatItCannotCorroborate: the check's only power is to
-// refuse. If it cannot establish the content is in main, the branch stays —
-// "could not corroborate" is never evidence the work is missing, and never a
-// reason to delete anyway.
-func TestCrossCheckWithholdsWhatItCannotCorroborate(t *testing.T) {
+// TestClassificationWithholdsWhatItCannotCorroborate: the label is the promise.
+// A branch whose work is not in main's tree must not be *called* prunable, not
+// merely refused later — the sweep advertising a branch the delete path would
+// decline is the disagreement this moved into classification to end.
+func TestClassificationWithholdsWhatItCannotCorroborate(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	wd := t.TempDir()
 	dir := squashMergedRepo(t, wd, "proj")
 
-	// main moves on: the squashed content is reverted, so the branch's diff no
-	// longer reverse-applies even though the patch tiers already answered.
+	// main moves on: the squashed content is reverted, so the branch is now the
+	// last copy of it even though the patch tiers still call it merged.
 	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
 		t.Fatal(err)
 	}
@@ -407,22 +409,87 @@ func TestCrossCheckWithholdsWhatItCannotCorroborate(t *testing.T) {
 	}
 	body := out.String()
 	if !hasBranch(t, dir, "feature") {
-		t.Errorf("a branch the cross-check could not corroborate was deleted anyway:\n%s", body)
+		t.Errorf("a branch that could not be corroborated was deleted anyway:\n%s", body)
 	}
-	// The refusal says corroboration was not obtained — not that the branch is
-	// unmerged, which is a cause the check cannot establish (DESIGN §5.3).
+	// The reason is named as corroboration failing, never as the branch being
+	// unmerged — a cause the check cannot establish (DESIGN §5.3).
 	if !strings.Contains(body, "could not corroborate") {
 		t.Errorf("the withheld branch did not say corroboration failed:\n%s", body)
 	}
-	// And it shows what each route reported, so the refusal can be checked.
-	for _, route := range []string{"reverse-apply:", "merge-tree:"} {
-		if !strings.Contains(body, route) {
-			t.Errorf("the withheld branch did not report the %s route:\n%s", route, body)
+	if strings.Contains(body, "✂    feature") {
+		t.Errorf("feature was still offered as prunable:\n%s", body)
+	}
+}
+
+// TestExplainNamesTheCorroborationRoutes: the report line stays terse, so the
+// mechanism belongs where it was asked for. "could not corroborate" is only
+// checkable if you can see which routes were tried and what each said.
+func TestExplainNamesTheCorroborationRoutes(t *testing.T) {
+	// Its own cache: these repos are built deterministically enough that another
+	// test's sha pair collides with this one's, and a hit would answer from a
+	// different test's run.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := squashMergedRepo(t, wd, "proj")
+	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "commit", "-qam", "back that out")
+
+	var out bytes.Buffer
+	if err := explainBranch(&out, selectedRepo(t, wd, dir), "feature"); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+	for _, want := range []string{"reverse-apply:", "merge-tree:", "could not corroborate"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the explanation does not mention %q:\n%s", want, body)
 		}
 	}
-	// "0 branch(es) deleted" reads the same whether nothing was prunable or
-	// everything was held back, so the footer has to say which happened.
-	if !strings.Contains(body, "1 held back") {
-		t.Errorf("the footer did not say a branch was held back:\n%s", body)
+}
+
+// TestTheDeleteGateStillRefusesUncorroborated: classification is now the first
+// line of defence, not the only one. The gate re-asks immediately before the
+// -D, because between the two sits an approval that can take as long as
+// somebody takes to read it — so a verdict handed straight to pruneRepo, as a
+// stale one would be, still has to be refused.
+func TestTheDeleteGateStillRefusesUncorroborated(t *testing.T) {
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+	git(t, dir, "checkout", "-q", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, "never-landed"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "never-landed")
+	git(t, dir, "commit", "-q", "-m", "work main never got")
+	git(t, dir, "checkout", "-q", "main")
+
+	sha, _ := gitx.RevParse(dir, "feature")
+	r := resolved(t, testRegistry(t, wd), dir)
+	// Prunable at a rewritten tier is what a stale verdict would claim, and it
+	// is exactly the claim the gate exists to disbelieve.
+	stale := []syncpkg.Verdict{{
+		Name: "feature", SHA: sha, State: gitx.MergedPatch, Prunable: true,
+	}}
+
+	cor := syncpkg.OpenCorroborations().Unbounded()
+	defer func() { _ = cor.Close() }()
+	cc := &crossCheckTally{}
+	var out bytes.Buffer
+	n := pruneRepo(&out, r, dir, stale, nil, pruneOpts{DryRun: true}, cc, cor)
+
+	if n != 0 {
+		t.Errorf("the gate let through %d uncorroborated deletion(s):\n%s", n, out.String())
+	}
+	if !hasBranch(t, dir, "feature") {
+		t.Error("the branch was deleted despite the gate refusing")
+	}
+	if cc.withheld != 1 {
+		t.Errorf("withheld = %d, want 1", cc.withheld)
+	}
+	var footer bytes.Buffer
+	cc.report(&footer)
+	if !strings.Contains(footer.String(), "1 held back") {
+		t.Errorf("the footer did not say a branch was held back: %q", footer.String())
 	}
 }

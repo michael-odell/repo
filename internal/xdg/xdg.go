@@ -25,6 +25,17 @@ func StateDir() string {
 	return filepath.Join(base("XDG_STATE_HOME", ".local", "state"), appDir)
 }
 
+// CacheDir is where rederivable answers live: $XDG_CACHE_HOME/repo, else
+// ~/.cache/repo.
+//
+// Cache rather than state because the spec reserves this for what can be
+// regenerated, and that is the whole distinction: deleting it costs a
+// recomputation and nothing else. The journal goes to StateDir precisely
+// because deleting it costs the record of what was removed.
+func CacheDir() string {
+	return filepath.Join(base("XDG_CACHE_HOME", ".cache"), appDir)
+}
+
 // base returns the directory the named XDG variable points at, else the
 // spec's default beneath the home directory.
 //

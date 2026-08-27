@@ -1,5 +1,7 @@
 package sync
 
+import "time"
+
 // show_branches values (DESIGN §5.6), ordered by how much of the branch
 // inventory each enumerates: none ⊂ notable ⊂ unmerged ⊂ all.
 const (
@@ -99,7 +101,15 @@ const (
 // from the same call, which is the property §5.3 leans on.
 func (x *run) verdicts() ([]Verdict, error) {
 	if x.classified == nil && x.classifyErr == nil {
-		x.classified, x.classifyErr = Classify(x.container, x.r)
+		x.classified, x.classifyErr = Classify(x.container, x.r, x.opts.cor)
+		// Corroboration is the one part of classification whose cost is worth
+		// naming rather than leaving inside the trace line's gap: it is the
+		// only piece bounded by a budget, so it is the piece someone tuning one
+		// needs to see (DESIGN §5.3).
+		if n, spent := corroborated(x.classified); n > 0 {
+			x.add("corroborated %d rewritten-tier branch(es) in %s",
+				n, spent.Round(time.Millisecond))
+		}
 		if x.classified == nil && x.classifyErr == nil {
 			// No task branches: remember that, rather than reclassifying each
 			// time something asks.

@@ -4,6 +4,7 @@ package gitx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,7 +52,19 @@ func runCmd(dir string, env []string, args ...string) (string, error) {
 // leaving nothing to distinguish a repo-wide problem from a handful of refused
 // tags. Callers that don't need that distinction should use runCmd.
 func runCmdCode(dir string, env []string, args ...string) (stdout string, code int, err error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutFor(args))
+	return runCmdCodeWithin(dir, env, timeoutFor(args), timeoutEnvFor(args), args...)
+}
+
+// runCmdCodeWithin is runCmdCode under a deadline the caller chose rather than
+// the ambient per-subcommand one. It exists for work that is optional and
+// therefore boundable — corroboration during a sweep (DESIGN §5.3) — where the
+// right answer to "this is taking too long" is to stop asking, not to raise a
+// global timeout. raiseHint names the environment variable worth raising when
+// the deadline is the ambient one, and is empty when it is not: telling someone
+// to raise REPO_GIT_TIMEOUT would be wrong advice for a budget that did not
+// come from there.
+func runCmdCodeWithin(dir string, env []string, budget time.Duration, raiseHint string, args ...string) (stdout string, code int, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 
 	full := args
@@ -75,8 +88,12 @@ func runCmdCode(dir string, env []string, args ...string) (stdout string, code i
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
-			return "", 0, fmt.Errorf("git %s: timed out after %s (raise %s)",
-				strings.Join(args, " "), timeoutFor(args), timeoutEnvFor(args))
+			msg := fmt.Sprintf("git %s: %s after %s",
+				strings.Join(args, " "), errTimedOut, budget)
+			if raiseHint != "" {
+				msg += " (raise " + raiseHint + ")"
+			}
+			return "", 0, fmt.Errorf("%s: %w", msg, errTimedOut)
 		}
 		if ee, ok := err.(*exec.ExitError); ok {
 			return string(out), ee.ExitCode(),
@@ -86,6 +103,11 @@ func runCmdCode(dir string, env []string, args ...string) (stdout string, code i
 	}
 	return string(out), 0, nil
 }
+
+// errTimedOut marks a command stopped by its deadline rather than by git,
+// so a caller that set its own budget can tell "we ran out of time" from "git
+// said no" — the two mean opposite things to anything deciding on the answer.
+var errTimedOut = errors.New("timed out")
 
 // Timeouts are split in two because the two kinds of git command fail
 // differently: anything crossing the network can legitimately run for minutes

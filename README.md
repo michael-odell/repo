@@ -165,6 +165,7 @@ cannot set.
 | `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
 | `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
 | `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
+| `corroborate_budget` | a duration (`2s`, `500ms`, `0`)           | how long the `-D` cross-check may take per branch during a sweep before it gives up and reports the branch un-corroborated; `0` switches it off, unset = 2s. An explicit `repo prune` ignores it and runs to completion (§5.3) |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
 | `pin`        | branch \| tag \| `latest-tag`                   | vendor only: what to track |
@@ -299,6 +300,7 @@ decides what it **tells you**.
 | `REPO_GIT_TIMEOUT`   | deadline for local git invocations            | `2m`                |
 | `REPO_GIT_NETWORK_TIMEOUT` | deadline for git invocations that reach a remote | `10m`     |
 | `REPO_MERGE_SCAN_LIMIT` | default `merge_scan_limit` for repos config doesn't set one on | `10000` |
+| `REPO_CORROBORATE_BUDGET` | default `corroborate_budget` for repos config doesn't set one on | `2s` |
 
 `REPO_REGISTRY_PATH` and `REPO_ROOTS` are colon-separated path-style lists;
 `REPO_OUT` is a single directory. The timeouts take Go durations (`90s`, `5m`).

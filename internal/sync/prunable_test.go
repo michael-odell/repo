@@ -112,7 +112,7 @@ func TestClassifyVerdicts(t *testing.T) {
 	git(t, clone, "checkout", "-q", "main")
 	git(t, clone, "push", "-q", "origin", "main")
 
-	verdicts, err := Classify(clone, mainRepo())
+	verdicts, err := Classify(clone, mainRepo(), nil)
 	must(t, err)
 
 	got := map[string]Verdict{}
@@ -160,7 +160,7 @@ func TestClassifyKeepsBranchesItCannotAnswerFor(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(clone, ".git", "refs", "heads", "broken"),
 		[]byte("0000000000000000000000000000000000000001\n"), 0o644))
 
-	verdicts, err := Classify(clone, mainRepo())
+	verdicts, err := Classify(clone, mainRepo(), nil)
 	must(t, err)
 	var got *Verdict
 	for i := range verdicts {
@@ -191,7 +191,7 @@ func TestClassifyRefusesCheckedOutBranch(t *testing.T) {
 	_, clone, _ := setupUpstreamRepo(t, "")
 	git(t, clone, "checkout", "-q", "-b", "held") // merged (empty) and checked out
 
-	verdicts, err := Classify(clone, mainRepo())
+	verdicts, err := Classify(clone, mainRepo(), nil)
 	must(t, err)
 	for _, v := range verdicts {
 		if v.Name != "held" {
@@ -235,7 +235,7 @@ func TestClassifyNamesAMissingBase(t *testing.T) {
 	writeCommit(t, dir, "f", "x\n", "one")
 	git(t, dir, "checkout", "-q", "-b", "feature")
 
-	_, err := Classify(dir, model.Repo{Branches: []string{"trunk"}})
+	_, err := Classify(dir, model.Repo{Branches: []string{"trunk"}}, nil)
 	if err == nil {
 		t.Fatal("classified a repo whose important branch it does not have")
 	}
@@ -251,7 +251,7 @@ func TestClassifyNamesAMissingBase(t *testing.T) {
 func TestPruneKeepOutranksTheVerdict(t *testing.T) {
 	dir := landedBranchRepo(t, "wip/spike")
 
-	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneKeep: []string{"wip/*"}})
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneKeep: []string{"wip/*"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func TestPruneKeepOutranksTheVerdict(t *testing.T) {
 func TestPruneMinAgeHoldsAFreshBranch(t *testing.T) {
 	dir := landedBranchRepo(t, "feature")
 
-	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneMinAge: time.Hour})
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}, PruneMinAge: time.Hour}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestPruneMinAgeHoldsAFreshBranch(t *testing.T) {
 
 	// The same branch with no minimum set: the gate is opt-in, and an unset
 	// setting must not quietly protect everything.
-	vs, err = Classify(dir, model.Repo{Branches: []string{"main"}})
+	vs, err = Classify(dir, model.Repo{Branches: []string{"main"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestVerdictCarriesTheTipSHA(t *testing.T) {
 		t.Fatal("no tip to compare against")
 	}
 
-	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}})
+	vs, err := Classify(dir, model.Repo{Branches: []string{"main"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,13 +54,16 @@ type Settings struct {
 	// tier concluded, and how long a ref must have sat still to be removable.
 	// A name-based veto outranks inference, which is why prune_keep is a list
 	// like force_push and not a flag.
-	PruneKeep   []string     `toml:"prune_keep"`
-	PruneMinAge *string      `toml:"prune_min_age"`
-	Host        *string      `toml:"host"`
-	Workflow    *string      `toml:"workflow"`
-	ForkOwner   *string      `toml:"fork_owner"`
-	Pin         *string      `toml:"pin"`
-	Hooks       []model.Hook `toml:"hooks"`
+	PruneKeep   []string `toml:"prune_keep"`
+	PruneMinAge *string  `toml:"prune_min_age"`
+	// CorroborateBudget bounds the -D cross-check during a sweep. nil is unset
+	// (the ambient default applies); "0" is off, which is why this is a pointer.
+	CorroborateBudget *string      `toml:"corroborate_budget"`
+	Host              *string      `toml:"host"`
+	Workflow          *string      `toml:"workflow"`
+	ForkOwner         *string      `toml:"fork_owner"`
+	Pin               *string      `toml:"pin"`
+	Hooks             []model.Hook `toml:"hooks"`
 }
 
 // Host is a [hosts.*] entry.
@@ -413,23 +416,24 @@ func (reg *Registry) chain(name string) []string {
 // config leaves unset are returned zero/"" so the caller falls back to what it
 // reads from disk and remotes.
 type Inherited struct {
-	Workflow            string        // "" when unset by config → caller keeps its inference
-	Layout              string        // "" when unset
-	Worktrees           *bool         // nil when unset
-	Push                string        // "" when unset by config → caller applies WorkflowDefaults
-	TaskBranches        string        // "" when unset by config → caller applies WorkflowDefaults
-	ShowBranches        string        // "" when unset by config → caller applies WorkflowDefaults
-	ForcePush           []string      // nil when unset
-	ForcePull           []string      // nil when unset
-	Tags                []string      // nil when unset; empty means "fetch no tags"
-	ForceTags           []string      // nil when unset
-	ExpectedUntracked   []string      // nil when unset
-	ExpectedUncommitted []string      // nil when unset
-	MergeScanLimit      *int          // nil when unset
-	Prune               string        // "" when unset
-	PruneKeep           []string      // nil when unset
-	PruneMinAge         time.Duration // 0 when unset: no age gate
-	Pin                 string        // "" when unset
+	Workflow            string         // "" when unset by config → caller keeps its inference
+	Layout              string         // "" when unset
+	Worktrees           *bool          // nil when unset
+	Push                string         // "" when unset by config → caller applies WorkflowDefaults
+	TaskBranches        string         // "" when unset by config → caller applies WorkflowDefaults
+	ShowBranches        string         // "" when unset by config → caller applies WorkflowDefaults
+	ForcePush           []string       // nil when unset
+	ForcePull           []string       // nil when unset
+	Tags                []string       // nil when unset; empty means "fetch no tags"
+	ForceTags           []string       // nil when unset
+	ExpectedUntracked   []string       // nil when unset
+	ExpectedUncommitted []string       // nil when unset
+	MergeScanLimit      *int           // nil when unset
+	Prune               string         // "" when unset
+	PruneKeep           []string       // nil when unset
+	PruneMinAge         time.Duration  // 0 when unset: no age gate
+	CorroborateBudget   *time.Duration // nil when unset; 0 means off
+	Pin                 string         // "" when unset
 	Hooks               []model.Hook
 }
 
@@ -480,10 +484,26 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		// error here is unreachable for any registry that got this far; a
 		// discovered repo falls back to "no age gate" rather than failing a
 		// sweep over a setting that was reported at load time.
-		PruneMinAge: mustAge(s.PruneMinAge),
-		Pin:         strOr(s.Pin, ""),
-		Hooks:       s.Hooks,
+		PruneMinAge:       mustAge(s.PruneMinAge),
+		CorroborateBudget: mustBudget(s.CorroborateBudget),
+		Pin:               strOr(s.Pin, ""),
+		Hooks:             s.Hooks,
 	}
+}
+
+// mustBudget parses a validated corroborate_budget. Unset stays nil so the
+// ambient default applies; an unreadable value has already been reported by
+// Validate, and falling back to nil means "use the default" rather than
+// silently switching the check off.
+func mustBudget(s *string) *time.Duration {
+	if s == nil {
+		return nil
+	}
+	d, err := ParseBudget(*s)
+	if err != nil {
+		return nil
+	}
+	return &d
 }
 
 // mustAge parses a validated prune_min_age, treating unset and unreadable
@@ -558,6 +578,13 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		}
 		r.PruneMinAge = age
 	}
+	if s.CorroborateBudget != nil {
+		d, err := ParseBudget(*s.CorroborateBudget)
+		if err != nil {
+			return model.Repo{}, fmt.Errorf("%s: corroborate_budget: %w", id, err)
+		}
+		r.CorroborateBudget = &d
+	}
 
 	// Fork is resolved only after the workflow is known, and only when the
 	// workflow needs one: explicit `fork` → derive from `fork_owner` → error.
@@ -629,6 +656,7 @@ var settingsFields = []settingsField{
 	{"prune", func(s Settings) bool { return s.Prune != nil }},
 	{"prune_keep", func(s Settings) bool { return s.PruneKeep != nil }},
 	{"prune_min_age", func(s Settings) bool { return s.PruneMinAge != nil }},
+	{"corroborate_budget", func(s Settings) bool { return s.CorroborateBudget != nil }},
 	{"pin", func(s Settings) bool { return s.Pin != nil }},
 	{"hooks", func(s Settings) bool { return s.Hooks != nil }},
 }
@@ -767,6 +795,9 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.PruneMinAge != nil {
 		base.PruneMinAge = over.PruneMinAge
+	}
+	if over.CorroborateBudget != nil {
+		base.CorroborateBudget = over.CorroborateBudget
 	}
 	if over.Host != nil {
 		base.Host = over.Host

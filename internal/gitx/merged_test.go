@@ -290,7 +290,7 @@ func TestCorroborateASquashMerge(t *testing.T) {
 		t.Fatalf("state = %v, want a rewritten-tier merge (the case needing -D)", state)
 	}
 
-	c, err := Corroborate(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main", 0)
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestCorroborateSurvivesBaseDriftingOverTheHunk(t *testing.T) {
 		t.Fatal("setup is wrong: main no longer holds the branch's work")
 	}
 
-	c, err := Corroborate(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main", 0)
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestCorroborateSurvivesBaseDriftingOverTheHunk(t *testing.T) {
 func TestCorroborateWithholdsUnlandedWork(t *testing.T) {
 	dir := newRepo(t) // feature is two commits ahead and never merged
 
-	c, err := Corroborate(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main", 0)
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestCorroborateWithholdsRevertedWork(t *testing.T) {
 		t.Fatalf("state = %v, want the tiers to still call this merged", state)
 	}
 
-	c, err := Corroborate(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main", 0)
 	if err != nil {
 		t.Fatalf("cross-check failed to run: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestCorroborateLeavesTheRepoAlone(t *testing.T) {
 	local := "scratch edit nobody asked for\n"
 	writeFile(t, filepath.Join(dir, "f"), local)
 
-	c, err := Corroborate(dir, "feature", "main")
+	c, err := Corroborate(dir, "feature", "main", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

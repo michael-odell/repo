@@ -32,6 +32,10 @@ type Verdict struct {
 	// anyway — and because an explanation computed later could disagree with
 	// the decision it claims to explain.
 	Evidence gitx.Evidence
+	// Corroboration is what the -D cross-check found, when it was asked. Empty
+	// for a branch nothing needed to corroborate — an ancestry-tier merge, or
+	// one a cheaper blocker already settled (DESIGN §5.3).
+	Corroboration gitx.Corroboration
 	// Unknown marks a branch git could not answer for at all, as distinct from
 	// one answered "unmerged". Never prunable, and reported as a finding rather
 	// than an observation: not knowing is something wrong, not something parked.
@@ -65,7 +69,11 @@ func (v Verdict) Summary(base string) string {
 // stands in the way. Being checked out is a blocker rather than a merge
 // question: git will not delete a branch some worktree is on, and neither
 // should anything here.
-func Classify(container string, r model.Repo) ([]Verdict, error) {
+//
+// cor corroborates the rewritten tiers before their branches are called
+// prunable, so the label means what it says (DESIGN §5.3). A nil cor skips
+// that, leaving the tiers' word alone — see Corroborator.
+func Classify(container string, r model.Repo, cor Corroborator) ([]Verdict, error) {
 	base := branch0(r)
 	if base == "" {
 		return nil, fmt.Errorf("no important branch to measure against")
@@ -78,7 +86,8 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 	// branch nowhere. Why it's missing is config's business (a stated
 	// `branches` outranks what the clone says, §3.6), so this reports what is
 	// so rather than guessing which end is wrong.
-	if _, ok := gitx.RevParse(container, base); !ok {
+	baseSHA, ok := gitx.RevParse(container, base)
+	if !ok {
 		return nil, fmt.Errorf("no local branch %q to measure against", base)
 	}
 	important := map[string]bool{}
@@ -151,6 +160,19 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 			v.Blocker = fmt.Sprintf("moved %s ago (prune_min_age %s)",
 				roughAge(time.Since(v.Updated)), roughAge(r.PruneMinAge))
 		default:
+			// Corroboration is asked last, and it is the only question here
+			// that costs anything. Every blocker above keeps the branch
+			// whatever corroboration would say, so asking earlier would buy
+			// nothing; and it applies only where removal needs -D, since git's
+			// own -d already agrees at the ancestry tier (DESIGN §5.3).
+			if cor != nil && NeedsForceDelete(v) {
+				v.Corroboration = cor.Corroborate(
+					container, b, base, ref.SHA, baseSHA, corroborateBudgetOf(r))
+				if !v.Corroboration.OK {
+					v.Blocker = "could not corroborate"
+					break
+				}
+			}
 			v.Prunable = true
 		}
 		out = append(out, v)
