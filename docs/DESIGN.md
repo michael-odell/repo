@@ -218,7 +218,34 @@ axes is load-bearing for where a repo lives.
 
 Each workflow defines a **remote contract**: the named remotes it *manages* and
 their required targets. `--fix` reconciles only those names; any *other* remote you
-add (`backup`, a colleague's fork, …) is left untouched.
+add (`backup`, a colleague's fork, …) is never renamed, removed, or pushed to.
+
+It is, however, **fetched**. A large part of what `sync` is *for* is making sure
+nothing local is stale relative to any server that has a copy — that guarantee
+doesn't stop at the remotes a workflow happens to manage, and the point applies
+even to a remote nothing here trusts: `supply-chain-mirror`'s own review gate
+(§5.4) only works *because* `untrusted` is fetched unconditionally, on every
+sync, independent of whether anything is allowed to merge it. So fetch and
+manage are different questions with different scopes: **every** remote
+`.git/config` names gets fetched, every sync, by default; only the contract's
+named remotes get reconciled by `--fix`, moved by a workflow's push policy, or
+compared against for branch reconciliation. An unmanaged remote's
+remote-tracking refs simply update — nothing here knows what its branches
+*mean*, so nothing compares against them or reports drift for them.
+
+**`fetch_skip`** (default `[]`, cascading like every list setting above) names
+remotes, by glob, to leave alone entirely — a `bench` remote pointing at
+something huge and unrelated, or one that needs credentials this machine
+doesn't have. It has no effect on a workflow's managed remotes (`origin`, and
+`upstream`/`untrusted` when a fork is configured): those are always fetched,
+full stop, because branch reconciliation and the review gate depend on them —
+excluding one would silently break what `sync` exists to guarantee, not just
+skip a nice-to-have. A fetch that fails on a remote `fetch_skip` didn't
+exclude is reported as `Attention` and moves on to the next one; it never
+fails the repo the way a failed `origin` fetch does, since nothing else here
+depends on that remote's data being current. Silencing a remote that fails
+this way, rather than seeing it flagged every run, is exactly what
+`fetch_skip` is for.
 
 | workflow               | managed remotes                           | negative      | intent |
 |------------------------|-------------------------------------------|---------------|--------|
@@ -684,8 +711,9 @@ ignored-files prompt.
 ## 5. `sync` engine
 
 Per repo, in order: **provision** (clone/remotes/worktrees) → **fetch** (all remotes,
-prune, tags) → **update branches** (important ones per workflow, task branches per
-`task_branches`) → **run hooks** → **detect + report drift**.
+prune, tags — §3.6's `fetch_skip` aside) → **update branches** (important ones per
+workflow, task branches per `task_branches`) → **run hooks** → **detect + report
+drift**.
 
 ### 5.1 Per-workflow update
 
@@ -1600,9 +1628,12 @@ of each namespace — whether it is reflogged, and whether anything outside
   already rewrites them on every run regardless of `-n`, and
   `core.logAllRefUpdates` reflogs them, so even a surprising update is
   recorded and reversible. `--dry-run` fetches these for real, on every
-  workflow — this is what lets its ahead/behind, review-pending, and rewrite
-  findings match what a real sync would report, rather than the previous
-  sync's.
+  workflow, for every remote it would otherwise fetch (§3.6: all of them,
+  `fetch_skip` aside) — this is what lets its ahead/behind, review-pending,
+  and rewrite findings match what a real sync would report, rather than the
+  previous sync's. An unmanaged remote gets the same treatment for the same
+  reason: its refs are exactly as reflogged and exactly as invisible to
+  anything outside `repo`, whether or not a workflow compares against them.
 - **Tags** (`refs/tags/*`) fail both tests: a human-addressable, shared
   namespace (`git checkout v1.2.3`) that **has no reflog at all** (§5.2) — a
   tag `--dry-run` created or moved as an inert side effect would leave zero
