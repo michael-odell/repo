@@ -54,6 +54,13 @@ type Repo struct {
 	ForcePush    []string // glob patterns: branches sync may force-push (DESIGN §5.2)
 	ForcePull    []string // glob patterns: branches sync may force-pull/reset (DESIGN §5.2)
 
+	// FetchSkip names remotes, by glob against the remote name, that sync
+	// should never fetch (DESIGN §3.6). It has no effect on a workflow's
+	// managed remotes (origin, and upstream/untrusted when Fork is set) — those
+	// are always fetched regardless, since branch reconciliation and the
+	// review gate depend on them.
+	FetchSkip []string
+
 	// Tags is which tags to fetch at all, and ForceTags which of those may be
 	// overwritten when upstream moves one (DESIGN §3.6/§5.2). They are separate
 	// because scope and permission-to-destroy are separate questions: narrowing

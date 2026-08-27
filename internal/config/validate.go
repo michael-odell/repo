@@ -215,6 +215,7 @@ func checkGlobs(add func(string, ...any), where string, s globSettings) {
 	}
 	check("force_push", s.ForcePush)
 	check("force_pull", s.ForcePull)
+	check("fetch_skip", s.FetchSkip)
 	check("prune_keep", s.PruneKeep)
 	check("expected_untracked", s.ExpectedUntracked)
 	check("expected_uncommitted", s.ExpectedUncommitted)
@@ -274,6 +275,7 @@ func checkPinReachesItsTag(add func(string, ...any), r model.Repo) {
 type globSettings struct {
 	ForcePush           []string
 	ForcePull           []string
+	FetchSkip           []string
 	PruneKeep           []string
 	Tags                []string
 	ForceTags           []string
@@ -285,6 +287,7 @@ func globsOfSettings(s Settings) globSettings {
 	return globSettings{
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		FetchSkip:           s.FetchSkip,
 		PruneKeep:           s.PruneKeep,
 		Tags:                s.Tags,
 		ForceTags:           s.ForceTags,
@@ -297,6 +300,7 @@ func globsOfRepo(r model.Repo) globSettings {
 	return globSettings{
 		ForcePush:           r.ForcePush,
 		ForcePull:           r.ForcePull,
+		FetchSkip:           r.FetchSkip,
 		PruneKeep:           r.PruneKeep,
 		Tags:                r.Tags,
 		ForceTags:           r.ForceTags,

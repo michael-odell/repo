@@ -34,6 +34,10 @@ type Settings struct {
 	ShowBranches *string  `toml:"show_branches"`
 	ForcePush    []string `toml:"force_push"`
 	ForcePull    []string `toml:"force_pull"`
+	// FetchSkip names remotes (by glob against the remote name) sync should
+	// never fetch (DESIGN §3.6) — the exclusion side of "fetch every remote by
+	// default." It never applies to a workflow's managed remotes.
+	FetchSkip []string `toml:"fetch_skip"`
 	// Which tags to fetch, and which of those may be overwritten when upstream
 	// moves one (DESIGN §3.6). Separate lists because scope and
 	// permission-to-destroy are separate questions — see model.Repo.
@@ -424,6 +428,7 @@ type Inherited struct {
 	ShowBranches        string         // "" when unset by config → caller applies WorkflowDefaults
 	ForcePush           []string       // nil when unset
 	ForcePull           []string       // nil when unset
+	FetchSkip           []string       // nil when unset
 	Tags                []string       // nil when unset; empty means "fetch no tags"
 	ForceTags           []string       // nil when unset
 	ExpectedUntracked   []string       // nil when unset
@@ -473,6 +478,7 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		ShowBranches:        strOr(s.ShowBranches, ""),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		FetchSkip:           s.FetchSkip,
 		Tags:                s.Tags,
 		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
@@ -561,6 +567,7 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		ShowBranches:        strOr(s.ShowBranches, showDefault),
 		ForcePush:           s.ForcePush,
 		ForcePull:           s.ForcePull,
+		FetchSkip:           s.FetchSkip,
 		Tags:                sliceOr(s.Tags, builtinDefaults.Tags),
 		ForceTags:           s.ForceTags,
 		ExpectedUntracked:   s.ExpectedUntracked,
@@ -648,6 +655,7 @@ var settingsFields = []settingsField{
 	{"show_branches", func(s Settings) bool { return s.ShowBranches != nil }},
 	{"force_push", func(s Settings) bool { return s.ForcePush != nil }},
 	{"force_pull", func(s Settings) bool { return s.ForcePull != nil }},
+	{"fetch_skip", func(s Settings) bool { return s.FetchSkip != nil }},
 	{"tags", func(s Settings) bool { return s.Tags != nil }},
 	{"force_tags", func(s Settings) bool { return s.ForceTags != nil }},
 	{"expected_untracked", func(s Settings) bool { return s.ExpectedUntracked != nil }},
@@ -771,6 +779,9 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.ForcePull != nil {
 		base.ForcePull = over.ForcePull
+	}
+	if over.FetchSkip != nil {
+		base.FetchSkip = over.FetchSkip
 	}
 	if over.Tags != nil {
 		base.Tags = over.Tags
