@@ -930,7 +930,7 @@ sweep:
 
 | value | meaning |
 |---|---|
-| *unset* | `REPO_MERGE_SCAN_LIMIT` if set, else 1000 commits |
+| *unset* | `REPO_MERGE_SCAN_LIMIT` if set, else 10000 commits |
 | `N` | decline the patch tiers past N commits of divergence |
 | `0` | never run them: ancestry only, the cheapest possible classification |
 | `-1` | no limit — run them however far apart the refs are |

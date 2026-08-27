@@ -16,7 +16,7 @@ import (
 var ErrTooFarDiverged = errors.New("too far diverged to classify")
 
 const (
-	defaultScanLimit = 1000
+	defaultScanLimit = 10000
 	scanLimitEnv     = "REPO_MERGE_SCAN_LIMIT"
 
 	// ScanUnlimited runs the patch tiers however far apart the two refs are.
@@ -27,10 +27,13 @@ const (
 )
 
 // DefaultScanLimit is the limit for a repo whose config says nothing: the
-// environment's value if it sets one, else 1000 commits. Generous enough that
-// ordinary parked work is always classified, small enough that one abandoned
-// branch on an old repo can't stall a sweep. Config states it per repo (DESIGN
-// §5.3); this is only the floor beneath that.
+// environment's value if it sets one, else 10000 commits. The first number was
+// 1000, picked before the tiers had been timed against anything real; measured,
+// `git cherry` over 2908 commits costs 0.04s and barely moves with depth, so
+// 1000 was declining to classify branches it could have answered for in
+// milliseconds. 10000 keeps a bound against the pathological case without
+// spending the ordinary one. Config states it per repo (DESIGN §5.3); this is
+// only the floor beneath that.
 func DefaultScanLimit() int {
 	if v := os.Getenv(scanLimitEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= ScanUnlimited {

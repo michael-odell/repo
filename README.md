@@ -161,7 +161,7 @@ cannot set.
 | `force_tags` | list of tag-name globs                          | of those, which may be overwritten when upstream moves a tag it already published — the tag counterpart to `force_pull`, and the only setting that follows a moved tag, in every workflow (default `[]`, i.e. never) (§5.2) |
 | `expected_untracked` | list of path globs                      | untracked files that are expected rather than notable — suppresses the report, never the data-safety rules (§3.6) |
 | `expected_uncommitted` | list of path globs                    | as above, for tracked files with local modifications (§3.6) |
-| `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 1000 (§5.3) |
+| `merge_scan_limit` | int                                       | how far apart a branch and its base may be before merge detection skips its expensive patch-comparison tiers: `0` off, `-1` no limit, `N` commits, unset = 10000 (§5.3) |
 | `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
 | `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
 | `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
@@ -298,7 +298,7 @@ decides what it **tells you**.
 | `REPO_OUT`           | where generated shell artifacts are written   | `~/.local/repo`     |
 | `REPO_GIT_TIMEOUT`   | deadline for local git invocations            | `2m`                |
 | `REPO_GIT_NETWORK_TIMEOUT` | deadline for git invocations that reach a remote | `10m`     |
-| `REPO_MERGE_SCAN_LIMIT` | default `merge_scan_limit` for repos config doesn't set one on | `1000` |
+| `REPO_MERGE_SCAN_LIMIT` | default `merge_scan_limit` for repos config doesn't set one on | `10000` |
 
 `REPO_REGISTRY_PATH` and `REPO_ROOTS` are colon-separated path-style lists;
 `REPO_OUT` is a single directory. The timeouts take Go durations (`90s`, `5m`).
