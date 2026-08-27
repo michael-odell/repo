@@ -247,6 +247,25 @@ depends on that remote's data being current. Silencing a remote that fails
 this way, rather than seeing it flagged every run, is exactly what
 `fetch_skip` is for.
 
+**`force_tags` never applies to an unmanaged remote.** `force_push`/`force_pull`
+are naturally safe here: both only ever fire when reconciling a branch against
+the specific ref a workflow's own logic constructs (`origin/<branch>`, a
+vendor pin, …), and nothing compares a local branch against an unmanaged
+remote at all — it is fetched, never reconciled against. `force_tags` has no
+such shape to protect it: a tag glob is matched by *name* alone, with no
+notion of which remote proposed the move, so blessing `release-*` because
+`origin` is trusted to rebuild release tags would, unmodified, extend the same
+blessing to *any* remote the container happens to carry — a `backup`, a
+colleague's fork added for a one-off look, anything `fetch_skip` didn't name.
+Given `force_tags` is already the one setting with no reflog and no
+never-clobber rail (above), that is exactly the wrong place to widen scope by
+accident. So an unmanaged remote fetches tags in the same scope `tags` says
+(new tags still arrive, same bandwidth/ref-count reasoning as every other
+remote), but never with a forced refspec: a tag it tries to move that already
+exists locally is refused and reported, precisely like any other unblessed
+move, never silently applied. The privilege stays with whatever remote a
+person configuring the repo actually named as the workflow's source of truth.
+
 | workflow               | managed remotes                           | negative      | intent |
 |------------------------|-------------------------------------------|---------------|--------|
 | `upstream-push`        | `origin` = definitive                     | —             | push branches straight to origin |

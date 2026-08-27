@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	stdsync "sync" // this package is also called sync
 	"time"
@@ -481,9 +482,12 @@ func (x *run) provisionWorktree() bool {
 	if !x.fetchRemote("origin") {
 		return false
 	}
+	managed := map[string]bool{"origin": true}
 	if secondName != "" {
 		x.fetchSecondRemote(x.container, secondName)
+		managed[secondName] = true
 	}
+	x.fetchExtraRemotes(x.container, managed)
 	x.res.Cloned = true
 	// Before syncWorktree adds a worktree per important branch — adding one for
 	// an assumed branch would materialize it, not just misreport it.
@@ -509,32 +513,51 @@ func (x *run) tagPolicy() gitx.TagPolicy {
 	return gitx.TagPolicy{Fetch: x.r.Tags, Force: x.r.ForceTags}
 }
 
-// fetchRemote fetches one remote and reports whether the run may continue.
+// fetchRemote fetches origin and reports whether the run may continue. Origin
+// is the one remote every workflow's branch reconciliation depends on, so a
+// real failure here stops the whole repo (DESIGN §5.1) — every other fetch in
+// this package (the workflow's second remote, or any other remote the
+// container carries) treats the same failure as Attention and moves on
+// instead, since nothing else here depends on their data being current.
+func (x *run) fetchRemote(remote string) bool {
+	if err := x.fetchAny(x.container, remote, x.tagPolicy()); err != nil {
+		x.fail(err)
+		return false
+	}
+	return true
+}
+
+// fetchAny fetches remote and decomposes a moved-tags-only failure into
+// per-tag findings (recordTagMoves/recordRefusedTags) rather than an ordinary
+// error — the same distinction applies to every remote this package fetches,
+// since force_tags is a per-repo policy, not a per-remote one.
 //
 // A fetch that failed only because upstream moved tags this clone already has
 // is a finding, not a failure. Git refuses to overwrite an existing tag, so it
 // rejects exactly those refs and updates everything else in the same run — the
-// remote-tracking branches this sync is actually about are current. Stopping
-// there abandons the entire repo (no branch reconciled, no worktree updated,
-// nothing pushed) over tags that nothing has asked to follow, and does it on
-// every subsequent sync too, since the rejected tag stays rejected. So the
-// moved tags are reported and the run goes on — the same shape as an unmatched
-// branch rewrite, which stops the branch and not the repo (DESIGN §5.2).
-func (x *run) fetchRemote(remote string) bool {
-	res, err := gitx.Fetch(x.container, remote, x.tagPolicy())
+// remote-tracking branches this sync is actually about are current. Treating
+// it as an ordinary failure would abandon the entire repo (no branch
+// reconciled, no worktree updated, nothing pushed) over tags that nothing has
+// asked to follow, and would do it on every subsequent sync too, since the
+// rejected tag stays rejected. So the moved tags are reported here and nil is
+// returned — the same shape as an unmatched branch rewrite, which stops the
+// branch and not the repo (DESIGN §5.2). The returned error is what a caller
+// should treat as a real failure: nil when the fetch fully succeeded or only
+// shed unblessed tag moves.
+func (x *run) fetchAny(dir, remote string, policy gitx.TagPolicy) error {
+	res, err := gitx.Fetch(dir, remote, policy)
 	x.recordTagMoves(res.Followed)
 	if err == nil {
 		x.add("fetched %s", remote)
-		return true
+		return nil
 	}
 	var moved *gitx.MovedTagsError
 	if !errors.As(err, &moved) {
-		x.fail(err)
-		return false
+		return err
 	}
 	x.add("fetched %s; %s", remote, err)
 	x.recordRefusedTags(moved.Tags)
-	return true
+	return nil
 }
 
 // recordTagMoves reports every tag force_tags let this fetch overwrite, one row
@@ -605,20 +628,24 @@ func (x *run) fetchWorktreeRemotes() bool {
 	if !x.fetchRemote("origin") {
 		return false
 	}
-	if second == "" {
-		return true
-	}
-	if x.opts.DryRun {
+	managed := map[string]bool{"origin": true}
+	switch {
+	case second == "":
+		// nothing more to resolve a name for
+	case x.opts.DryRun:
 		if name := x.dryRunSecondRemoteName(x.container); name != "" {
 			x.fetchSecondRemote(x.container, name)
+			managed[name] = true
 		}
-		return true
+	default:
+		name, changed := x.ensureSecondRemote(x.container, second)
+		if changed {
+			x.add("set %s = %s", name, second)
+		}
+		x.fetchSecondRemote(x.container, name)
+		managed[name] = true
 	}
-	name, changed := x.ensureSecondRemote(x.container, second)
-	if changed {
-		x.add("set %s = %s", name, second)
-	}
-	x.fetchSecondRemote(x.container, name)
+	x.fetchExtraRemotes(x.container, managed)
 	return true
 }
 
@@ -765,12 +792,70 @@ func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
 // stop the sweep — origin-side branch reconciliation is still valid — but it
 // is exactly as Attention-worthy as any other fetch failure once surfaced.
 func (x *run) fetchSecondRemote(dir, name string) {
-	if _, err := gitx.Fetch(dir, name, x.tagPolicy()); err != nil {
+	if err := x.fetchAny(dir, name, x.tagPolicy()); err != nil {
 		x.add("fetch %s failed: %v", name, err)
 		x.attention(fmt.Sprintf("fetch %s failed: %v", name, err))
+	}
+}
+
+// fetchExtraRemotes fetches every remote dir carries beyond the ones this sync
+// already fetched by name (managed) — origin, and the workflow's second remote
+// when one is configured (DESIGN §3.6). Sync's job includes keeping every
+// locally-known copy of a repo current, not only the ones a workflow assigns a
+// meaning to: a `backup` remote or a colleague's fork gets no branch policy,
+// no push, no drift report — nothing here knows what its branches mean — but
+// its remote-tracking refs still get refreshed, same as any other.
+//
+// fetch_skip opts specific remotes back out (by glob against the remote
+// name); it is never consulted for a managed name, since those are required
+// for policy regardless of what fetch_skip says. A fetch failure here is
+// Attention, not fail() — nothing else in this sync depends on an unmanaged
+// remote's data, so one going stale or erroring shouldn't cost the repo its
+// own outcome the way a failed origin fetch does.
+//
+// Tags fetch in the same scope as `tags` (still whatever bandwidth/ref-count
+// decision the repo made — tags exist for whoever uses the clone by hand,
+// same reasoning as everywhere else, DESIGN §3.6), but never with force_tags:
+// see extraTagPolicy. A tag move an extra remote didn't get blessed for is
+// refused and reported, exactly like any other unblessed move, never applied.
+//
+// Best-effort: a container whose remotes can't even be listed reports nothing
+// extra rather than failing the sync over a `git remote` invocation that
+// isn't on the critical path.
+func (x *run) fetchExtraRemotes(dir string, managed map[string]bool) {
+	remotes, err := gitx.Remotes(dir)
+	if err != nil {
 		return
 	}
-	x.add("fetched %s", name)
+	var names []string
+	for name := range remotes {
+		if managed[name] || matchesAny(x.r.FetchSkip, name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names) // deterministic trace order
+	policy := x.extraTagPolicy()
+	for _, name := range names {
+		if err := x.fetchAny(dir, name, policy); err != nil {
+			x.add("fetch %s failed: %v", name, err)
+			x.attention(fmt.Sprintf("fetch %s failed: %v", name, err))
+		}
+	}
+}
+
+// extraTagPolicy is tagPolicy for a remote outside the workflow's contract:
+// same fetch scope, but force_tags never applies (DESIGN §3.6). force_tags
+// blesses a tag move by name alone, with no notion of which remote proposed
+// it — extending that blessing to every remote sync now fetches by default
+// would let a `backup`, a colleague's fork, or anything else nobody has
+// actually vetted silently overwrite a tag whose reflog-free move can never be
+// undone. The privilege stays with the remotes a person configuring the repo
+// actually named as its source of truth.
+func (x *run) extraTagPolicy() gitx.TagPolicy {
+	p := x.tagPolicy()
+	p.Force = nil
+	return p
 }
 
 // writeGitFile writes the container's `.git` file pointing at the bare repo, so
@@ -848,6 +933,7 @@ func (x *run) provision() bool {
 	if !x.fetchRemote("origin") {
 		return false
 	}
+	managed := map[string]bool{"origin": true}
 	if x.r.Fork != nil {
 		name := x.remoteName()
 		if x.opts.DryRun {
@@ -855,8 +941,10 @@ func (x *run) provision() bool {
 		}
 		if name != "" {
 			x.fetchSecondRemote(x.container, name)
+			managed[name] = true
 		}
 	}
+	x.fetchExtraRemotes(x.container, managed)
 
 	return true
 }
