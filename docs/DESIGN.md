@@ -1263,8 +1263,15 @@ inheritable setting, defaulting to `REPO_CORROBORATE_BUDGET` if set, else **2s**
 during a sweep, and **unlimited** under an explicit `repo prune --delete`. The
 sweep stays fast; the deliberate command pays whatever it takes. Exceeding the
 budget is a route declining — *could not corroborate* — which is what every
-other failure here already means, so it fails closed and adds no new rule. `0`
-switches it off for a repo, returning that repo to an uncorroborated label.
+other failure here already means, so it fails closed and adds no new rule.
+
+`0` switches the check off for a repo, returning it to an uncorroborated label —
+and it switches off the **sweep's** check only, which is the one whose cost
+anyone was worried about. An explicit `repo prune` still asks, because a command
+that reported a branch its own delete gate would then refuse is the disagreement
+this whole section exists to end. Zero is therefore the one number that has to
+mean two things — "off" to the setting, "no deadline" to the checker beneath it
+— and telling those apart is the only place that distinction is drawn.
 
 **A cache, because a sweep repeats.** Corroboration is a pure function of the
 branch's sha and the base's sha, both content-addressed, so an answer can never

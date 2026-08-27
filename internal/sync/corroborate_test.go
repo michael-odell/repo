@@ -39,12 +39,7 @@ func TestClassifyWithholdsAnUncorroboratedBranch(t *testing.T) {
 	verdicts, err := Classify(clone, mainRepo(), cor)
 	must(t, err)
 
-	var v Verdict
-	for _, got := range verdicts {
-		if got.Name == "feature" {
-			v = got
-		}
-	}
+	v := find(verdicts, "feature")
 	if !v.State.Merged() {
 		t.Fatalf("setup is wrong: the tiers should still call feature merged, got %v", v.State)
 	}
@@ -151,6 +146,48 @@ func TestABudgetThatRanOutIsNotCached(t *testing.T) {
 	if !real.OK {
 		t.Errorf("the branch stayed stranded after the budget lifted: %v", real.Tried)
 	}
+}
+
+// TestABudgetOfZeroIsOffForTheSweepOnly: zero is the one number that had to
+// mean two things — "off" to config, "no deadline" to the checker underneath —
+// and the sweep is what it switches off. A command someone typed still asks,
+// because `repo prune` reporting a branch its own delete gate would refuse is
+// the disagreement all of this exists to end.
+func TestABudgetOfZeroIsOffForTheSweepOnly(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	_, clone, _ := setupUpstreamRepo(t, "")
+	squashThenRevert(t, clone)
+
+	off := time.Duration(0)
+	r := model.Repo{Branches: []string{"main"}, CorroborateBudget: &off}
+
+	// The sweep's corroborator honours the setting, so the label goes back to
+	// being the tiers' word alone.
+	sweep := OpenCorroborations()
+	defer func() { _ = sweep.Close() }()
+	vs, err := Classify(clone, r, sweep)
+	must(t, err)
+	if v := find(vs, "feature"); !v.Prunable || len(v.Corroboration.Tried) != 0 {
+		t.Errorf("a repo with the check switched off still corroborated: %+v", v.Corroboration)
+	}
+
+	// A deliberate command does not, so it still catches the reverted branch.
+	deliberate := OpenCorroborations().Unbounded()
+	defer func() { _ = deliberate.Close() }()
+	vs, err = Classify(clone, r, deliberate)
+	must(t, err)
+	if v := find(vs, "feature"); v.Prunable {
+		t.Error("prune's own classification skipped corroboration because of a sweep setting")
+	}
+}
+
+func find(vs []Verdict, name string) Verdict {
+	for _, v := range vs {
+		if v.Name == name {
+			return v
+		}
+	}
+	return Verdict{}
 }
 
 // TestCorroborateBudgetOf: unset means the ambient default, and zero means off.

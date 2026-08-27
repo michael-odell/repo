@@ -22,6 +22,11 @@ import (
 // view, and the wrong one for anything a person will act on.
 type Corroborator interface {
 	Corroborate(dir, branch, base, branchSHA, baseSHA string, budget time.Duration) gitx.Corroboration
+	// HonoursBudget reports whether a repo's corroborate_budget applies. It
+	// bounds the *sweep*, so a corroborator that answers false — one behind a
+	// command someone typed — corroborates even a repo that switched the
+	// sweep's check off, and its label and its actions stay in agreement.
+	HonoursBudget() bool
 }
 
 // Corroborations is a budgeted, cached Corroborator, safe for the sweep's
@@ -80,6 +85,9 @@ func (c *Corroborations) Unbounded() *Corroborations {
 	c.unbounded = true
 	return c
 }
+
+// HonoursBudget is false once Unbounded has been called.
+func (c *Corroborations) HonoursBudget() bool { return !c.unbounded }
 
 // Corroborate answers from the cache when it can, and records what it learns.
 func (c *Corroborations) Corroborate(dir, branch, base, branchSHA, baseSHA string, budget time.Duration) (got gitx.Corroboration) {
@@ -176,6 +184,17 @@ func corroborated(vs []Verdict) (n int, spent time.Duration) {
 		spent += v.Corroboration.Took
 	}
 	return n, spent
+}
+
+// wantsCorroboration reports whether this repo's label should be corroborated.
+//
+// A budget of zero is "off", not "unlimited" — the one place those two readings
+// of the same number had to be told apart. It switches off the *sweep's* check,
+// which is the thing whose cost anyone was worried about, so a corroborator that
+// does not honour budgets asks anyway: `repo prune` reporting a branch its own
+// delete gate would then refuse is the disagreement this all exists to end.
+func wantsCorroboration(r model.Repo, cor Corroborator) bool {
+	return corroborateBudgetOf(r) > 0 || !cor.HonoursBudget()
 }
 
 // corroborateBudgetOf resolves how long corroboration may take for this repo:

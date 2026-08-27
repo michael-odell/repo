@@ -165,7 +165,7 @@ func Classify(container string, r model.Repo, cor Corroborator) ([]Verdict, erro
 			// whatever corroboration would say, so asking earlier would buy
 			// nothing; and it applies only where removal needs -D, since git's
 			// own -d already agrees at the ancestry tier (DESIGN §5.3).
-			if cor != nil && NeedsForceDelete(v) {
+			if cor != nil && NeedsForceDelete(v) && wantsCorroboration(r, cor) {
 				v.Corroboration = cor.Corroborate(
 					container, b, base, ref.SHA, baseSHA, corroborateBudgetOf(r))
 				if !v.Corroboration.OK {

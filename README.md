@@ -165,7 +165,7 @@ cannot set.
 | `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
 | `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
 | `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
-| `corroborate_budget` | a duration (`2s`, `500ms`, `0`)           | how long the `-D` cross-check may take per branch during a sweep before it gives up and reports the branch un-corroborated; `0` switches it off, unset = 2s. An explicit `repo prune` ignores it and runs to completion (§5.3) |
+| `corroborate_budget` | a duration (`2s`, `500ms`, `0`)           | how long the `-D` cross-check may take per branch **during a sweep** before it gives up and reports the branch un-corroborated; `0` switches the sweep's check off, unset = 2s. An explicit `repo prune` ignores this setting entirely and runs to completion, so its label and its deletions never disagree (§5.3) |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
 | `pin`        | branch \| tag \| `latest-tag`                   | vendor only: what to track |
