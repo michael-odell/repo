@@ -1222,6 +1222,77 @@ happened is that corroboration was not obtained. The line is *could not
 corroborate*, followed by what each route reported — so the distinction the
 design insists on is the one the output makes.
 
+**Corroboration runs in classification, so "prunable" means it.** Running it only
+immediately before a `-D` meant the label and the act disagreed: the sweep's
+footer and prune's report both named branches the delete path would then refuse,
+and nothing the user could run would reconcile them. A label that promises
+something the tool will not do is worse than a slower sweep, so corroboration
+becomes part of deciding whether a branch is prunable at all — a rewritten-tier
+branch that cannot be corroborated is reported blocked, with the same *could not
+corroborate* wording it gets at the delete gate.
+
+It sits **last in the blocker ladder**, which is most of what makes it
+affordable. Ancestry-tier branches never need it — git's own `-d` agrees there,
+so a second opinion would be a third — and a branch already held by a worktree,
+`prune_keep`, or `prune_min_age` stays regardless of what corroboration would
+say. So it runs only for a branch that would otherwise be reported prunable and
+whose removal would need `-D`, which on the author's machine is currently none
+of them.
+
+**A budget, not a per-repo switch.** Measured across real repos, corroboration
+costs 20–90ms for an ordinary branch and can reach ~15s on one whose diff
+carries megabytes of binary:
+
+| branch shape | diff | corroboration |
+|---|---|---|
+| no changed files vs. the merge base | 0 KB | ~30 ms |
+| ordinary source branch | 135 KB | ~70 ms |
+| large text diff, 2579 files, no binaries | 1.2 MB | ~0.4 s |
+| binary-heavy vault branch, 441 binaries | 40 MB | ~12 s |
+
+Cost tracks **diff bytes, dominated by binary payload** — not repo size and not
+history depth. A 5314-file, 1.9GB repo answers a zero-diff branch in 11ms, the
+same as a tiny one; `--binary` diffs base85-encode blob contents, so a megabyte
+of binary is a megabyte of text to generate and parse. The expensive repos are
+therefore identifiable by shape rather than by size, which is exactly what makes
+a config toggle the wrong instrument: nobody should have to discover which of
+their repos are the ones.
+
+So the check gets a deadline instead — `corroborate_budget`, an ordinary
+inheritable setting, defaulting to `REPO_CORROBORATE_BUDGET` if set, else **2s**
+during a sweep, and **unlimited** under an explicit `repo prune --delete`. The
+sweep stays fast; the deliberate command pays whatever it takes. Exceeding the
+budget is a route declining — *could not corroborate* — which is what every
+other failure here already means, so it fails closed and adds no new rule. `0`
+switches it off for a repo, returning that repo to an uncorroborated label.
+
+**A cache, because a sweep repeats.** Corroboration is a pure function of the
+branch's sha and the base's sha, both content-addressed, so an answer can never
+go stale: a ref that moves is simply a different key, not an invalidation. A
+cold outlier pays once rather than every sweep.
+
+It lives under `$XDG_CACHE_HOME/repo`, not the state directory the journal uses.
+The distinction is the one the `xdg` package already draws: state is for records
+whose whole value is that they survive, and a rederivable answer is not one.
+Deleting the cache costs a recomputation and nothing else.
+
+Only a **completed** outcome is cached, in either direction. "Merging the branch
+into base would change base" is content-determined and permanent, so it is
+cached exactly as a success is. A budget exceeded is not an outcome — it is a
+statement about this machine under this load — so it is not written, and the
+branch is re-checked next sweep at the same bounded cost.
+
+**Its cost is visible without new instrumentation.** `sync --verbose` already
+stamps each repo with its elapsed time and prints a per-action trace whose stamp
+is the gap since the previous line — the duration of the step it names, not an
+offset (§5.6). Corroboration records a trace line, so it shows up as its own
+cost next to the work it did. Prune keeps its own footer besides.
+
+**It runs under every prune mode, including `auto`.** Under `auto` the deletion
+bar is ancestry-only, so corroboration changes nothing about what `auto` removes.
+What it corrects is the *label*, which `auto` reports the same as every other
+mode — and the label is the thing that was lying.
+
 **The sweep names what it found.** Under `report` and `auto`, `sync`'s footer
 carries a line — `12 branches prunable across 4 repos — repo prune` — because
 until now prune candidates were only visible under `show_branches = "all"`,
