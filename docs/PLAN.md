@@ -149,6 +149,20 @@ written, no pin checked out, no hook run. `vendor` + `latest-tag`'s `--dry-run`
 preview stays exactly as stale as before, a named exception, since resolving
 "the latest tag" needs the tag fetch this deliberately withholds.
 
+**Changed, 2026-08-26:** sync fetched only origin and the workflow's second
+remote — a remote added by hand (`backup`, a colleague's fork) was never
+touched, contradicting DESIGN §5.1's own "fetch (all remotes...)" line. Now
+every remote the container carries gets fetched (`fetchExtraRemotes`), with
+`fetch_skip` (new, cascading glob list) letting specific ones opt out.
+`force_tags` deliberately does not extend to them — see DESIGN §3.6 for why
+a name-only blessing can't safely follow a fetch scope this much wider
+without also widening who can move a tag no one vetted. Turned up a real,
+pre-existing gap in the same code while refactoring the shared fetch path:
+`fetchSecondRemote` (upstream/untrusted) had never gotten `fetchRemote`
+(origin)'s moved-tag decomposition, so an unblessed tag move from either of
+those surfaced as a bare "fetch failed" instead of the proper per-tag
+finding. Fixed as part of the same refactor (`fetchAny`).
+
 Still open:
 - `--fix`'s other two DESIGN §4.1 reconciliations: general remote-contract
   repair (a wrong URL, beyond the untrusted/upstream rename) and location —
