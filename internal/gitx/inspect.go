@@ -224,3 +224,44 @@ func splitLines(s string) []string {
 	}
 	return strings.Split(s, "\n")
 }
+
+// WorktreeIndex maps each checked-out branch to the tree holding it, and says
+// which of them is the container's own. One `worktree list` for the whole repo:
+// asking per branch (as WorktreeFor does) is one process each, which on a repo
+// with a hundred branches is a hundred forks to answer a question that has one
+// answer.
+//
+// primary is the tree at the container itself — a single clone's working tree.
+// It cannot be removed to free its branch (a repo with no working tree is not a
+// state anything here may create), while a linked worktree can.
+func WorktreeIndex(container string) (byBranch map[string]Worktree, primary string) {
+	wts, err := Worktrees(container)
+	if err != nil {
+		return nil, ""
+	}
+	byBranch = make(map[string]Worktree, len(wts))
+	self := resolvePath(container)
+	for _, w := range wts {
+		if w.Bare {
+			continue
+		}
+		if resolvePath(w.Path) == self {
+			primary = w.Path
+		}
+		if w.Branch != "" {
+			byBranch[w.Branch] = w
+		}
+	}
+	return byBranch, primary
+}
+
+// resolvePath is filepath.EvalSymlinks with the original as its fallback:
+// `worktree list` may report symlink-resolved paths where the container was
+// named through a link, and a comparison that missed that would call a single
+// clone's own tree a linked one — and offer to remove it.
+func resolvePath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}

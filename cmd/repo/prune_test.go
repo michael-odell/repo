@@ -408,3 +408,54 @@ func TestARevertedSquashMergeIsStillPrunable(t *testing.T) {
 		t.Error("the squashed work is not readable from main after the branch went")
 	}
 }
+
+// TestPruningRemovesTheWorktreeToo: the tree goes first because git refuses to
+// delete a branch one still holds — so the other order leaves both behind, and
+// under worktrees = true that meant prune could never remove anything.
+func TestPruningRemovesTheWorktreeToo(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+	tree := filepath.Join(t.TempDir(), "landed")
+	git(t, dir, "worktree", "add", "-q", tree, "landed")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{Delete: true, Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	body := out.String()
+
+	if hasBranch(t, dir, "landed") {
+		t.Fatalf("the branch survived because its worktree did:\n%s", body)
+	}
+	if _, err := os.Stat(tree); !os.IsNotExist(err) {
+		t.Errorf("the worktree was left behind: %v", err)
+	}
+	if !strings.Contains(body, "removed worktree") {
+		t.Errorf("the run did not say a directory went:\n%s", body)
+	}
+}
+
+// TestDryRunNamesTheWorktreeItWouldRemove: a deletion that quietly takes a
+// directory with it is a bigger act than the line describing it, so the preview
+// has to say so — this is the one place someone checks before consenting.
+func TestDryRunNamesTheWorktreeItWouldRemove(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+	tree := filepath.Join(t.TempDir(), "landed")
+	git(t, dir, "worktree", "add", "-q", tree, "landed")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{DryRun: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "and its worktree") {
+		t.Errorf("the preview did not mention the worktree:\n%s", out.String())
+	}
+	if _, err := os.Stat(tree); err != nil {
+		t.Errorf("a dry run removed the worktree: %v", err)
+	}
+}

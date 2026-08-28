@@ -193,9 +193,21 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 			continue
 		}
 		if opts.DryRun {
-			fmt.Fprintf(w, "    ✂ would delete %s (%s)\n", v.Name, shortSHA(sha))
+			fmt.Fprintf(w, "    ✂ would delete %s (%s)%s\n",
+				v.Name, shortSHA(sha), worktreeNote(v))
 			n++
 			continue
+		}
+		// The tree goes first: git refuses to delete a branch a worktree still
+		// holds, so the other order leaves both. A removal that fails leaves
+		// both too, which is the same safe end state.
+		if v.Worktree != "" {
+			if err := gitx.WorktreeRemove(container, v.Worktree); err != nil {
+				fmt.Fprintf(w, "    ✗ %s: could not remove its worktree — not deleted (%v)\n",
+					v.Name, err)
+				continue
+			}
+			fmt.Fprintf(w, "    ✂ removed worktree %s%s\n", shorten(v.Worktree), ignoredNote(v))
 		}
 		entry := journal.Entry{
 			Repo:    repoName(r),
@@ -224,6 +236,27 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 		n++
 	}
 	return n
+}
+
+// worktreeNote says that removing this branch takes a working tree with it,
+// for the dry run's preview and the walk-through's question. A deletion that
+// silently removed a directory would be a bigger act than the line describing
+// it (DESIGN §5.3).
+func worktreeNote(v syncpkg.Verdict) string {
+	if v.Worktree == "" {
+		return ""
+	}
+	return fmt.Sprintf(" and its worktree %s%s", shorten(v.Worktree), ignoredNote(v))
+}
+
+// ignoredNote names what removing a worktree discards. `git worktree remove`
+// refuses on uncommitted or untracked work but takes .gitignore'd residue
+// without comment, so counting it is the only way anyone is told (§4.1).
+func ignoredNote(v syncpkg.Verdict) string {
+	if v.WorktreeIgnored == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (discarding %d ignored file(s))", v.WorktreeIgnored)
 }
 
 // approve decides which of a repo's prunable branches actually go.

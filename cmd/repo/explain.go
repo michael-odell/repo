@@ -44,6 +44,13 @@ func explainVerdict(w io.Writer, v syncpkg.Verdict, indent string) {
 	// and someone endorsing a deletion should be told which of the two they are
 	// endorsing (DESIGN §5.3).
 	if v.Prunable {
+		// The worktree first, because it is the larger act and the one someone
+		// endorsing this has to know about: a directory goes, and with it any
+		// .gitignore'd residue git removes without comment (DESIGN §5.3).
+		if v.Worktree != "" {
+			fmt.Fprintf(w, "%s    worktree    %s is removed first%s\n",
+				indent, shorten(v.Worktree), ignoredNote(v))
+		}
 		if syncpkg.NeedsForceDelete(v) {
 			fmt.Fprintf(w, "%s    removal     git branch -D (git's own -d check cannot see this merge)\n", indent)
 		} else {

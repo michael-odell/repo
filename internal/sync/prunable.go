@@ -10,9 +10,9 @@ import (
 )
 
 // Verdict is one task branch's standing against its repo's important
-// branches: whether its work has landed on any of them, and whether the branch could therefore be
-// removed (DESIGN §5.3). Both `sync`'s observations and `repo prune` read the
-// same verdict, so the line you see during a sweep is the decision prune would
+// branches: whether its work has landed on any of them, and whether the branch
+// could therefore be removed (DESIGN §5.3). Both `sync`'s observations and
+// `repo prune` read the same verdict, so the line you see during a sweep is the decision prune would
 // act on — not a second, similar-looking calculation that might disagree.
 type Verdict struct {
 	Name string
@@ -28,11 +28,21 @@ type Verdict struct {
 	// caller, because "merged" in a repo with more than one important branch is
 	// unreadable without saying into what, and a caller that had to supply it
 	// could supply a different one than the tiers used.
-	Base     string
-	Ahead    int    // commits Base lacks (0 once merged)
-	Worktree string // the tree holding this branch, "" when none does
-	Prunable bool
-	Blocker  string // why not, when !Prunable
+	Base  string
+	Ahead int // commits Base lacks (0 once merged)
+	// Worktree is the linked tree holding this branch, "" when none does or
+	// when the one that does is the container's own. Removing it is part of
+	// removing the branch (DESIGN §5.3) — under worktrees = true every task
+	// branch lives in one, so a tree that merely blocked made prune a no-op
+	// there, permanently rather than until someone checked something else out.
+	Worktree string
+	// WorktreeIgnored counts the .gitignore'd files that removing it discards.
+	// Non-zero is not a blocker but a consent question: §4.1's rule is that
+	// ignored-only residue goes when someone says so, and `git worktree remove`
+	// discards it without comment, so the asking has to happen here.
+	WorktreeIgnored int
+	Prunable        bool
+	Blocker         string // why not, when !Prunable
 	// Evidence is how the tiers reached this verdict, recorded by the pass that
 	// decided rather than reconstructed afterwards (DESIGN §5.3). Carried on
 	// every verdict because collecting it costs nothing extra — the tiers ran
@@ -68,10 +78,10 @@ func (v Verdict) Summary() string {
 // excluded because they are the *reference*: a branch cannot have landed
 // relative to itself, and they are not candidates for removal in any case.
 //
-// A branch is prunable when its work has landed by any tier and nothing else
-// stands in the way. Being checked out is a blocker rather than a merge
-// question: git will not delete a branch some worktree is on, and neither
-// should anything here.
+// A branch is prunable when its work has landed by any tier — against any
+// important branch — and nothing else stands in the way. A worktree holding it
+// is not one of those things: removing the tree is part of removing the branch,
+// unless it holds work to lose or is the container's own (DESIGN §5.3).
 //
 // The tiers are the whole merge question — nothing checks their work. A
 // content-presence cross-check used to gate the rewritten tiers on the change
@@ -106,12 +116,35 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 	if err != nil {
 		return nil, err
 	}
+	trees, primaryTree := gitx.WorktreeIndex(container)
 
 	var out []Verdict
 	for _, ref := range branches {
 		b := ref.Name
 		if important[b] {
 			continue
+		}
+		wt, held := trees[b]
+		linked, ignored, treeBlocker := "", 0, ""
+		if held {
+			switch {
+			case wt.Path == primaryTree:
+				// The container's own tree. Nothing may remove it, so this
+				// branch is blocked until something else is checked out —
+				// which is the transient case, unlike a linked tree.
+				treeBlocker = "checked out"
+			default:
+				linked = wt.Path
+				dirty, _ := gitx.IsDirty(wt.Path)
+				untracked, _ := gitx.UntrackedFiles(wt.Path)
+				if dirty || len(untracked) > 0 {
+					treeBlocker = "worktree holds uncommitted work"
+					linked = ""
+					break
+				}
+				files, _ := gitx.IgnoredFiles(wt.Path)
+				ignored = len(files)
+			}
 		}
 		state, base, ev, err := classifyAgainst(container, b, bases, scanLimitOf(r))
 		if err != nil {
@@ -136,21 +169,22 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 				Base:     base,
 				Evidence: ev,
 				Unknown:  true,
-				Worktree: gitx.WorktreeFor(container, b),
+				Worktree: linked,
 				Blocker:  why,
 			})
 			continue
 		}
 		ahead, _ := aheadBehind(container, b, base)
 		v := Verdict{
-			Name:     b,
-			SHA:      ref.SHA,
-			Updated:  ref.Updated,
-			Evidence: ev,
-			State:    state,
-			Base:     base,
-			Ahead:    ahead,
-			Worktree: gitx.WorktreeFor(container, b),
+			Name:            b,
+			SHA:             ref.SHA,
+			Updated:         ref.Updated,
+			Evidence:        ev,
+			State:           state,
+			Base:            base,
+			Ahead:           ahead,
+			Worktree:        linked,
+			WorktreeIgnored: ignored,
 		}
 		// Ordered by who is refusing. Git's own answers come first — the work
 		// isn't landed, or a tree is standing on the branch — and only then the
@@ -161,8 +195,8 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		switch {
 		case !state.Merged():
 			v.Blocker = "unmerged"
-		case v.Worktree != "":
-			v.Blocker = "checked out"
+		case treeBlocker != "":
+			v.Blocker = treeBlocker
 		case matchesAny(r.PruneKeep, b):
 			v.Blocker = "kept (prune_keep)"
 		case tooYoung(v, r.PruneMinAge):

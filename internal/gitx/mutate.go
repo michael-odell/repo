@@ -407,3 +407,15 @@ func TagAtHead(dir string) string {
 	}
 	return out
 }
+
+// WorktreeRemove removes a linked worktree. Deliberately without `--force`, so
+// git's own "contains modified or untracked files" check has to agree — the
+// same two-judgements shape `-d` gives branch deletion (DESIGN §5.3).
+//
+// Git discards .gitignore'd residue without comment, which is why the caller
+// asks about it first: §4.1's rule is that ignored-only residue goes on consent,
+// and git has no way to express "only if they said yes".
+func WorktreeRemove(container, path string) error {
+	_, err := run(container, "worktree", "remove", path)
+	return err
+}

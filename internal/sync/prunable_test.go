@@ -184,9 +184,11 @@ func TestClassifyKeepsBranchesItCannotAnswerFor(t *testing.T) {
 	}
 }
 
-// TestClassifyRefusesCheckedOutBranch: being checked out blocks removal
-// regardless of merge state — git will not delete a branch a worktree is on,
-// and the verdict must not claim otherwise.
+// TestClassifyRefusesCheckedOutBranch: the container's *own* working tree is
+// the one worktree prune cannot remove — a repo with no working tree is not a
+// state anything here may create — so a branch checked out there is blocked
+// however landed it is. Verdict.Worktree stays empty, because it names the tree
+// that would be *removed*, and this one never is (DESIGN §5.3).
 func TestClassifyRefusesCheckedOutBranch(t *testing.T) {
 	_, clone, _ := setupUpstreamRepo(t, "")
 	git(t, clone, "checkout", "-q", "-b", "held") // merged (empty) and checked out
@@ -203,8 +205,8 @@ func TestClassifyRefusesCheckedOutBranch(t *testing.T) {
 		if v.Blocker != "checked out" {
 			t.Errorf("held blocker = %q, want %q", v.Blocker, "checked out")
 		}
-		if v.Worktree == "" {
-			t.Errorf("held worktree not recorded")
+		if v.Worktree != "" {
+			t.Errorf("the container's own tree was offered for removal: %q", v.Worktree)
 		}
 		return
 	}
@@ -473,4 +475,102 @@ func TestAnImportantBranchThatIsNotHereIsSkipped(t *testing.T) {
 		}
 	}
 	t.Fatalf("a missing important branch cost the others their verdict: %+v", verdicts)
+}
+
+// TestALinkedWorktreeIsRemovedWithItsBranch: under worktrees = true every task
+// branch lives in a worktree, so treating one as a blocker made prune a no-op
+// for those repos — permanently, since nothing would ever check the branch out
+// again. The tree is part of what removing the branch removes (DESIGN §5.3).
+func TestALinkedWorktreeIsRemovedWithItsBranch(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "l", "landed\n", "landed work")
+	merge(t, clone, "landed", false)
+	tree := filepath.Join(t.TempDir(), "landed")
+	git(t, clone, "worktree", "add", "-q", tree, "landed")
+
+	verdicts, err := Classify(clone, mainRepo())
+	must(t, err)
+	for _, v := range verdicts {
+		if v.Name != "landed" {
+			continue
+		}
+		if !v.Prunable {
+			t.Fatalf("a landed branch in a clean worktree was blocked: %s", v.Summary())
+		}
+		if v.Worktree == "" {
+			t.Error("the verdict does not carry the worktree that has to go with it")
+		}
+		return
+	}
+	t.Fatal("landed was not classified")
+}
+
+// TestAWorktreeHoldingWorkStillBlocks is §4.1's rule, unchanged: uncommitted or
+// untracked work is not residue, and no landed-ness makes it discardable.
+func TestAWorktreeHoldingWorkStillBlocks(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "l", "landed\n", "landed work")
+	merge(t, clone, "landed", false)
+	tree := filepath.Join(t.TempDir(), "landed")
+	git(t, clone, "worktree", "add", "-q", tree, "landed")
+	if err := os.WriteFile(filepath.Join(tree, "scratch"), []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	verdicts, err := Classify(clone, mainRepo())
+	must(t, err)
+	for _, v := range verdicts {
+		if v.Name != "landed" {
+			continue
+		}
+		if v.Prunable {
+			t.Error("a worktree holding untracked work did not block its branch")
+		}
+		if v.Blocker != "worktree holds uncommitted work" {
+			t.Errorf("blocker = %q, want it to name the work at risk", v.Blocker)
+		}
+		if v.Worktree != "" {
+			t.Error("a blocked worktree was still offered for removal")
+		}
+		return
+	}
+	t.Fatal("landed was not classified")
+}
+
+// TestIgnoredResidueIsCountedNotBlocked: §4.1 discards ignored-only residue on
+// consent, and `git worktree remove` takes it without comment — so the count is
+// how anyone finds out, and it belongs on the verdict where the question that
+// asks about it can reach it.
+func TestIgnoredResidueIsCountedNotBlocked(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	writeCommit(t, clone, ".gitignore", "build/\n", "ignore build output")
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "l", "landed\n", "landed work")
+	merge(t, clone, "landed", false)
+	tree := filepath.Join(t.TempDir(), "landed")
+	git(t, clone, "worktree", "add", "-q", tree, "landed")
+	if err := os.MkdirAll(filepath.Join(tree, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "build", "out"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	verdicts, err := Classify(clone, mainRepo())
+	must(t, err)
+	for _, v := range verdicts {
+		if v.Name != "landed" {
+			continue
+		}
+		if !v.Prunable {
+			t.Errorf("ignored residue blocked a landed branch: %s", v.Summary())
+		}
+		if v.WorktreeIgnored != 1 {
+			t.Errorf("WorktreeIgnored = %d, want 1 so the question can name it", v.WorktreeIgnored)
+		}
+		return
+	}
+	t.Fatal("landed was not classified")
 }
