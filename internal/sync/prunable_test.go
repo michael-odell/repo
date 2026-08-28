@@ -174,8 +174,8 @@ func TestClassifyKeepsBranchesItCannotAnswerFor(t *testing.T) {
 	if !got.Unknown || got.Prunable {
 		t.Errorf("broken = %+v, want Unknown and not prunable", *got)
 	}
-	if !strings.Contains(got.Summary("main"), "can't classify") {
-		t.Errorf("summary = %q, want it to say the branch couldn't be classified", got.Summary("main"))
+	if !strings.Contains(got.Summary(), "can't classify") {
+		t.Errorf("summary = %q, want it to say the branch couldn't be classified", got.Summary())
 	}
 	// The healthy branches around it must still be classified normally — one bad
 	// branch is not a reason to stop answering for the rest.
@@ -380,4 +380,97 @@ func TestPruneKeepIsRespectedBySweepCount(t *testing.T) {
 	if res := run(); res.Prunable != 0 {
 		t.Errorf("Prunable = %d with the branch named in prune_keep, want 0", res.Prunable)
 	}
+}
+
+// TestLandedOnASecondaryImportantBranchIsLanded: a repo may carry several
+// important branches, and work merged to any of them has landed. Measuring
+// against branches[0] alone reported a released branch as outstanding work
+// forever — the same false negative the tiers exist to eliminate, one level up.
+//
+// The verdict also has to name the branch that answered: "merged" in a repo
+// with more than one important branch is unreadable without saying into what.
+func TestLandedOnASecondaryImportantBranchIsLanded(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	// A release line that main knows nothing about.
+	git(t, clone, "checkout", "-q", "-b", "release")
+	writeCommit(t, clone, "r", "release\n", "release line")
+	// shipped lands on release and nowhere else.
+	git(t, clone, "checkout", "-q", "-b", "shipped")
+	writeCommit(t, clone, "s", "shipped\n", "shipped work")
+	git(t, clone, "checkout", "-q", "release")
+	git(t, clone, "merge", "-q", "--no-ff", "-m", "merge shipped", "shipped")
+	git(t, clone, "checkout", "-q", "main")
+
+	r := model.Repo{Branches: []string{"main", "release"}}
+	verdicts, err := Classify(clone, r)
+	must(t, err)
+
+	got := map[string]Verdict{}
+	for _, v := range verdicts {
+		got[v.Name] = v
+	}
+	v, ok := got["shipped"]
+	if !ok {
+		t.Fatalf("shipped was not classified at all: %+v", verdicts)
+	}
+	if !v.Prunable {
+		t.Errorf("a branch merged to release was not prunable: %s", v.Summary())
+	}
+	if v.Base != "release" {
+		t.Errorf("verdict names base %q, want the branch that actually confirmed", v.Base)
+	}
+	// release itself is a reference, never a candidate.
+	if _, listed := got["release"]; listed {
+		t.Error("an important branch was classified as a task branch")
+	}
+}
+
+// TestUnmergedIsReportedAgainstThePrimary: with nothing confirming, "N ahead"
+// has to count against one branch, and one number cannot mean several. The
+// primary is what it means — including in the evidence header, which each
+// later base would otherwise have overwritten.
+func TestUnmergedIsReportedAgainstThePrimary(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	git(t, clone, "checkout", "-q", "-b", "release")
+	writeCommit(t, clone, "r", "release\n", "release line")
+	git(t, clone, "checkout", "-q", "main")
+	git(t, clone, "checkout", "-q", "-b", "parked")
+	writeCommit(t, clone, "p", "parked\n", "parked work")
+	git(t, clone, "checkout", "-q", "main")
+
+	verdicts, err := Classify(clone, model.Repo{Branches: []string{"main", "release"}})
+	must(t, err)
+
+	for _, v := range verdicts {
+		if v.Name != "parked" {
+			continue
+		}
+		if v.Prunable || v.Base != "main" {
+			t.Errorf("parked = %+v, want unmerged against main", v)
+		}
+		if v.Ahead != 1 || v.Evidence.Ahead != 1 {
+			t.Errorf("ahead = %d (evidence %d), want 1 against main", v.Ahead, v.Evidence.Ahead)
+		}
+		return
+	}
+	t.Fatal("parked was not classified")
+}
+
+// TestAnImportantBranchThatIsNotHereIsSkipped: `branches` is a statement about
+// the repo, not a promise every entry is cloned. A base that doesn't resolve is
+// passed over; only having none of them is an error worth stopping for.
+func TestAnImportantBranchThatIsNotHereIsSkipped(t *testing.T) {
+	_, clone, _ := setupUpstreamRepo(t, `show_branches = "all"`)
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	writeCommit(t, clone, "l", "landed\n", "landed work")
+	merge(t, clone, "landed", false)
+
+	verdicts, err := Classify(clone, model.Repo{Branches: []string{"main", "never-cloned"}})
+	must(t, err)
+	for _, v := range verdicts {
+		if v.Name == "landed" && v.Prunable {
+			return
+		}
+	}
+	t.Fatalf("a missing important branch cost the others their verdict: %+v", verdicts)
 }

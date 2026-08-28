@@ -17,9 +17,9 @@ import (
 // ones that found nothing: "we looked for a replay and there wasn't one" is
 // most of what makes the answer believable, and a list of only the successful
 // step reads like a conclusion with its working erased.
-func explainVerdict(w io.Writer, v syncpkg.Verdict, base string, indent string) {
+func explainVerdict(w io.Writer, v syncpkg.Verdict, indent string) {
 	e := v.Evidence
-	fmt.Fprintf(w, "%s%s vs %s: %d ahead, %d behind\n", indent, v.Name, base, e.Ahead, e.Behind)
+	fmt.Fprintf(w, "%s%s vs %s: %d ahead, %d behind\n", indent, v.Name, v.Base, e.Ahead, e.Behind)
 	for _, s := range e.Steps {
 		mark := " "
 		if s.Answered {
@@ -34,7 +34,7 @@ func explainVerdict(w io.Writer, v syncpkg.Verdict, base string, indent string) 
 	// The conclusions share the tiers' label column: what was tried and what it
 	// came to are one list, and ragging them apart makes the reader find the
 	// alignment before they can read either.
-	fmt.Fprintf(w, "%s    verdict     %s\n", indent, v.Summary(base))
+	fmt.Fprintf(w, "%s    verdict     %s\n", indent, v.Summary())
 	if !v.Updated.IsZero() {
 		fmt.Fprintf(w, "%s    ref         %s, last moved %s ago\n",
 			indent, shortSHA(v.SHA), roughAge(time.Since(v.Updated)))

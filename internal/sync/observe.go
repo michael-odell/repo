@@ -51,7 +51,7 @@ func (x *run) observe() {
 		// prune` classifies without fetching, and this keeps the two agreeing
 		// about what an unanswerable branch means.
 		if v.Unknown {
-			x.branchMark(v.Name, Attention, v.Summary(x.branch))
+			x.branchMark(v.Name, Attention, v.Summary())
 			continue
 		}
 		// `unmerged` shows only outstanding work. `all` additionally shows the
@@ -59,7 +59,7 @@ func (x *run) observe() {
 		// can be watched during ordinary sweeps rather than only when someone
 		// remembers to go looking for it.
 		if !v.State.Merged() || x.r.ShowBranches == showAll {
-			x.branchMark(v.Name, Info, v.Summary(x.branch))
+			x.branchMark(v.Name, Info, v.Summary())
 		}
 	}
 	if x.r.ShowBranches == showAll {

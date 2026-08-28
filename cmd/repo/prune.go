@@ -111,7 +111,6 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 		if len(verdicts) == 0 {
 			continue
 		}
-		base := primaryBranch(r)
 
 		fmt.Fprintf(tw, "  %s\n", repoName(r))
 		var prunable []syncpkg.Verdict
@@ -121,7 +120,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 				glyph = "✂"
 				prunable = append(prunable, v)
 			}
-			fmt.Fprintf(tw, "    %s\t  %s\t%s\n", glyph, v.Name, v.Summary(base))
+			fmt.Fprintf(tw, "    %s\t  %s\t%s\n", glyph, v.Name, v.Summary())
 		}
 		total += len(prunable)
 
@@ -129,7 +128,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 			continue
 		}
 		tw.Flush()
-		approved, quit := approve(w, walk, repoName(r), prunable, base, opts)
+		approved, quit := approve(w, walk, repoName(r), prunable, opts)
 		if len(approved) == 0 {
 			fmt.Fprintf(w, "    skipped %s\n", repoName(r))
 		}
@@ -235,7 +234,7 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 // answer available for the branches you already believe — being asked twelve
 // questions you have already answered is its own way of training someone to
 // stop reading them.
-func approve(w io.Writer, walk *walkthrough, name string, prunable []syncpkg.Verdict, base string, opts pruneOpts) (approved []syncpkg.Verdict, quit bool) {
+func approve(w io.Writer, walk *walkthrough, name string, prunable []syncpkg.Verdict, opts pruneOpts) (approved []syncpkg.Verdict, quit bool) {
 	switch {
 	case opts.Yes:
 		return prunable, false
@@ -252,7 +251,7 @@ func approve(w io.Writer, walk *walkthrough, name string, prunable []syncpkg.Ver
 	fmt.Fprintf(w, "  %s\n", name)
 	walk.startRepo()
 	for _, v := range prunable {
-		switch walk.ask(w, v, base) {
+		switch walk.ask(w, v) {
 		case decideYes:
 			approved = append(approved, v)
 		case decideNo:
@@ -289,11 +288,11 @@ type walkthrough struct {
 // would turn one endorsement into an unbounded one.
 func (a *walkthrough) startRepo() { a.all = false }
 
-func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict, base string) decision {
+func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict) decision {
 	if a.all {
 		return decideYes
 	}
-	explainVerdict(w, v, base, "    ")
+	explainVerdict(w, v, "    ")
 	for {
 		fmt.Fprintf(w, "    delete %s? [y/N/a/q] ", v.Name)
 		line, err := a.in.ReadString('\n')
@@ -340,7 +339,7 @@ func explainBranch(w io.Writer, selected []model.Repo, branch string) error {
 			}
 			found++
 			fmt.Fprintf(w, "  %s\n", repoName(r))
-			explainVerdict(w, v, primaryBranch(r), "    ")
+			explainVerdict(w, v, "    ")
 		}
 	}
 	if found == 0 {
@@ -362,13 +361,4 @@ func shortSHA(s string) string {
 		return s[:8]
 	}
 	return s
-}
-
-// primaryBranch is the repo's first important branch — the reference every
-// verdict is measured against.
-func primaryBranch(r model.Repo) string {
-	if len(r.Branches) > 0 {
-		return r.Branches[0]
-	}
-	return "the important branch"
 }

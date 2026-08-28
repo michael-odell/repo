@@ -9,8 +9,8 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
-// Verdict is one task branch's standing against its repo's primary important
-// branch: whether its work has landed, and whether the branch could therefore be
+// Verdict is one task branch's standing against its repo's important
+// branches: whether its work has landed on any of them, and whether the branch could therefore be
 // removed (DESIGN §5.3). Both `sync`'s observations and `repo prune` read the
 // same verdict, so the line you see during a sweep is the decision prune would
 // act on — not a second, similar-looking calculation that might disagree.
@@ -19,10 +19,17 @@ type Verdict struct {
 	// SHA is what the ref holds, carried out of classification rather than
 	// re-read at deletion time: it is the whole content of the journal's
 	// restore line, and after the branch is gone there is nothing left to ask.
-	SHA      string
-	Updated  time.Time // when the ref last moved (tip date or reflog, later wins)
-	State    gitx.MergeState
-	Ahead    int    // commits the important branch lacks (0 once merged)
+	SHA     string
+	Updated time.Time // when the ref last moved (tip date or reflog, later wins)
+	State   gitx.MergeState
+	// Base is the important branch this verdict is about: the one that confirmed
+	// the merge, or — when none did — the primary, which is what Ahead counts
+	// against. Carried on the verdict rather than passed to Summary by the
+	// caller, because "merged" in a repo with more than one important branch is
+	// unreadable without saying into what, and a caller that had to supply it
+	// could supply a different one than the tiers used.
+	Base     string
+	Ahead    int    // commits Base lacks (0 once merged)
 	Worktree string // the tree holding this branch, "" when none does
 	Prunable bool
 	Blocker  string // why not, when !Prunable
@@ -39,12 +46,12 @@ type Verdict struct {
 }
 
 // Summary is the verdict as one report line.
-func (v Verdict) Summary(base string) string {
+func (v Verdict) Summary() string {
 	if v.Unknown {
 		return v.Blocker // "N ahead of base" would be a number we don't have
 	}
 	if !v.State.Merged() {
-		s := fmt.Sprintf("%d ahead of %s", v.Ahead, base)
+		s := fmt.Sprintf("%d ahead of %s", v.Ahead, v.Base)
 		if v.Blocker != "" && v.Blocker != "unmerged" {
 			s += ", " + v.Blocker
 		}
@@ -72,25 +79,28 @@ func (v Verdict) Summary(base string) string {
 // means the patch is carried by a commit *reachable from base*, which a later
 // revert cannot remove (DESIGN §5.3).
 func Classify(container string, r model.Repo) ([]Verdict, error) {
-	base := branch0(r)
-	if base == "" {
-		return nil, fmt.Errorf("no important branch to measure against")
-	}
-	// A base that doesn't resolve is one fact about the repo, not one per
-	// branch: every tier measures against it, so without it the answer is the
-	// same for all of them. Established once and reported once, because the
-	// alternative — letting each branch fail its own rev-list — repeats git's
-	// "ambiguous argument" for every branch in the repo and names the missing
-	// branch nowhere. Why it's missing is config's business (a stated
-	// `branches` outranks what the clone says, §3.6), so this reports what is
-	// so rather than guessing which end is wrong.
-	_, ok := gitx.RevParse(container, base)
-	if !ok {
-		return nil, fmt.Errorf("no local branch %q to measure against", base)
-	}
+	// Every important branch that actually exists here is a base worth asking
+	// against, in config order so the primary answers first where several
+	// could. A base that doesn't resolve is one fact about the repo, not one
+	// per branch, so it is established once: letting each branch fail its own
+	// rev-list repeats git's "ambiguous argument" for every branch in the repo
+	// and names the missing one nowhere. Why it's missing is config's business
+	// (a stated `branches` outranks what the clone says, §3.6), so this reports
+	// what is so rather than guessing which end is wrong.
 	important := map[string]bool{}
+	var bases []string
 	for _, b := range r.Branches {
 		important[b] = true
+		if _, ok := gitx.RevParse(container, b); ok {
+			bases = append(bases, b)
+		}
+	}
+	primary := branch0(r)
+	switch {
+	case primary == "":
+		return nil, fmt.Errorf("no important branch to measure against")
+	case len(bases) == 0:
+		return nil, fmt.Errorf("no local branch %q to measure against", primary)
 	}
 	branches, err := gitx.LocalBranchRefs(container)
 	if err != nil {
@@ -103,8 +113,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		if important[b] {
 			continue
 		}
-		var ev gitx.Evidence
-		state, err := gitx.MergedStateEvidence(container, b, base, scanLimitOf(r), &ev)
+		state, base, ev, err := classifyAgainst(container, b, bases, scanLimitOf(r))
 		if err != nil {
 			// "Declined to look" and "tried and failed" are both unknown, and
 			// both unprunable, but only one of them is a fault — so the reason
@@ -124,6 +133,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 				Name:     b,
 				SHA:      ref.SHA,
 				Updated:  ref.Updated,
+				Base:     base,
 				Evidence: ev,
 				Unknown:  true,
 				Worktree: gitx.WorktreeFor(container, b),
@@ -138,6 +148,7 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 			Updated:  ref.Updated,
 			Evidence: ev,
 			State:    state,
+			Base:     base,
 			Ahead:    ahead,
 			Worktree: gitx.WorktreeFor(container, b),
 		}
@@ -163,6 +174,50 @@ func Classify(container string, r model.Repo) ([]Verdict, error) {
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+// classifyAgainst runs the tiers against each important branch in turn and
+// returns the first confirmation, the base that gave it, and the evidence from
+// every base tried.
+//
+// Landed on *any* important branch is landed: work merged to `release` is merged
+// whether or not `main` has seen it, and measuring against `branches[0]` alone
+// reported it as outstanding forever — the same false negative the tiers exist
+// to eliminate, one level up. The bases are tried in config order, so where
+// several could confirm, the primary is the one the report names.
+//
+// Where nothing confirms, the base returned is the primary: it is what `Ahead`
+// is counted against, and one number cannot mean several branches. An error
+// from *any* base makes the whole verdict unknown rather than unmerged, because
+// a base that declined to answer has not said no — and a branch nothing can
+// vouch for is never pruned (DESIGN §5.3).
+func classifyAgainst(container, branch string, bases []string, scanLimit int) (gitx.MergeState, string, gitx.Evidence, error) {
+	var (
+		ev       gitx.Evidence
+		firstErr error
+		// The divergence the primary saw, kept aside because each later base
+		// overwrites it and an unconfirmed verdict is reported against the
+		// primary. Without this, `-v`'s header counted one branch's commits and
+		// named another's.
+		primaryAhead, primaryBehind int
+	)
+	for i, base := range bases {
+		state, err := gitx.MergedStateEvidence(container, branch, base, scanLimit, &ev)
+		if i == 0 {
+			primaryAhead, primaryBehind = ev.Ahead, ev.Behind
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if state.Merged() {
+			return state, base, ev, nil
+		}
+	}
+	ev.Ahead, ev.Behind = primaryAhead, primaryBehind
+	return gitx.Unmerged, bases[0], ev, firstErr
 }
 
 // tooYoung reports whether a ref has moved too recently to be removed.
