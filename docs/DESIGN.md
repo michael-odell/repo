@@ -1091,8 +1091,13 @@ transfers unchanged:
 
 - uncommitted or untracked work **blocks** — the branch stays, and the report
   says which tree held what;
-- **ignored-only residue is discarded on consent** — the same `--lose-ignored`
-  contract, since a build directory is not a reason to keep a landed branch;
+- **ignored-only residue is discarded on consent** — since a build directory is
+  not a reason to keep a landed branch. `git worktree remove` would take it
+  without comment, so the count is carried on the verdict and the consent is
+  asked for at the point of removal, not at classification: under `repo prune`
+  the walk-through names what a removal discards and the `y` is the answer
+  (`--yes` is blanket consent), and under the sweep's `auto` — the one path with
+  nobody to ask — it takes sync's own `--lose-ignored`, exactly as §4.1 does;
 - a clean tree is removed without comment.
 
 The worktree goes first and the branch second, because git refuses to delete a
@@ -1177,8 +1182,7 @@ The full blocker ladder, in the order prune asks:
 | the branch is an important branch | not a candidate; never listed |
 | no tier confirmed against any important branch | `N ahead of <base>` |
 | a worktree holds it and carries uncommitted or untracked work | `worktree holds uncommitted work` |
-| a worktree holds it, has ignored residue, and consent was not given | `worktree holds ignored files — --lose-ignored` |
-| the container's primary tree has it checked out | `checked out` |
+| the container's own tree has it checked out | `checked out` |
 | a `prune_keep` glob names it | `kept (prune_keep)` |
 | its ref moved within `prune_min_age` | `moved 3d ago (prune_min_age 14d)` |
 
@@ -1224,7 +1228,7 @@ branches you already believe, without making it the only thing on offer.
 | flag | effect |
 |---|---|
 | *(none)* | classify, then ask per branch and delete what is approved |
-| `--yes` | skip the asking; delete everything prunable. Required with no TTY |
+| `--yes` | skip the asking; delete everything prunable, worktree residue included. Required with no TTY |
 | `--dry-run` | run every check, delete nothing, journal nothing, print what would go |
 | `-v`, `--verbose` | print each verdict's evidence — which tiers ran, what each found |
 
