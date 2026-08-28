@@ -198,6 +198,30 @@ single repo (§7). Cross-cutting grouping is deliberately dropped — directory-
 sweeps (a whole root, an org subdir, one repo) cover it, and `sync` is idempotent
 and cheap enough that broader-than-needed is never harmful.
 
+**A setting that would do nothing is an error, not a default.** The loader
+already rejects unknown keys, so a misspelled setting fails loudly rather than
+being silently ignored. That covers half the failure: the other half is a key
+spelled correctly, holding a value the enum accepts, that **no code consumes** —
+which reads exactly like a working configuration and behaves exactly like an
+absent one. `prune = "auto"` sat in a live registry that way for months, doing
+nothing and saying nothing, in a file whose own header records being bitten
+before by `path` where `layout` was meant.
+
+A parser cannot detect this on its own: it knows a value is spelled right, and
+only the consumer knows it is honoured. So each enum carries, beside its
+permitted values, which of them are **implemented**, and the loader rejects an
+unimplemented one with the same voice it rejects a misspelled one:
+
+    prune = "auto" is not implemented yet (want one of: manual, report)
+
+That list is a claim about the code, so it is held to the code by test rather
+than by discipline: each consumer package asserts that it handles exactly the
+values its enum marks implemented, and — where the setting's whole purpose is to
+change behaviour — that each of them produces a *distinguishable* outcome. Two
+modes that differ only in name fail the build. The declaration can then only
+drift by breaking a test, which is the point: the cost of being wrong here is
+silence, and silence is what nobody notices.
+
 ### 3.5 Layout: two orthogonal axes
 
 - **`layout`** = `flat` (`<dir>/<repo>`) | `owner` (`<dir>/<owner>/<repo>`).
@@ -989,40 +1013,62 @@ as the floor beneath repos config says nothing about, which is what makes it
 useful for a one-off run (`REPO_MERGE_SCAN_LIMIT=0 repo sync`) without editing
 anything.
 
+**Landed on *any* important branch is landed.** A repo may carry several
+(`branches = ["main", "release"]`), and work merged to `release` is merged
+whether or not `main` has seen it. So every tier runs against each important
+branch in turn and the first confirmation settles the verdict; a branch is
+unmerged only when it is unmerged against all of them. Measuring against
+`branches[0]` alone reported a released branch as outstanding work forever,
+which is the same false negative the tiers exist to eliminate — one level up.
+
+The branch that *answered* is what the report names, since "merged" without
+saying into what is unreadable in a repo with more than one. Where none
+confirms, the report measures ahead-ness against the first important branch,
+which is the primary by convention and the only one a single number can mean.
+Important branches are themselves never candidates: they are the *reference*, and
+a branch cannot have landed relative to itself.
+
 **Which tier confirmed a merge decides how it can be removed.** Git's own `-d`
 safety check is an ancestry test, so it refuses exactly the branches the second
 and third tiers exist to identify. `repo prune` uses `-d` wherever it can, so two
-independent judgements must agree before a branch goes, and `-D` only where git's
-check cannot see the merge.
+independent judgements stand behind that deletion, and `-D` only where git's
+check cannot see the merge. This is a mechanical choice about which command to
+run, **not** a policy about which branches may go: a branch the tiers confirmed
+is prunable at either flag.
 
-A branch is **prunable** when its work has landed by any tier and nothing else
-stands in the way. Important branches are never candidates — they are the
-*reference*, and a branch cannot have landed relative to itself. A branch checked
-out in any worktree is blocked regardless of merge state.
+**The tiers are the whole question, and nothing checks their work.** An earlier
+design put a second gate after them — a "corroboration" pass asking whether the
+branch's change was in the base branch's *current tree*, by reverse-applying its
+diff and by merge-tree — on the reasoning that work which landed and was then
+reverted would satisfy the tiers while deleting the branch took the last copy of
+it.
 
-`repo prune` is **report-only** unless `--delete` is given, and on a terminal
-`--delete` asks **per branch**, showing the evidence for each before it asks —
-the same walk-through `prune = "interactive"` performs, in the command where
-someone is unambiguously present. The answers are `y` / `n` / `a` (yes to the
-rest of this repo) / `q` (stop here): a bulk answer stays available for the
-branches you already believe, without making it the only thing on offer. `--yes`
-skips the prompting entirely, and with no TTY prune declines rather than
-proceeding — a non-interactive run that meant to delete says so with `--yes`,
-and one that didn't must not delete by accident (the contract `--lose-ignored`
-uses for a relayout).
+**That reasoning is wrong, and the gate is deliberately gone.** If a tier
+confirmed, the patch is carried by a commit *reachable from the base branch* —
+that is precisely what `git cherry` searched. A revert adds a commit; it never
+removes one. So the content survives the branch's deletion unconditionally, and
+is recoverable by reverting the revert or by reading the blob straight out of
+the base branch's history. Deleting a landed branch is never taking the last
+copy, whatever happened afterwards.
 
-The same verdicts appear during ordinary sweeps under
-`show_branches = "all"` (§5.6) — the same call, so the line watched during a
-sweep is the decision prune would act on, not a lookalike that might disagree.
+What the gate did instead was withhold branches for a reason unrelated to any of
+this. Reverse-apply is a *textual* application, all-or-nothing across the whole
+diff, so a branch far enough behind for base to have edited within any hunk's
+three-line context window fails it; merge-tree rescued some of those and not all.
+The result on a real repo full of squash merges was a page of
+`merged (rewritten) — could not corroborate`: branches the tool had itself
+concluded were landed, refused for a reason no reader could act on, in wording
+that named the tool's internals rather than anything about the branch.
 
-Merge state is also what keeps `sync` from **resurrecting a merged branch**.
-After a branch is merged and deleted upstream, `fetch --prune` removes its
-remote-tracking ref; treating that absence as "never pushed" would push the
-branch straight back under `task_branches = "auto"`. Tracking config cannot tell
-the cases apart — a branch pushed without `-u` has a remote ref and no config —
-but merge state can: a branch carrying nothing the important branch lacks has
-nothing to push. Why the ref is absent (deleted after merging, or never pushed)
-is not knowable, so nothing claims to know it.
+So: **no content-presence check gates a deletion.** Anything of the kind is
+strictly a false-negative source with nothing on the other side of the ledger,
+and this paragraph exists so the idea is not re-proposed on the strength of the
+revert story. A person who wants to know whether landed work is still *present*
+is asking a real question — `-v` may answer it as a stated fact (§ below) — but
+it is not grounds for keeping a branch.
+
+**A branch is prunable** when its work has landed by any tier against any
+important branch, and nothing in the ladder below stands in the way.
 
 **What prune may remove is a ladder of ref classes, ordered by how answerable
 the question is** — not by how much noise each one makes. Tags are not the next
@@ -1030,45 +1076,54 @@ rung after branches; the worktrees holding them are:
 
 | class | the question | disposition |
 |---|---|---|
-| local task branch | has this work landed | the three tiers, plus `-d` as a second opinion |
-| the worktree holding one | is there residue to lose | remove it first, on the §4.1 residue rules |
+| local task branch | has this work landed | the three tiers, plus `-d` as a second opinion where ancestry confirms |
+| the worktree holding one | is there residue to lose | removed with the branch, on the §4.1 residue rules |
 | remote-tracking ref | — | already handled by `fetch --prune`; nothing to add |
 | tag | *none exists* | explicit globs only, never inference (below) |
 | whole repo | — | report-only, permanently |
 
-A branch checked out in a worktree is blocked (above), and under
-`worktrees = true` that blocker is **permanent** rather than transient: task
-branches live in worktrees there, so a prune that cannot remove a worktree
-cannot prune that repo at all. Removing one is the same question §4.1 already
-answers when a relayout discards a tree — uncommitted or untracked work blocks,
-ignored-only residue is discarded on consent — so it is that rule applied to a
-narrower target, not a new judgement about what is safe to lose.
+**A worktree is removed with the branch it holds.** Under `worktrees = true`
+every task branch lives in one, so treating "checked out" as a blocker made
+prune a no-op for those repos — permanently, not transiently, since nothing
+would ever check the branch out again. But whether a worktree may go is a
+question §4.1 already answers when a relayout discards a tree, and the answer
+transfers unchanged:
 
-**Four modes, and what makes one safe to automate.** `prune` (§3.4) says who
-decides, ordered by how much the sweep does without being asked —
-`manual ⊂ report ⊂ interactive ⊂ auto`:
+- uncommitted or untracked work **blocks** — the branch stays, and the report
+  says which tree held what;
+- **ignored-only residue is discarded on consent** — the same `--lose-ignored`
+  contract, since a build directory is not a reason to keep a landed branch;
+- a clean tree is removed without comment.
 
-| mode | the sweep | `repo prune` |
-|---|---|---|
-| `manual` | does not classify; says nothing | classifies and reports on request |
-| `report` | classifies, names what it found, deletes nothing | as above, plus `--delete` |
-| `interactive` | …and afterwards walks the candidates, explaining each and asking | as above |
-| `auto` | deletes what clears the bar below; reports the rest | as above |
+The worktree goes first and the branch second, because git refuses to delete a
+branch a tree still holds; a failed removal therefore leaves both, which is the
+safe order. The container's own primary tree is never removed — a repo with no
+worktree at all is not a state prune may create — so a branch checked out there
+is still blocked, and says so.
 
-`report` is the **default**. `auto` is the destination, not the starting point:
-the whole design rests on a classification whose judgement has been watched on
-real repos, and a default that starts deleting on first run would be asking for
-that trust before earning it. The path to `auto` is the point of the reporting —
-see the confidence path below.
+**Four modes, and what they govern.** `prune` (§3.4) is a setting on the
+**sweep**: it says what `repo sync` does about landed branches unasked, ordered
+by how much that is — `manual ⊂ report ⊂ interactive ⊂ auto`:
 
-**`interactive` is the rung between them**, and the one that actually builds the
-confidence the rest of this section keeps deferring to. The sweep classifies as
-`report` does, then walks each candidate in turn: the branch, its verdict, the
-evidence behind it (the `--explain` output below), and a y/n. Watching a decision
-and being asked to endorse it is a stronger test than reading a list, because a
-wrong verdict has to get past you one branch at a time rather than hiding in a
-count — and unlike `report`, the branches you *do* approve actually go, so
-confidence and cleanup stop being separate errands.
+| mode | what `repo sync` does |
+|---|---|
+| `manual` | does not classify; says nothing |
+| `report` | classifies, names what it found, deletes nothing |
+| `interactive` | …and afterwards walks the candidates, explaining each and asking |
+| `auto` | …and deletes them, reporting what it did |
+
+`repo prune` **does not consult it.** A command someone typed is not a policy
+question: the mode exists to decide what happens when nobody asked, and asking
+is the whole content of running the command. A repo set to `manual` still prunes
+on request.
+
+`report` is the **default**, and `interactive` is the rung worth starting on:
+the sweep classifies as `report` does, then walks each candidate in turn — the
+branch, its verdict, the evidence behind it, and a y/n. Watching a decision and
+being asked to endorse it is a stronger test than reading a list, because a wrong
+verdict has to get past you one branch at a time rather than hiding in a count —
+and unlike `report`, the branches you *do* approve actually go, so confidence and
+cleanup stop being separate errands.
 
 Two rules keep it from becoming a nuisance:
 
@@ -1079,31 +1134,21 @@ Two rules keep it from becoming a nuisance:
 - **No TTY, no prompt, no deletion** — it degrades to `report` rather than
   waiting or assuming. `sync --if-due` is invoked from the shell prompt and may
   run backgrounded (§5.5); a mode that could block *that* would be a hang with a
-  question nobody can see. This is also why `interactive` is not the default
-  despite being the recommended starting point: the sweep is the wrong place to
-  put a prompt everybody gets, and the deliberate `repo prune --delete` is where
-  a person is already present (below).
+  question nobody can see.
 
-Declining a branch is an answer about *that run*, not a fact stored anywhere. A
-decline prints the `prune_keep` glob that would make the answer permanent, so
-"stop asking me about this one" is an edit you make and can read back later,
-never invisible state accumulating in a data directory.
+`auto` is the same walk with the asking removed, and it deletes **everything the
+ladder allows** — including the rewritten tiers. An earlier design held those
+back on the grounds that `git branch -d` was not there to agree; that is the
+corroboration argument in another costume and fails the same way. If the tiers
+are trustworthy they are trustworthy unattended, and if they are not, no mode
+should be acting on them. What holds a branch back under `auto` is the ladder and
+nothing else, which makes `prune_min_age` the real guard for an unattended run —
+and the setting worth having in place before turning `auto` on.
 
-The bar for an **unattended** deletion is narrower than for one someone asked
-for, and the difference is not a preference — it is whether a second, independent
-judgement stands behind it. Under `auto`, a branch is deleted only when:
-
-- it landed at the **ancestry** tier, so `git branch -d` independently agrees;
-- **no worktree** holds it;
-- its ref has not moved for `prune_min_age`;
-- and no `prune_keep` glob names it.
-
-Everything landed only by the rewritten tiers stays a *report* under `auto`,
-because that is exactly where the second opinion is missing (§ `NeedsForceDelete`).
-That keeps the two-judgements rule intact rather than trading it away for
-convenience, and it means `auto` can exist before the cross-check below does. A
-branch the rewritten tiers found still goes on request — `repo prune --delete`
-is a person deciding, which is a witness of a different kind.
+Declining a branch under `interactive` is an answer about *that run*, not a fact
+stored anywhere. A decline prints the `prune_keep` glob that would make the answer
+permanent, so "stop asking me about this one" is an edit you make and can read
+back later, never invisible state accumulating in a data directory.
 
 **`prune_keep` and `prune_min_age`** are the two dials that belong to the
 person, not to the evidence:
@@ -1125,12 +1170,30 @@ Per-tier toggles are deliberately absent. `merge_scan_limit` is already the cost
 dial, and "trust tier 2 but not tier 3" is a distinction nobody can act on —
 both rest on the same evidence (§ the patch tiers report under one verdict).
 
+The full blocker ladder, in the order prune asks:
+
+| blocker | reported as |
+|---|---|
+| the branch is an important branch | not a candidate; never listed |
+| no tier confirmed against any important branch | `N ahead of <base>` |
+| a worktree holds it and carries uncommitted or untracked work | `worktree holds uncommitted work` |
+| a worktree holds it, has ignored residue, and consent was not given | `worktree holds ignored files — --lose-ignored` |
+| the container's primary tree has it checked out | `checked out` |
+| a `prune_keep` glob names it | `kept (prune_keep)` |
+| its ref moved within `prune_min_age` | `moved 3d ago (prune_min_age 14d)` |
+
+Ordered by who is refusing: git's own answers first — the work isn't landed, or
+a tree is standing on the branch — and only then the two settings, which don't
+dispute the merge question at all. Reporting "kept (prune_keep)" for a branch
+that is also unmerged would name the weaker reason and suggest the setting is
+what stands between you and losing the work.
+
 **Every deletion is written down.** Prune appends to a journal — repo, branch,
 the SHA the ref held, the verdict that justified it, the mode that did it, and
 the literal `git branch <name> <sha>` that puts it back:
 
 ```
-2026-08-12T09:14:03Z  acme/noodle  refactor-auth  9f3a1c2  merged (rewritten)  --delete  git branch refactor-auth 9f3a1c2
+2026-08-12T09:14:03Z  acme/noodle  refactor-auth  9f3a1c2  merged (rewritten)  auto  git branch refactor-auth 9f3a1c2
 ```
 
 The SHA is read **before** the deletion rather than parsed out of git's output,
@@ -1141,219 +1204,81 @@ someone actually asks is "what did it take from me, and when" — which no reflo
 answers across repos. It is also the *only* record that would exist if tag
 pruning ever lands, since `refs/tags` has no reflog at all.
 
-The journal lives at `$XDG_DATA_HOME/repo/prune.log` (default
-`~/.local/share/repo/`), **not** under `$REPO_OUT` (§6): artifacts there are
+The journal lives at `$XDG_STATE_HOME/repo/prune.log` (default
+`~/.local/state/repo/`), **not** under `$REPO_OUT` (§6): artifacts there are
 generated, disposable, and rewritten on every `apply`, and a durable record has
 no business in a directory whose contract is "safe to delete and regenerate".
+State rather than data because the XDG spec puts logs and history there, which is
+what these records are.
 
-**`--dry-run` exists from the first commit**, and is not the same thing as the
-default report. Report-only answers *what is prunable*; `--dry-run` answers
-*what this invocation would do* — the same selection, the same `prune_keep` and
+Because the journal is the recovery story, a run that cannot open it deletes
+nothing: it is opened before the first deletion and a failure there ends the
+command, rather than being noted and worked around.
+
+**`repo prune` prunes.** The command deletes, because that is its name, and it
+**asks first** — on a terminal it walks the candidates one at a time, showing the
+evidence for each before it asks. The answers are `y` / `n` / `a` (yes to the
+rest of this repo) / `q` (stop here): a bulk answer stays available for the
+branches you already believe, without making it the only thing on offer.
+
+| flag | effect |
+|---|---|
+| *(none)* | classify, then ask per branch and delete what is approved |
+| `--yes` | skip the asking; delete everything prunable. Required with no TTY |
+| `--dry-run` | run every check, delete nothing, journal nothing, print what would go |
+| `-v`, `--verbose` | print each verdict's evidence — which tiers ran, what each found |
+
+There is no `--delete`. A separate flag to make a command called *prune* actually
+prune buys nothing that `--dry-run` does not already buy better: one of them
+previews, the other confirms, and requiring both to mean "yes" only teaches the
+habit of passing both.
+
+With **no TTY there is no asking, so there is no deletion** unless `--yes` says
+so. A script that meant to prune says `--yes`; one that didn't must not prune by
+accident, which is the same contract `--lose-ignored` uses for a relayout. This
+is also what keeps a mistyped `repo prune` from being expensive: unattended it
+refuses, attended it asks.
+
+**`--dry-run` is not the same thing as a report.** It answers *what this
+invocation would do* — the same selection, the same `prune_keep` and
 `prune_min_age` filtering, every deletion line printed as it would be, and
-nothing removed and nothing journalled. The two diverge exactly where it
-matters: a dry run shows a list narrowed by policy, while the plain report shows
-every landed branch *including* the ones policy protects. A flag whose output is
-identical to the default teaches nothing; this one is how you check policy, not
-classification.
-
-It implies the delete path rather than requiring `--delete` alongside it: the
-question `--dry-run` answers is only ever "what would deleting do", so demanding
-both flags would be ceremony. The one thing it does not reproduce is the
-prompting — the question that *would* be asked is printed rather than asked,
+nothing removed and nothing journalled. What it does not reproduce is the
+prompting: the question that *would* be asked is printed rather than asked,
 because a prompt whose answer changes nothing only teaches you to say yes.
 
-**`--explain <branch>` shows the evidence, which the verdict deliberately does
-not.** A verdict is a claim and stays terse — `merged (rewritten)` says what is
-true, and naming a tier there would dress "how the search went" as a finding
-about how the branch was merged (above). The explain path is where the mechanism
-is honest to show, because it is asked for: which tier answered and which ones
-were tried first, `git cherry`'s unmatched count, the merge base, the synthetic
+**`-v` shows the evidence, which the verdict deliberately does not.** A verdict
+is a claim and stays terse — `merged (rewritten)` says what is true, and naming a
+tier there would dress "how the search went" as a finding about how the branch
+was merged (above). Verbose is where the mechanism is honest to show, because it
+is asked for: which tier answered and which ones were tried first, against which
+important branch, `git cherry`'s unmatched count, the merge base, the synthetic
 commit the whole-diff tier built, the scan limit and how near the branch came to
 it, and every blocker including the ones policy imposed. It is the difference
 between a tool that is trusted because it is usually right and one that can be
-checked.
+checked. `repo prune -v --dry-run <selector>` is therefore the "explain this to
+me" invocation, and no separate `--explain` exists for it to disagree with.
 
-**The `-D` path gets its second opinion back.** Tiers 2 and 3 both rest on
-`git cherry`'s patch-ids, so their agreement proves only that one mechanism is
-consistent with itself. Before a force-delete, prune therefore corroborates by a
-different route — and the question it asks is deliberately *stronger* than what
-the tiers ask. `git cherry` asks whether the patch is anywhere in base's
-**history**; corroboration asks whether the change is in base's **tree now**.
-Work that landed and was then reverted satisfies the first and fails the second,
-and a branch whose content is no longer in base is one whose deletion would take
-the last copy of it. When they disagree, the branch stays.
+The same verdicts appear during ordinary sweeps under `show_branches = "all"`
+(§5.6) — the same call, so the line watched during a sweep is the decision prune
+would act on, not a lookalike that might disagree.
 
-Corroboration is attempted by two independent routes, in order of strictness.
-Either one succeeding is enough; both failing means *could not corroborate* →
-report instead of delete. Neither can turn a "no" into a "yes".
+Merge state is also what keeps `sync` from **resurrecting a merged branch**.
+After a branch is merged and deleted upstream, `fetch --prune` removes its
+remote-tracking ref; treating that absence as "never pushed" would push the
+branch straight back under `task_branches = "auto"`. Tracking config cannot tell
+the cases apart — a branch pushed without `-u` has a remote ref and no config —
+but merge state can: a branch carrying nothing the important branch lacks has
+nothing to push. Why the ref is absent (deleted after merging, or never pushed)
+is not knowable, so nothing claims to know it.
 
-1. **Reverse-apply** (`git apply --cached --check -R`) — take the branch's whole
-   diff against the merge base and undo it against a scratch index built from
-   the base tip. Exact and cheap, and it proves presence outright: a patch only
-   reverse-applies where its post-image is actually sitting.
-
-2. **Merge-tree** (`git merge-tree --write-tree <base> <branch>`, its result
-   compared against base's own tree) — ask whether merging the branch into base
-   would change base at all. If the merge produces base's tree byte for byte,
-   the branch contributes nothing base does not already have.
-
-Route 1 alone was the whole check until it turned out to fail a case it was
-never meant to reject. It is a *textual* application, so it needs the three
-context lines around every hunk to still match the base tip — and a branch far
-enough behind will have had base edit inside that window since the fork. The
-threshold is exactly the context window: measured against a branch whose work
-was verifiably still present in base, a later edit 1–3 lines from the hunk fails
-and one 4 or more lines away passes. A branch 1294 commits behind therefore
-reads as "could not corroborate" essentially always, which strands it — the
-sweep goes on advertising it as prunable and prune goes on refusing to remove
-it, with no flag able to break the tie.
-
-Route 2 repairs that without loosening either thing route 1 protects, because it
-compares *content* rather than context. It is a three-way merge, so it shares no
-code with patch-id hashing and the independence requirement still holds. It
-keeps the revert property: where work landed and was then reverted, the base
-side is back at the merge base while the branch side still carries the change,
-so the merge re-introduces it, the result differs from base, and the branch is
-withheld. A merge conflict is likewise a withhold, as is a `merge-tree` that
-cannot run at all — so the gate is never weaker than route 1 alone, on any
-version of git.
-
-The window it opens, measured on a branch whose work is verifiably still in
-base, by how far away base's later edit is:
-
-| edit distance from the hunk | 1 | 2 | 3 | 4+ |
-|---|---|---|---|---|
-| route 1 (reverse-apply) | ✗ | ✗ | ✗ | ✓ |
-| route 2 (merge-tree) | ✗ conflict | ✓ | ✓ | ✓ |
-
-Only a directly abutting edit still withholds, and there the two sides really do
-overlap — a conflict is the honest answer rather than a false negative. But the
-distance table understates the gain, because route 1 is **all-or-nothing across
-the whole diff**: every hunk in every file has to still match, so one drifted
-line anywhere sinks the entire branch. A content merge conflicts only on the
-regions that genuinely overlap, which is why it rescues a branch that is
-thousands of commits behind and touches many files — the case the table's single
-hunk cannot show.
-
-**`git apply --3way` is the trap, and is not used.** It is the obvious repair
-for route 1's context problem, and it is actively unsafe here: it treats
-"already un-applied" as success, so it reverse-applies cleanly against a base
-that never had the work *and* against one that reverted it. Both danger cases
-pass. Paired with a tier that has already said "merged", it would force-delete
-the last copy of reverted content — precisely the outcome this gate exists to
-prevent.
-
-Nothing in the repo takes part in either route. Route 1 uses a scratch index and
-a temp file; route 2 touches neither the index nor any working tree, and in the
-case that matters it writes no new object either, since a merge result equal to
-base's tree is a tree that already exists.
-
-Its cost is real and therefore **measured, not assumed**: each check is timed,
-a failed one says what it cost, and prune's footer names the total it spent
-corroborating — and, when any branch was withheld, how many, since "0 branch(es)
-deleted" reads the same whether nothing was prunable or everything was held back. Three things bound that cost regardless of the numbers — it runs
-**only immediately before an actual force-deletion**, never during
-classification, so no report and no sweep ever pays for it; a branch is only
-ever deleted once; and route 2 runs only where route 1 has already failed, so
-the ordinary case pays for one route. Under `auto` it does not run at all, since
-that bar is ancestry-only.
-
-The numbers, since they exist now: a synthetic branch touching **800 files
-(438KB of diff) cross-checks in 0.12s**, and cost tracks diff size rather than
-history depth, since a scratch index built from base is all it reads.
-
-**A withheld branch says what was tried, not what is wrong with it.** "master
-does not reverse-apply this branch's diff" named a cause the check cannot
-establish: it reads as a finding about the branch, when all that actually
-happened is that corroboration was not obtained. The line is *could not
-corroborate*, followed by what each route reported — so the distinction the
-design insists on is the one the output makes.
-
-**Corroboration runs in classification, so "prunable" means it.** Running it only
-immediately before a `-D` meant the label and the act disagreed: the sweep's
-footer and prune's report both named branches the delete path would then refuse,
-and nothing the user could run would reconcile them. A label that promises
-something the tool will not do is worse than a slower sweep, so corroboration
-becomes part of deciding whether a branch is prunable at all — a rewritten-tier
-branch that cannot be corroborated is reported blocked, with the same *could not
-corroborate* wording it gets at the delete gate.
-
-It sits **last in the blocker ladder**, which is most of what makes it
-affordable. Ancestry-tier branches never need it — git's own `-d` agrees there,
-so a second opinion would be a third — and a branch already held by a worktree,
-`prune_keep`, or `prune_min_age` stays regardless of what corroboration would
-say. So it runs only for a branch that would otherwise be reported prunable and
-whose removal would need `-D`, which on the author's machine is currently none
-of them.
-
-**A budget, not a per-repo switch.** Measured across real repos, corroboration
-costs 20–90ms for an ordinary branch and can reach ~15s on one whose diff
-carries megabytes of binary:
-
-| branch shape | diff | corroboration |
-|---|---|---|
-| no changed files vs. the merge base | 0 KB | ~30 ms |
-| ordinary source branch | 135 KB | ~70 ms |
-| large text diff, 2579 files, no binaries | 1.2 MB | ~0.4 s |
-| binary-heavy vault branch, 441 binaries | 40 MB | ~12 s |
-
-Cost tracks **diff bytes, dominated by binary payload** — not repo size and not
-history depth. A 5314-file, 1.9GB repo answers a zero-diff branch in 11ms, the
-same as a tiny one; `--binary` diffs base85-encode blob contents, so a megabyte
-of binary is a megabyte of text to generate and parse. The expensive repos are
-therefore identifiable by shape rather than by size, which is exactly what makes
-a config toggle the wrong instrument: nobody should have to discover which of
-their repos are the ones.
-
-So the check gets a deadline instead — `corroborate_budget`, an ordinary
-inheritable setting, defaulting to `REPO_CORROBORATE_BUDGET` if set, else **2s**
-during a sweep, and **unlimited** under an explicit `repo prune --delete`. The
-sweep stays fast; the deliberate command pays whatever it takes. Exceeding the
-budget is a route declining — *could not corroborate* — which is what every
-other failure here already means, so it fails closed and adds no new rule.
-
-`0` switches the check off for a repo, returning it to an uncorroborated label —
-and it switches off the **sweep's** check only, which is the one whose cost
-anyone was worried about. An explicit `repo prune` still asks, because a command
-that reported a branch its own delete gate would then refuse is the disagreement
-this whole section exists to end. Zero is therefore the one number that has to
-mean two things — "off" to the setting, "no deadline" to the checker beneath it
-— and telling those apart is the only place that distinction is drawn.
-
-**A cache, because a sweep repeats.** Corroboration is a pure function of the
-branch's sha and the base's sha, both content-addressed, so an answer can never
-go stale: a ref that moves is simply a different key, not an invalidation. A
-cold outlier pays once rather than every sweep.
-
-It lives under `$XDG_CACHE_HOME/repo`, not the state directory the journal uses.
-The distinction is the one the `xdg` package already draws: state is for records
-whose whole value is that they survive, and a rederivable answer is not one.
-Deleting the cache costs a recomputation and nothing else.
-
-Only a **completed** outcome is cached, in either direction. "Merging the branch
-into base would change base" is content-determined and permanent, so it is
-cached exactly as a success is. A budget exceeded is not an outcome — it is a
-statement about this machine under this load — so it is not written, and the
-branch is re-checked next sweep at the same bounded cost.
-
-**Its cost is visible without new instrumentation.** `sync --verbose` already
-stamps each repo with its elapsed time and prints a per-action trace whose stamp
-is the gap since the previous line — the duration of the step it names, not an
-offset (§5.6). Corroboration records a trace line, so it shows up as its own
-cost next to the work it did. Prune keeps its own footer besides.
-
-**It runs under every prune mode, including `auto`.** Under `auto` the deletion
-bar is ancestry-only, so corroboration changes nothing about what `auto` removes.
-What it corrects is the *label*, which `auto` reports the same as every other
-mode — and the label is the thing that was lying.
-
-**The sweep names what it found.** Under `report` and `auto`, `sync`'s footer
-carries a line — `12 branches prunable across 4 repos — repo prune` — because
-until now prune candidates were only visible under `show_branches = "all"`,
-which made the feature invisible on default settings. The footer is a count, not
-a list: enumerating branches is `show_branches`'s job (§5.6), and doing it twice
-in one report would be the row/bullet disagreement that section exists to
-prevent.
+**The sweep names what it found.** Under `report`, `interactive` and `auto`,
+`sync`'s footer carries a line — `12 branches prunable across 4 repos — repo
+prune` — because until now prune candidates were only visible under
+`show_branches = "all"`, which made the feature invisible on default settings.
+The footer is a count, not a list: enumerating branches is `show_branches`'s job
+(§5.6), and doing it twice in one report would be the row/bullet disagreement
+that section exists to prevent. Under `auto` the count is of what was *left*,
+since what went is reported as it goes.
 
 That footer is what makes classification cost a *decision* rather than a
 surprise. Every mode but `manual` classifies each selected repo, which is what
@@ -1373,23 +1298,21 @@ sweep's observations, the footer, and any auto-prune — the same call, so the
 line you read and the deletion that follows can never disagree, and the tiers
 are not paid for twice.
 
-**The confidence path is the feature, not a preamble to it.** The four modes are
+**The confidence path is the feature, not a preamble to it.** The modes are
 rungs, and the order is deliberate:
 
 1. `report` with `show_branches = "all"` — watch verdicts against repos whose
    history you already know, deleting nothing.
-2. `repo prune --delete` — the same verdicts, one at a time, each explained
-   before you endorse it. Read the journal afterwards.
+2. `repo prune` — the same verdicts, one at a time, each explained before you
+   endorse it. Read the journal afterwards.
 3. `prune = "interactive"` — the walk-through moves into the daily sweep, so
    confidence accrues from ordinary use rather than a remembered errand.
 4. `prune = "auto"`, **per root rather than globally** — a monorepo's branch
    graveyard and a plugins root are different questions, and the answer is
-   allowed to differ.
+   allowed to differ. Set `prune_min_age` first.
 
 Each rung is reversible, and each produces the evidence for the next: the thing
 that earns `auto` is a run of `interactive` where the answer was always yes.
-Auto-pruning arriving *late* is not a limitation to apologise for — it is the
-mechanism by which it arrives justified.
 
 Still deliberately **not** here: the confirmation queue for branches deleted
 upstream that no tier can confirm landed, and any pruning of tags (below) or
@@ -1405,17 +1328,17 @@ they are recorded now because they are the reason the answer isn't "add
 
 - **The branch rails do not transfer.** Every deletion prune makes rests on a
   question it can answer — *has this work landed* — resolved by the three tiers
-  above and checked a second, independent time by `git branch -d`. **There is no
-  such question for a tag.** A tag's meaning is entirely external: it is a name
-  something outside this repo may depend on, and nothing in the object graph
-  says whether anyone still does. So no tag may ever be pruned by inference.
-  Whatever tag pruning arrives must be driven by an explicit glob list, the way
-  `force_tags` is (§3.6), and must default to touching nothing.
+  above. **There is no such question for a tag.** A tag's meaning is entirely
+  external: it is a name something outside this repo may depend on, and nothing
+  in the object graph says whether anyone still does. So no tag may ever be
+  pruned by inference. Whatever tag pruning arrives must be driven by an explicit
+  glob list, the way `force_tags` is (§3.6), and must default to touching nothing.
 - **A deleted tag has no reflog.** `core.logAllRefUpdates` covers `refs/heads`,
   `refs/remotes`, `refs/notes` and `HEAD` — not `refs/tags`. A pruned *branch*
-  is recoverable from `.git/logs/refs/heads/<name>` for the gc window; a pruned
-  tag leaves nothing behind. The asymmetry is why tag deletion cannot inherit
-  branch deletion's confidence, even under `--delete`.
+  is recoverable from `.git/logs/refs/heads/<name>` for the gc window, and its
+  content is reachable from the base branch besides; a pruned tag leaves nothing
+  behind and names an object nothing else may reach. The asymmetry is why tag
+  deletion cannot inherit branch deletion's confidence.
 - **A tag is independent reachability, which the `-D` path relies on.** Where a
   merge is visible only to the second or third tier, prune falls back to `-D`
   and git's own ancestry check no longer stands behind the decision. A tag
@@ -1748,9 +1671,11 @@ CLI (initial):
   omitted, inferred from the url's owner/host against the configured roots).
 - `repo scan [--record]` — discover on-disk repos; optionally reconcile into config.
 - `repo home <name[@branch]>` / `repo path <name> <rel>` — navigation primitives.
-- `repo prune` — explicit prune sweep: report-only by default, `--delete` to
-  remove (confirming per repo), `--dry-run` to see what a given invocation would
-  do, `--explain <branch>` for the evidence behind one verdict (§5.3).
+- `repo prune` — explicit prune sweep: deletes landed task branches, asking per
+  branch on a terminal. `--yes` skips the asking (and is required with no TTY),
+  `--dry-run` runs every check and removes nothing, `-v` prints the evidence
+  behind each verdict. The `prune` mode setting governs the *sweep*, not this
+  command (§5.3).
 - `repo list` — enumerate the declared ∪ discovered union for completion (§3.2).
 - `repo config <id | path>` — print one repo's fully resolved settings as TOML:
   config in, config out — the same shape you'd paste as an explicit `[[root.*.

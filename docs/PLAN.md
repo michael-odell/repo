@@ -105,7 +105,7 @@ prune work: bare+worktree provisioning (`provisionWorktree`/`syncWorktree`,
 DESIGN §4); `fork-pr` push (local fast-forward-then-push; the `gh repo sync`
 fast path stays a deferred optimisation — same fork state either way, so it's
 not required); `vendor` pins (branch/tag/`latest-tag`); `repo prune`'s
-confirmation UX (`--delete`'s per-branch walkthrough, the `-D` cross-check).
+confirmation UX (the per-branch walkthrough).
 
 **Fixed:** `supply-chain-mirror`'s second remote was being provisioned,
 fetched, and reviewed against as `upstream` — the fork-pr name — instead of
@@ -168,8 +168,8 @@ Still open:
   repair (a wrong URL, beyond the untrusted/upstream rename) and location —
   moving a container found at the wrong root/layout path. Only layout-shape
   conversion (`relayout.go`) and the untrusted/upstream rename exist so far.
-- Prune's own order (below), items 6-8: worktree removal, `prune =
-  "interactive"` in the sweep, `prune = "auto"`.
+- Prune is complete (see its own order below); `--fix`'s remaining §4.1
+  reconciliations are what's left of this stage.
 - `repo home`/`repo path`/`repo clone`/`repo review` are still stubs.
 - `wd-repos-update` -> `repo sync work` (the `work` root — tags are gone
   per DESIGN §10, so this is a root-name selector now, not `--tag work`).
@@ -194,12 +194,40 @@ found it:
    naming what it found. The verdicts get computed once per repo and shared.
 4. ✅ `--explain`, then the per-branch walk-through `repo prune --delete` uses it
    for. Explain comes first because the prompt is the explanation plus a question.
-5. ✅ The cross-check before every `-D`, timed and reported — reverse-apply,
-   falling back to `merge-tree` where base drifting over the hunk defeats it.
-6. Worktree removal, so `worktrees = true` repos stop being permanently blocked.
-7. `prune = "interactive"`: the same walk-through, in the sweep's serial phase,
+5. ~~The cross-check before every `-D`~~ — **landed, then removed.** See below.
+6. ✅ Landed on *any* important branch counts, not just `branches[0]`.
+7. ✅ Worktree removal on the §4.1 residue rules, so `worktrees = true` repos stop
+   being permanently blocked.
+8. ✅ The flag set `repo prune` should have had: it prunes, asks per branch,
+   `--yes` / `--dry-run` / `-v`. `--delete` and `--explain` gone.
+9. ✅ `prune = "interactive"`: the same walk-through, in the sweep's serial phase,
    TTY-only, degrading to `report` when there is nobody to ask.
-8. `auto`, last — after the reports above have been watched being right.
+10. ✅ `auto` — the same walk with the asking removed, gated by the ladder alone.
+
+**Removed, 2026-08-27: the `-D` cross-check (old item 5).** It gated a
+force-delete on the branch's change still being present in the base branch's
+*current tree*, to stop a merged-then-reverted branch being deleted as the "last
+copy" of its content. That premise is false: if a tier confirmed, the patch is
+carried by a commit reachable from the base branch — that is what `git cherry`
+searched — so a revert cannot remove it and the branch's deletion never takes the
+last copy. What the gate actually did was withhold branches for an unrelated
+reason: reverse-apply is textual and all-or-nothing across the whole diff, so any
+branch far enough behind for base to have edited within a hunk's three-line
+context window failed it, and `merge-tree` rescued only some of those. On a real
+work machine full of squash merges that produced pages of
+`merged (rewritten) — could not corroborate` — the tool refusing branches it had
+itself concluded were landed, in wording naming its own internals. Gone with it:
+`internal/gitx/crosscheck.go`, `internal/sync/corroborate.go`, the
+`corroborate_budget` setting, the answer cache under `$XDG_CACHE_HOME`, and the
+`auto` "unattended bar" that held rewritten-tier branches back on the same
+reasoning. DESIGN §5.3 records why, so it isn't re-proposed.
+
+**Also, same change: the config-honoured rule (DESIGN §3.4).** `prune = "auto"`
+had been set in a live registry for months while no code consumed it — valid key,
+valid value, no effect, no warning. Enums now declare which of their values are
+*implemented*, the loader rejects the rest, and a test per consumer holds that
+declaration to the code by asserting each implemented value produces a
+distinguishable outcome.
 
 ### Stage 7 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`
