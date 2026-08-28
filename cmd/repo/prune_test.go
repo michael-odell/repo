@@ -130,7 +130,7 @@ func TestDeleteRecordsWhatItRemoved(t *testing.T) {
 	sha, _ := gitx.RevParse(dir, "landed")
 
 	var out bytes.Buffer
-	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true}); err != nil {
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Yes: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -168,7 +168,7 @@ func TestNothingIsDeletedWithoutAJournal(t *testing.T) {
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Delete: true, Yes: true})
+	err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir), pruneOpts{Yes: true})
 	if err == nil {
 		t.Fatal("prune deleted branches it could not record")
 	}
@@ -208,7 +208,7 @@ func TestWalkthroughAsksPerBranch(t *testing.T) {
 	// Branches are walked in the order Classify returns them (git's ref order):
 	// "landed" then "second". Keep the first, delete the second.
 	err := runPrune(&out, strings.NewReader("n\ny\n"), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Interactive: true})
+		pruneOpts{Interactive: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestWalkthroughShowsEvidenceBeforeAsking(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader("n\n"), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		pruneOpts{Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()
@@ -254,7 +254,7 @@ func TestWalkthroughQuitStopsEverything(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader("q\n"), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		pruneOpts{Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !hasBranch(t, dir, "landed") || !hasBranch(t, dir, "second") {
@@ -271,7 +271,7 @@ func TestWalkthroughEndOfInputIsNotConsent(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		pruneOpts{Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
 	if !hasBranch(t, dir, "landed") {
@@ -295,7 +295,7 @@ func TestWalkthroughAllCoversOnlyItsRepo(t *testing.T) {
 	// "a" clears the first repo; the second repo asks again and gets nothing
 	// but an empty line, which is a no.
 	if err := runPrune(&out, strings.NewReader("a\n\n"), repos,
-		pruneOpts{Delete: true, Interactive: true}); err != nil {
+		pruneOpts{Interactive: true}); err != nil {
 		t.Fatal(err)
 	}
 	if hasBranch(t, first, "landed") || hasBranch(t, first, "second") {
@@ -306,15 +306,20 @@ func TestWalkthroughAllCoversOnlyItsRepo(t *testing.T) {
 	}
 }
 
-// TestExplainShowsEachTierItTried: an explanation that listed only the tier
+// TestVerboseShowsEachTierItTried: an explanation that listed only the tier
 // that answered would read as a conclusion with its working erased — the tiers
 // that found nothing are most of what makes the answer believable.
-func TestExplainShowsEachTierItTried(t *testing.T) {
+//
+// -v with --dry-run is the "explain this to me" invocation, which is why no
+// separate --explain exists for it to disagree with (DESIGN §5.3).
+func TestVerboseShowsEachTierItTried(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	if err := explainBranch(&out, selectedRepo(t, wd, dir), "landed"); err != nil {
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{DryRun: true, Verbose: true}); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()
@@ -324,22 +329,26 @@ func TestExplainShowsEachTierItTried(t *testing.T) {
 	if !strings.Contains(body, "git branch -d") {
 		t.Errorf("explanation does not say how the branch would be removed:\n%s", body)
 	}
+	if !hasBranch(t, dir, "landed") {
+		t.Error("a verbose dry run deleted something")
+	}
 }
 
-// TestExplainSaysWhenItHasNothingToExplain: silence would read as "nothing to
-// say about that branch", when the truth is usually a typo or an important
-// branch, which is never classified.
-func TestExplainSaysWhenItHasNothingToExplain(t *testing.T) {
+// TestQuietRunExplainsNothing: the verdict is a claim and stays terse. Naming a
+// tier on the report line would dress "how the search went" as a finding about
+// how the branch was merged (DESIGN §5.3).
+func TestQuietRunExplainsNothing(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
 	dir := cloneWithLandedBranch(t, wd, "proj")
 
 	var out bytes.Buffer
-	err := explainBranch(&out, selectedRepo(t, wd, dir), "main")
-	if err == nil {
-		t.Fatal("explaining an important branch reported success")
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{DryRun: true}); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "important branches") {
-		t.Errorf("the error does not explain why main has no verdict: %v", err)
+	if strings.Contains(out.String(), "ancestry") {
+		t.Errorf("the terse report leaked its tiers:\n%s", out.String())
 	}
 }
 
@@ -389,7 +398,7 @@ func TestARevertedSquashMergeIsStillPrunable(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Yes: true}); err != nil {
+		pruneOpts{Yes: true}); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()
@@ -421,7 +430,7 @@ func TestPruningRemovesTheWorktreeToo(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Yes: true}); err != nil {
+		pruneOpts{Yes: true}); err != nil {
 		t.Fatal(err)
 	}
 	body := out.String()
@@ -457,5 +466,53 @@ func TestDryRunNamesTheWorktreeItWouldRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(tree); err != nil {
 		t.Errorf("a dry run removed the worktree: %v", err)
+	}
+}
+
+// TestNoTerminalNoYesDeletesNothing: prune deletes by default, and the thing
+// that keeps a mistyped one cheap is that its default is also to *ask*. With
+// nobody to ask and no --yes standing in for them, reporting is all that is
+// left — and saying so beats a silent no-op (DESIGN §5.3).
+func TestNoTerminalNoYesDeletesNothing(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if !hasBranch(t, dir, "landed") {
+		t.Fatal("prune deleted a branch with nobody to ask and no --yes")
+	}
+	if !strings.Contains(out.String(), "no terminal to ask") {
+		t.Errorf("the run did not say why it deleted nothing:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "--yes") {
+		t.Errorf("the run did not say how to prune anyway:\n%s", out.String())
+	}
+}
+
+// TestTheJournalSaysWhatDidTheDeleting: "--delete" is gone, and a record that
+// still named it would be describing a flag that no longer exists. The mode is
+// how a reader tells a command they typed from a sweep that pruned unattended.
+func TestTheJournalSaysWhatDidTheDeleting(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	wd := t.TempDir()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+
+	var out bytes.Buffer
+	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
+		pruneOpts{Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(state, "repo", "prune.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "prune --yes") {
+		t.Errorf("the record does not say what removed the branch:\n%s", body)
 	}
 }

@@ -17,19 +17,24 @@ import (
 	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
 
-// cmdPrune reports — and, only when asked twice, removes — local task branches
-// whose work has landed (DESIGN §5.3).
+// cmdPrune removes local task branches whose work has landed (DESIGN §5.3).
 //
-// Report-only by default. This is the first command that deletes anything, so
-// it opens with the safest possible contract: run it as often as you like and
-// it changes nothing. `--delete` is the second ask, and on a terminal it still
-// confirms per repo. Auto-pruning as part of `sync` is deliberately not here.
+// It prunes, because that is its name, and it asks first: on a terminal every
+// candidate is walked one at a time with its evidence in front of you. There is
+// no --delete. A separate flag to make a command called *prune* actually prune
+// buys nothing --dry-run does not buy better — one previews, the other
+// confirms, and requiring both to mean yes only teaches the habit of passing
+// both.
+//
+// With no terminal there is nobody to ask, so nothing is deleted unless --yes
+// says so: a script that meant to prune says so, and a mistyped `repo prune`
+// stays cheap.
 func cmdPrune(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("prune", flag.ContinueOnError)
-	del := fs.Bool("delete", false, "actually remove the prunable branches (asks first on a terminal)")
-	yes := fs.Bool("yes", false, "with --delete, skip the confirmation prompt")
-	dry := fs.Bool("dry-run", false, "show what --delete would do, without deleting or recording anything")
-	explain := fs.String("explain", "", "print the evidence behind one branch's verdict, and stop")
+	yes := fs.Bool("yes", false, "delete without asking (required when there is no terminal)")
+	dry := fs.Bool("dry-run", false, "run every check, delete nothing, and print what would go")
+	verbose := fs.Bool("verbose", false, "print the evidence behind every verdict")
+	fs.BoolVar(verbose, "v", false, "shorthand for --verbose")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -51,34 +56,46 @@ func cmdPrune(_ context.Context, args []string) error {
 	}
 	sort.Slice(selected, func(i, j int) bool { return repoName(selected[i]) < repoName(selected[j]) })
 
-	if *explain != "" {
-		return explainBranch(os.Stdout, selected, *explain)
-	}
 	// Whether anyone is there to answer is settled once, here, rather than
 	// being re-checked wherever a question comes up — the walk-through and the
 	// tests then differ only in what they are reading from.
 	return runPrune(os.Stdout, os.Stdin, selected,
-		pruneOpts{Delete: *del, Yes: *yes, DryRun: *dry, Interactive: isTTY()})
+		pruneOpts{Yes: *yes, DryRun: *dry, Verbose: *verbose, Interactive: isTTY()})
 }
 
 // pruneOpts is what the flags decided, separated from how they were parsed so
 // the sweep's own prune paths (DESIGN §5.3) and the tests reach the same code
 // the command does.
 type pruneOpts struct {
-	Delete bool
-	Yes    bool
-	DryRun bool
+	Yes     bool
+	DryRun  bool
+	Verbose bool
 	// Interactive is whether there is someone to ask. False means the
 	// walk-through cannot run, which is a reason to delete nothing rather than
 	// a reason to proceed unasked (DESIGN §5.3).
 	Interactive bool
+	// Mode is what the journal records as having done the deleting. Empty for
+	// the command, which derives it below; the sweep sets "interactive" or
+	// "auto", so a record says which of the two removed a branch.
+	Mode string
 }
 
-// deleting reports whether this run walks the deletion path at all. --dry-run
-// implies it rather than requiring --delete beside it: the only question a dry
-// run answers is "what would deleting do", so demanding both flags would be
-// ceremony (DESIGN §5.3).
-func (o pruneOpts) deleting() bool { return o.Delete || o.DryRun }
+// deleting reports whether this run may remove anything. Pruning is the
+// default, so the only thing that stops it is having nobody to ask and no --yes
+// standing in for them.
+func (o pruneOpts) deleting() bool { return o.DryRun || o.Yes || o.Interactive }
+
+// mode names what did the deleting, for the journal.
+func (o pruneOpts) mode() string {
+	switch {
+	case o.Mode != "":
+		return o.Mode
+	case o.Yes:
+		return "prune --yes"
+	default:
+		return "prune"
+	}
+}
 
 // runPrune classifies every selected repo, reports each branch's verdict, and
 // removes the prunable ones when asked.
@@ -121,6 +138,12 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 				prunable = append(prunable, v)
 			}
 			fmt.Fprintf(tw, "    %s\t  %s\t%s\n", glyph, v.Name, v.Summary())
+			if opts.Verbose {
+				// Written through the tabwriter rather than around it: these
+				// lines carry no tabs, so they pass through as single cells and
+				// the branch rows above and below stay in one set of columns.
+				explainVerdict(tw, v, "        ")
+			}
 		}
 		total += len(prunable)
 
@@ -160,8 +183,10 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 		fmt.Fprintln(w, "\nnothing prunable")
 	case opts.DryRun:
 		fmt.Fprintf(w, "\n%d branch(es) would be deleted — re-run without --dry-run\n", pruned)
-	case !opts.Delete:
-		fmt.Fprintf(w, "\n%d branch(es) prunable — re-run with --delete to remove them\n", total)
+	case !opts.deleting():
+		// Nobody to ask and no --yes standing in for them. Reporting is all
+		// that is left, and saying so beats a silent no-op.
+		fmt.Fprintf(w, "\n%d branch(es) prunable — no terminal to ask, so nothing was deleted; re-run with --yes\n", total)
 	default:
 		fmt.Fprintf(w, "\n%d branch(es) deleted\n", pruned)
 		// Only when something was actually written. The journal opens before the
@@ -214,7 +239,7 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 			Branch:  v.Name,
 			SHA:     sha,
 			Verdict: v.State.String(),
-			Mode:    "--delete",
+			Mode:    opts.mode(),
 		}
 		// `-d` wherever git's own ancestry check can confirm the merge, so
 		// two independent judgements have to agree before a branch goes;
@@ -269,16 +294,16 @@ func ignoredNote(v syncpkg.Verdict) string {
 // stop reading them.
 func approve(w io.Writer, walk *walkthrough, name string, prunable []syncpkg.Verdict, opts pruneOpts) (approved []syncpkg.Verdict, quit bool) {
 	switch {
-	case opts.Yes:
-		return prunable, false
 	case opts.DryRun:
 		// The question is shown, not asked: an answer that changes nothing only
 		// teaches the habit of typing y (DESIGN §5.3).
+		if opts.Yes {
+			return prunable, false
+		}
 		fmt.Fprintf(w, "  would ask about %d branch(es) in %s, one at a time\n", len(prunable), name)
 		return prunable, false
-	case !opts.Interactive:
-		fmt.Fprintf(w, "    (not a terminal — re-run with --yes to delete these)\n")
-		return nil, false
+	case opts.Yes:
+		return prunable, false
 	}
 
 	fmt.Fprintf(w, "  %s\n", name)
@@ -349,37 +374,6 @@ func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict) decision {
 			fmt.Fprintf(w, "    y = delete · n = keep · a = yes to the rest of this repo · q = stop\n")
 		}
 	}
-}
-
-// explainBranch prints the evidence behind one named branch's verdict and
-// stops, deleting nothing. It searches every selected repo rather than
-// requiring the repo be named too: a branch name is usually enough to be
-// unambiguous, and when it isn't, showing both is more useful than an error.
-func explainBranch(w io.Writer, selected []model.Repo, branch string) error {
-	found := 0
-	for _, r := range selected {
-		container := r.Container()
-		if !gitx.IsRepo(container) {
-			continue
-		}
-		verdicts, err := syncpkg.Classify(container, r)
-		if err != nil {
-			continue
-		}
-		for _, v := range verdicts {
-			if v.Name != branch {
-				continue
-			}
-			found++
-			fmt.Fprintf(w, "  %s\n", repoName(r))
-			explainVerdict(w, v, "    ")
-		}
-	}
-	if found == 0 {
-		return fmt.Errorf("no branch named %q among the selected repos "+
-			"(important branches are not classified: they are what the others are measured against)", branch)
-	}
-	return nil
 }
 
 func isTTY() bool {

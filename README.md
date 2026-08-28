@@ -331,11 +331,13 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   (config in, config out) — the same shape you could paste as a
   `[[root.*.repo]]`/`[[dir.*.repo]]` override. `--explain` instead prints one line
   per field: its value, and which link in the root/dir chain last set it.
-- `prune` — report which local branches have landed, and remove them when asked.
-  Report-only by default. `--delete` asks per branch with the evidence in front
-  of you (`y`/`n`/`a`/`q`); `--yes` skips the questions; `--dry-run` shows what
-  deleting would do without touching anything; `--explain <branch>` prints the
-  reasoning behind one verdict. Every deletion is recorded (below).
+- `prune` — remove the local branches whose work has landed. It prunes, and it
+  asks: on a terminal every candidate is walked one at a time with its evidence
+  in front of you (`y`/`n`/`a`/`q`). `--yes` skips the questions and is required
+  when there is no terminal, so a mistyped `repo prune` costs nothing and a
+  script that meant it says so; `--dry-run` runs every check and removes
+  nothing; `-v` prints the evidence behind every verdict — `prune -v --dry-run`
+  is the "explain this to me" invocation. Every deletion is recorded (below).
 - `version` — print version information
 - `clone`, `home`, `path`, `review` — planned, not yet implemented
 
