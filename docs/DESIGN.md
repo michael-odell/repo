@@ -1122,6 +1122,12 @@ question: the mode exists to decide what happens when nobody asked, and asking
 is the whole content of running the command. A repo set to `manual` still prunes
 on request.
 
+`--no-prune` opts one run out of whatever the mode says, without editing
+anything: the sweep classifies and reports as `report` does, and the walk (or
+the deleting) does not happen. It is for the quick sync where stopping to
+answer for every landed branch is not what you came for — so it withdraws the
+*acting*, not the telling, and the footer still names what is waiting.
+
 `report` is the **default**, and `interactive` is the rung worth starting on:
 the sweep classifies as `report` does, then walks each candidate in turn — the
 branch, its verdict, the evidence behind it, and a y/n. Watching a decision and
@@ -1281,8 +1287,14 @@ prune` — because until now prune candidates were only visible under
 `show_branches = "all"`, which made the feature invisible on default settings.
 The footer is a count, not a list: enumerating branches is `show_branches`'s job
 (§5.6), and doing it twice in one report would be the row/bullet disagreement
-that section exists to prevent. Under `auto` the count is of what was *left*,
-since what went is reported as it goes.
+that section exists to prevent.
+
+What the footer *advises* depends on whether this run is about to act. The
+report is printed before the walk, so under `interactive` or `auto` the
+`— repo prune` hint would be telling someone to run a command the next three
+lines perform for them; it is dropped there and kept everywhere else —
+including under `--no-prune`, and under `interactive` with no terminal, where
+running it by hand really is the only way those branches go.
 
 That footer is what makes classification cost a *decision* rather than a
 surprise. Every mode but `manual` classifies each selected repo, which is what
@@ -1663,9 +1675,10 @@ binary", which is exactly the shim's job.
 
 CLI (initial):
 
-- `repo sync [<root> | <path> | <name>] [--if-due] [--force] [--fix] [-n]` — the
-  engine above; the positional arg scopes the sweep to a root, a path subtree, or a
+- `repo sync [<root> | <path> | <name>] [--if-due] [--force] [--fix] [--no-prune] [-n]` —
+  the engine above; the positional arg scopes the sweep to a root, a path subtree, or a
   single repo. `--fix` applies the config↔disk reconciliations `sync` surfaces (§4.1).
+  `--no-prune` opts this run out of the `prune` mode's acting, keeping its reporting (§5.3).
   `-n`/`--dry-run` still fetches (branches only, an already-configured remote only) so
   its report is current rather than stale; see §5.7 for exactly what it does and does
   not write.

@@ -340,6 +340,9 @@ Run `repo --help` for the full list and `repo <command> --help` for details.
   (config in, config out) — the same shape you could paste as a
   `[[root.*.repo]]`/`[[dir.*.repo]]` override. `--explain` instead prints one line
   per field: its value, and which link in the root/dir chain last set it.
+- `sync` also takes `--no-prune`: skip acting on landed branches for this run
+  (the report still names them), for when a quick sync is not the moment to
+  answer for every one of them.
 - `prune` — remove the local branches whose work has landed. It prunes, and it
   asks: on a terminal every candidate is walked one at a time with its evidence
   in front of you (`y`/`n`/`a`/`q`). `--yes` skips the questions and is required

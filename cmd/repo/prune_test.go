@@ -738,3 +738,63 @@ func TestEveryPruneModeIsImplemented(t *testing.T) {
 		})
 	}
 }
+
+// TestTheFooterDoesNotAdviseWhatTheRunIsAboutToDo: under `interactive` or
+// `auto` the walk follows three lines later, so pointing at `repo prune` there
+// is the report disagreeing with the run. With --no-prune — or with nobody to
+// ask, where interactive degrades to report — running it by hand is the only
+// way those branches go, so the hint belongs.
+func TestTheFooterDoesNotAdviseWhatTheRunIsAboutToDo(t *testing.T) {
+	results := []syncpkg.Result{{
+		Name: "acme/one", Workflow: model.UpstreamPush,
+		Outcome: syncpkg.UpToDate, Prunable: nVerdicts(3),
+	}}
+	for _, tc := range []struct {
+		name      string
+		willPrune bool
+		wantHint  bool
+	}{
+		{"the sweep will prune them", true, false},
+		{"nothing will", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			renderSync(&buf, results, syncpkg.Options{}, tc.willPrune)
+			body := buf.String()
+			if !strings.Contains(body, "3 branch(es) prunable") {
+				t.Fatalf("the footer lost its count:\n%s", body)
+			}
+			if got := strings.Contains(body, "— repo prune"); got != tc.wantHint {
+				t.Errorf("hint = %v, want %v:\n%s", got, tc.wantHint, body)
+			}
+		})
+	}
+}
+
+// TestAnyRepoPrunesReadsTheMode: what decides the footer's advice is whether
+// this run will act, which is the mode plus whether there is anyone to ask.
+// `interactive` with no terminal degrades to report, so it is not acting.
+func TestAnyRepoPrunesReadsTheMode(t *testing.T) {
+	wd := t.TempDir()
+	r, results, _ := sweptRepo(t, wd, syncpkg.PruneAuto)
+	if !anyRepoPrunes([]model.Repo{r}, results) {
+		t.Error("auto with candidates is going to prune")
+	}
+
+	r.Prune = syncpkg.PruneReport
+	if anyRepoPrunes([]model.Repo{r}, results) {
+		t.Error("report never acts")
+	}
+
+	// isTTY() is false under test, which is exactly the degraded case.
+	r.Prune = syncpkg.PruneInteractive
+	if anyRepoPrunes([]model.Repo{r}, results) {
+		t.Error("interactive with no terminal degrades to report, so it does not act")
+	}
+
+	r.Prune = syncpkg.PruneAuto
+	results[0].Err = errFailedSync
+	if anyRepoPrunes([]model.Repo{r}, results) {
+		t.Error("a failed repo is left alone, so it is not about to be pruned")
+	}
+}

@@ -22,6 +22,7 @@ func cmdSync(_ context.Context, args []string) error {
 	force := fs.Bool("force", false, "ignore cadence")
 	fix := fs.Bool("fix", false, "apply the config↔disk reconciliations sync reports (after syncing)")
 	loseIgnored := fs.Bool("lose-ignored", false, "with --fix, discard .gitignore'd files without prompting")
+	noPrune := fs.Bool("no-prune", false, "don't act on landed branches this run; still report them")
 	var dryRun, dryRunN, verbose, verboseV bool
 	fs.BoolVar(&dryRun, "dry-run", false, "show planned actions without changing anything")
 	fs.BoolVar(&dryRunN, "n", false, "alias for --dry-run")
@@ -61,10 +62,16 @@ func cmdSync(_ context.Context, args []string) error {
 	}
 	results := syncpkg.Run(reg, selected, opts)
 	prog.stopAndClear()
-	renderSync(os.Stdout, results, opts)
+	// Whether the walk that follows will act decides how the footer reads:
+	// pointing at `repo prune` and then pruning them itself would be the report
+	// disagreeing with the run three lines later.
+	willPrune := !*noPrune && anyRepoPrunes(selected, results)
+	renderSync(os.Stdout, results, opts, willPrune)
 	// After the report, so the count in the footer is what the walk is about,
 	// and in the serial phase, where a question can be asked and read.
-	sweepPrune(os.Stdout, os.Stdin, selected, results, opts)
+	if !*noPrune {
+		sweepPrune(os.Stdout, os.Stdin, selected, results, opts)
+	}
 	for _, r := range results {
 		if r.Err != nil {
 			return fmt.Errorf("%d repo(s) failed", countFailed(results))
@@ -144,7 +151,11 @@ func expandPath(p string) string {
 	return p
 }
 
-func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
+// renderSync writes the report. willPrune says whether this run is about to act
+// on the landed branches it is naming, which changes only the footer's advice —
+// telling someone to run `repo prune` immediately before doing it for them is
+// the kind of disagreement §5.6 exists to prevent.
+func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options, willPrune bool) {
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 
 	// A branch row's glyph is itself indented past the repo row's (not just
@@ -226,8 +237,34 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 	// not a list: enumerating branches is show_branches' job, and doing it twice
 	// in one report is the row/bullet disagreement §5.6 exists to prevent.
 	if branches, repos := prunableTally(results); branches > 0 {
-		fmt.Fprintf(w, "%d branch(es) prunable across %d repo(s) — repo prune\n", branches, repos)
+		hint := " — repo prune"
+		if willPrune {
+			hint = ""
+		}
+		fmt.Fprintf(w, "%d branch(es) prunable across %d repo(s)%s\n", branches, repos, hint)
 	}
+}
+
+// anyRepoPrunes reports whether the pass after the report will act on anything:
+// some selected repo has candidates and a mode that removes them. Under
+// `interactive` with no terminal the walk degrades to `report`, so that is not
+// acting either — and the footer should say `repo prune` in exactly that case,
+// since running it by hand is then the only way these branches go.
+func anyRepoPrunes(repos []model.Repo, results []syncpkg.Result) bool {
+	for i, r := range repos {
+		if i >= len(results) || results[i].Err != nil || len(results[i].Prunable) == 0 {
+			continue
+		}
+		switch r.Prune {
+		case syncpkg.PruneAuto:
+			return true
+		case syncpkg.PruneInteractive:
+			if isTTY() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // prunableTally totals the branches prune would offer to remove, and how many

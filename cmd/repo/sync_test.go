@@ -24,7 +24,7 @@ func renderedLines(t *testing.T, opts syncpkg.Options) []string {
 		},
 	}
 	var buf bytes.Buffer
-	renderSync(&buf, results, opts)
+	renderSync(&buf, results, opts, false)
 	return strings.Split(buf.String(), "\n")
 }
 
@@ -71,7 +71,7 @@ func TestRenderSyncVerboseShowsWhyItFailed(t *testing.T) {
 		Elapsed:  2*time.Minute + 40*time.Second,
 	}}
 	var buf bytes.Buffer
-	renderSync(&buf, results, syncpkg.Options{Verbose: true})
+	renderSync(&buf, results, syncpkg.Options{Verbose: true}, false)
 
 	line := lineWith(t, strings.Split(buf.String(), "\n"), "acme/broken")
 	if !strings.Contains(line, "repository not found") {
@@ -93,7 +93,7 @@ func TestRenderSyncTallyDoesNotUnderstateFailures(t *testing.T) {
 		{Name: "acme/four", Outcome: syncpkg.UpToDate, Detail: "up to date"},
 	}
 	var buf bytes.Buffer
-	renderSync(&buf, results, syncpkg.Options{})
+	renderSync(&buf, results, syncpkg.Options{}, false)
 	tally := lineWith(t, strings.Split(buf.String(), "\n"), "failed ·")
 
 	if strings.Contains(tally, "need attention") {
@@ -122,7 +122,7 @@ func TestRenderSyncVerboseTimesEachStep(t *testing.T) {
 		},
 	}}
 	var buf bytes.Buffer
-	renderSync(&buf, results, syncpkg.Options{Verbose: true})
+	renderSync(&buf, results, syncpkg.Options{Verbose: true}, false)
 	lines := strings.Split(buf.String(), "\n")
 
 	// The fetch took the four minutes; the branch check took two seconds.
@@ -147,7 +147,7 @@ func TestRenderSyncNamesTheSlowestRepo(t *testing.T) {
 		{Name: "acme/two", Workflow: model.UpstreamPush, Detail: "up to date", Elapsed: 3 * time.Second},
 	}
 	var buf bytes.Buffer
-	renderSync(&buf, quick, syncpkg.Options{})
+	renderSync(&buf, quick, syncpkg.Options{}, false)
 	if strings.Contains(buf.String(), "slowest") {
 		t.Errorf("a sweep with nothing slow in it should not name a slowest repo:\n%s", buf.String())
 	}
@@ -155,14 +155,14 @@ func TestRenderSyncNamesTheSlowestRepo(t *testing.T) {
 	slow := append([]syncpkg.Result{}, quick...)
 	slow[1].Elapsed = 4 * time.Minute
 	buf.Reset()
-	renderSync(&buf, slow, syncpkg.Options{})
+	renderSync(&buf, slow, syncpkg.Options{}, false)
 	if !strings.Contains(buf.String(), "slowest: acme/two 4m0s") {
 		t.Errorf("want the slow repo named with its duration:\n%s", buf.String())
 	}
 
 	// One repo alone is the whole sweep; naming it says nothing you didn't watch.
 	buf.Reset()
-	renderSync(&buf, slow[1:], syncpkg.Options{})
+	renderSync(&buf, slow[1:], syncpkg.Options{}, false)
 	if strings.Contains(buf.String(), "slowest") {
 		t.Errorf("a single-repo sweep should not name a slowest:\n%s", buf.String())
 	}
@@ -202,7 +202,7 @@ func TestRenderSyncNamesPrunableBranches(t *testing.T) {
 		{Name: "acme/three", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate},
 	}
 	var buf bytes.Buffer
-	renderSync(&buf, results, syncpkg.Options{})
+	renderSync(&buf, results, syncpkg.Options{}, false)
 	out := buf.String()
 
 	if !strings.Contains(out, "12 branch(es) prunable across 2 repo(s)") {
@@ -221,7 +221,7 @@ func TestRenderSyncSaysNothingAboutPruningWhenThereIsNothing(t *testing.T) {
 		{Name: "acme/one", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate},
 	}
 	var buf bytes.Buffer
-	renderSync(&buf, results, syncpkg.Options{})
+	renderSync(&buf, results, syncpkg.Options{}, false)
 	if strings.Contains(buf.String(), "prunable") {
 		t.Errorf("footer mentions pruning with nothing to prune:\n%s", buf.String())
 	}
