@@ -191,10 +191,14 @@ func TestRenderSyncBranchRowsStayAligned(t *testing.T) {
 // they never lift a repo's glyph — and outside show_branches = "all" they get
 // no line either. Without the footer, the only way to learn prune had anything
 // to offer was to already know to ask it.
+// nVerdicts is n placeholder verdicts, for the tally the footer renders — which
+// only ever asks how many there are.
+func nVerdicts(n int) []syncpkg.Verdict { return make([]syncpkg.Verdict, n) }
+
 func TestRenderSyncNamesPrunableBranches(t *testing.T) {
 	results := []syncpkg.Result{
-		{Name: "acme/one", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: 3},
-		{Name: "acme/two", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: 9},
+		{Name: "acme/one", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: nVerdicts(3)},
+		{Name: "acme/two", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate, Prunable: nVerdicts(9)},
 		{Name: "acme/three", Workflow: model.UpstreamPush, Outcome: syncpkg.UpToDate},
 	}
 	var buf bytes.Buffer

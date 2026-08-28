@@ -62,6 +62,9 @@ func cmdSync(_ context.Context, args []string) error {
 	results := syncpkg.Run(reg, selected, opts)
 	prog.stopAndClear()
 	renderSync(os.Stdout, results, opts)
+	// After the report, so the count in the footer is what the walk is about,
+	// and in the serial phase, where a question can be asked and read.
+	sweepPrune(os.Stdout, os.Stdin, selected, results, opts)
 	for _, r := range results {
 		if r.Err != nil {
 			return fmt.Errorf("%d repo(s) failed", countFailed(results))
@@ -231,8 +234,8 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options) {
 // repos hold them.
 func prunableTally(results []syncpkg.Result) (branches, repos int) {
 	for _, r := range results {
-		if r.Prunable > 0 {
-			branches += r.Prunable
+		if len(r.Prunable) > 0 {
+			branches += len(r.Prunable)
 			repos++
 		}
 	}

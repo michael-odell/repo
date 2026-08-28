@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,7 +12,12 @@ import (
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
+	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
+
+// errFailedSync stands in for whatever went wrong in a repo the sweep could not
+// finish. What it says does not matter; that it is non-nil does.
+var errFailedSync = errors.New("fetch failed")
 
 // cloneWithLandedBranch builds a clone whose `landed` branch is an ancestor of
 // main — the plainest prunable case, and the only tier `git branch -d` will
@@ -514,5 +521,154 @@ func TestTheJournalSaysWhatDidTheDeleting(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "prune --yes") {
 		t.Errorf("the record does not say what removed the branch:\n%s", body)
+	}
+}
+
+// sweptRepo is one repo, one landed branch, and the sweep result the sweep
+// would have produced for it — the verdicts carried out of classification
+// rather than recomputed, which is what makes the footer's count and the
+// deletion that follows the same decision.
+func sweptRepo(t *testing.T, wd, mode string) (model.Repo, []syncpkg.Result, string) {
+	t.Helper()
+	dir := cloneWithLandedBranch(t, wd, "proj")
+	r := resolved(t, testRegistry(t, wd), dir)
+	r.Prune = mode
+	verdicts, err := syncpkg.Classify(dir, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prunable []syncpkg.Verdict
+	for _, v := range verdicts {
+		if v.Prunable {
+			prunable = append(prunable, v)
+		}
+	}
+	if len(prunable) != 1 {
+		t.Fatalf("expected one prunable branch, got %d", len(prunable))
+	}
+	return r, []syncpkg.Result{{Name: repoName(r), Prunable: prunable}}, dir
+}
+
+// TestSweepAutoDeletes: `auto` is the walk with the asking removed. What holds
+// a branch back there is the ladder and nothing else — the old "unattended bar"
+// that kept rewritten-tier branches for want of git's second opinion is gone
+// (DESIGN §5.3).
+func TestSweepAutoDeletes(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	wd := t.TempDir()
+	r, results, dir := sweptRepo(t, wd, syncpkg.PruneAuto)
+
+	var out bytes.Buffer
+	sweepPrune(&out, strings.NewReader(""), []model.Repo{r}, results, syncpkg.Options{})
+
+	if hasBranch(t, dir, "landed") {
+		t.Fatalf("prune = auto left a prunable branch behind:\n%s", out.String())
+	}
+	body, err := os.ReadFile(filepath.Join(state, "repo", "prune.log"))
+	if err != nil {
+		t.Fatalf("auto pruned without a record: %v", err)
+	}
+	// Which of the two modes did it is the thing a reader of the journal can't
+	// reconstruct from anywhere else.
+	if !strings.Contains(string(body), "\tauto\t") {
+		t.Errorf("the record does not say auto removed it:\n%s", body)
+	}
+}
+
+// TestSweepReportModesDeleteNothing: `manual` and `report` classify (or don't)
+// and stop. The footer has already said what was found; acting on it is the
+// other two modes' job.
+func TestSweepReportModesDeleteNothing(t *testing.T) {
+	for _, mode := range []string{syncpkg.PruneManual, syncpkg.PruneReport} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			wd := t.TempDir()
+			r, results, dir := sweptRepo(t, wd, mode)
+
+			var out bytes.Buffer
+			sweepPrune(&out, strings.NewReader(""), []model.Repo{r}, results, syncpkg.Options{})
+
+			if !hasBranch(t, dir, "landed") {
+				t.Errorf("prune = %q deleted a branch:\n%s", mode, out.String())
+			}
+		})
+	}
+}
+
+// TestSweepAutoLeavesAFailedRepoAlone: a repo whose sync failed was not fully
+// observed, so its verdicts are about a state nobody vouched for. Pruning on
+// them would be acting on a report that never finished.
+func TestSweepAutoLeavesAFailedRepoAlone(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	r, results, dir := sweptRepo(t, wd, syncpkg.PruneAuto)
+	results[0].Err = errFailedSync
+
+	var out bytes.Buffer
+	sweepPrune(&out, strings.NewReader(""), []model.Repo{r}, results, syncpkg.Options{})
+
+	if !hasBranch(t, dir, "landed") {
+		t.Errorf("a failed repo was pruned anyway:\n%s", out.String())
+	}
+}
+
+// TestSweepDryRunSaysWhatItWouldPrune: `sync -n` must not delete under any
+// mode, and must still say what the mode would have done — a preview that
+// silently omitted the pruning would understate the run.
+func TestSweepDryRunSaysWhatItWouldPrune(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	r, results, dir := sweptRepo(t, wd, syncpkg.PruneAuto)
+
+	var out bytes.Buffer
+	sweepPrune(&out, strings.NewReader(""), []model.Repo{r}, results, syncpkg.Options{DryRun: true})
+
+	if !hasBranch(t, dir, "landed") {
+		t.Fatal("a dry-run sweep pruned")
+	}
+	if !strings.Contains(out.String(), "would be pruned") {
+		t.Errorf("the dry run did not mention the pruning it skipped:\n%s", out.String())
+	}
+}
+
+// TestSweepInteractiveWalksAndObeysNo: the rung that earns `auto`. A verdict
+// has to get past a person one branch at a time, and a no keeps the branch.
+func TestSweepInteractiveWalksAndObeysNo(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	r, results, dir := sweptRepo(t, wd, syncpkg.PruneInteractive)
+
+	var out bytes.Buffer
+	// isTTY() is false under test, so drive the walk directly — the sweep's
+	// only extra rule is that it declines to ask when nobody is there.
+	po := pruneOpts{Mode: syncpkg.PruneInteractive, Interactive: true, LoseIgnored: true}
+	approved, _ := approve(&out, &walkthrough{in: bufio.NewReader(strings.NewReader("n\n"))},
+		repoName(r), results[0].Prunable, po)
+
+	if len(approved) != 0 {
+		t.Error("a declined branch was approved anyway")
+	}
+	if !hasBranch(t, dir, "landed") {
+		t.Error("the branch went despite the answer being no")
+	}
+	if !strings.Contains(out.String(), "prune_keep") {
+		t.Errorf("declining did not say how to make the answer permanent:\n%s", out.String())
+	}
+}
+
+// TestSweepInteractiveDoesNotAskWithNoTerminal: `sync --if-due` runs from the
+// shell prompt and may be backgrounded, so a mode that could block there would
+// be a hang with a question nobody can see. It degrades to report.
+func TestSweepInteractiveDoesNotAskWithNoTerminal(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	r, results, dir := sweptRepo(t, wd, syncpkg.PruneInteractive)
+
+	var out bytes.Buffer
+	sweepPrune(&out, strings.NewReader("y\n"), []model.Repo{r}, results, syncpkg.Options{})
+
+	if !hasBranch(t, dir, "landed") {
+		t.Errorf("interactive pruned with no terminal to ask at:\n%s", out.String())
 	}
 }

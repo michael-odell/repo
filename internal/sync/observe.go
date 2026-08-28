@@ -81,13 +81,20 @@ func (x *run) hasNote(name string) bool {
 	return false
 }
 
-// prune modes (DESIGN §5.3), ordered by how much the sweep does unasked:
-// manual ⊂ report ⊂ interactive ⊂ auto.
+// Prune modes (DESIGN §5.3), ordered by how much the sweep does unasked:
+// manual ⊂ report ⊂ interactive ⊂ auto. They govern `repo sync`; `repo prune`
+// does not consult them, because a command someone typed is not a policy
+// question.
+//
+// Exported because the sweep's prune pass lives in the command layer, where the
+// walk-through, the journal and the output already are — one implementation, so
+// what a sweep does and what `repo prune` does cannot drift apart. The set is
+// held to config's enum table by TestEveryPruneModeIsImplemented.
 const (
-	pruneManual      = "manual"      // don't classify, don't offer
-	pruneReport      = "report"      // classify and name what was found
-	pruneInteractive = "interactive" // …and walk it with whoever is there
-	pruneAuto        = "auto"        // …and remove what clears the unattended bar
+	PruneManual      = "manual"      // don't classify, don't offer
+	PruneReport      = "report"      // classify and name what was found
+	PruneInteractive = "interactive" // …and walk it with whoever is there
+	PruneAuto        = "auto"        // …and delete what the ladder allows
 )
 
 // verdicts classifies the repo's task branches, once per run.
@@ -109,8 +116,10 @@ func (x *run) verdicts() ([]Verdict, error) {
 	return x.classified, x.classifyErr
 }
 
-// countPrunable records how many branches prune would offer to remove, for the
-// footer that tells you they are there (DESIGN §5.3).
+// countPrunable records the branches prune would remove — for the footer that
+// tells you they are there, and for the sweep's own `interactive`/`auto` pass,
+// which acts on these verdicts rather than classifying a second time (DESIGN
+// §5.3).
 //
 // It runs under every mode but `manual`, which is the one that says "don't ask
 // the question". `show_branches` is not consulted: what a sweep *tells* you and
@@ -119,7 +128,7 @@ func (x *run) verdicts() ([]Verdict, error) {
 // and suppressing it would hide the feature from exactly the configuration that
 // enumerates the least.
 func (x *run) countPrunable() {
-	if x.res.Err != nil || x.branch == "" || x.r.Prune == pruneManual {
+	if x.res.Err != nil || x.branch == "" || x.r.Prune == PruneManual {
 		return
 	}
 	verdicts, err := x.verdicts()
@@ -128,7 +137,7 @@ func (x *run) countPrunable() {
 	}
 	for _, v := range verdicts {
 		if v.Prunable {
-			x.res.Prunable++
+			x.res.Prunable = append(x.res.Prunable, v)
 		}
 	}
 }

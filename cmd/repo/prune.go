@@ -60,7 +60,8 @@ func cmdPrune(_ context.Context, args []string) error {
 	// being re-checked wherever a question comes up — the walk-through and the
 	// tests then differ only in what they are reading from.
 	return runPrune(os.Stdout, os.Stdin, selected,
-		pruneOpts{Yes: *yes, DryRun: *dry, Verbose: *verbose, Interactive: isTTY()})
+		pruneOpts{Yes: *yes, DryRun: *dry, Verbose: *verbose,
+			Interactive: isTTY(), LoseIgnored: true})
 }
 
 // pruneOpts is what the flags decided, separated from how they were parsed so
@@ -78,6 +79,12 @@ type pruneOpts struct {
 	// the command, which derives it below; the sweep sets "interactive" or
 	// "auto", so a record says which of the two removed a branch.
 	Mode string
+	// LoseIgnored is whether consent to discard a worktree's .gitignore'd
+	// residue has been obtained. `repo prune` always has it: the walk-through
+	// shows what a removal discards and the y is the answer, and --yes is
+	// blanket. Only the sweep's `auto` runs with nobody to ask, and there it
+	// comes from sync's own --lose-ignored (DESIGN §4.1).
+	LoseIgnored bool
 }
 
 // deleting reports whether this run may remove anything. Pruning is the
@@ -221,6 +228,14 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 			fmt.Fprintf(w, "    ✂ would delete %s (%s)%s\n",
 				v.Name, shortSHA(sha), worktreeNote(v))
 			n++
+			continue
+		}
+		// Ignored residue goes on consent, never by default (DESIGN §4.1).
+		// `git worktree remove` would discard it without comment, so this is
+		// the only place the rule can be applied.
+		if v.WorktreeIgnored > 0 && !opts.LoseIgnored {
+			fmt.Fprintf(w, "    ✗ %s: its worktree holds %d ignored file(s) — not deleted (--lose-ignored)\n",
+				v.Name, v.WorktreeIgnored)
 			continue
 		}
 		// The tree goes first: git refuses to delete a branch a worktree still
@@ -376,9 +391,23 @@ func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict) decision {
 	}
 }
 
+// isTTY reports whether there is someone to ask a question of.
+//
+// The character-device test alone is not that question: /dev/null is a
+// character device and answers nothing, so `repo prune < /dev/null` and every
+// `go test` — where stdin is exactly that — read as attended. The walk then
+// printed its questions and hit EOF, which is not consent, so nothing was ever
+// deleted wrongly; what it produced was a backgrounded `sync --if-due` writing
+// prompts nobody would see into a log.
 func isTTY() bool {
 	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	if null, err := os.Stat(os.DevNull); err == nil && os.SameFile(fi, null) {
+		return false
+	}
+	return true
 }
 
 // shortSHA abbreviates an object name for display. The journal keeps the full
@@ -388,4 +417,86 @@ func shortSHA(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// sweepPrune is what `prune = "interactive"` and `prune = "auto"` do after a
+// sweep (DESIGN §5.3).
+//
+// It runs here, in the serial phase, rather than inside the engine: six repos
+// in flight cannot each stop to ask a question, and the live progress block has
+// stopped painting by now, so a prompt is never overwritten. It also means the
+// walk-through, the journal and the output are the ones `repo prune` uses —
+// one implementation, so what the sweep does and what the command does cannot
+// drift apart.
+//
+// The verdicts come out of the sweep rather than being recomputed: the footer
+// counted these exact ones, so the line you read and the deletion that follows
+// can never disagree.
+func sweepPrune(w io.Writer, in io.Reader, repos []model.Repo, results []syncpkg.Result, opts syncpkg.Options) {
+	walk := &walkthrough{in: bufio.NewReader(in)}
+	var log *journal.Log
+	defer func() {
+		if log != nil {
+			log.Close()
+		}
+	}()
+
+	pruned := 0
+	for i, r := range repos {
+		if i >= len(results) {
+			break
+		}
+		res := results[i]
+		mode := r.Prune
+		if res.Err != nil || len(res.Prunable) == 0 {
+			continue
+		}
+		if mode != syncpkg.PruneInteractive && mode != syncpkg.PruneAuto {
+			continue
+		}
+		// No TTY, no prompt, no deletion: `sync --if-due` runs from the shell
+		// prompt and may be backgrounded, so a mode that could block there
+		// would be a hang with a question nobody can see. It degrades to
+		// `report`, which the footer has already delivered.
+		if mode == syncpkg.PruneInteractive && !isTTY() {
+			continue
+		}
+		if opts.DryRun {
+			fmt.Fprintf(w, "  %s: %d branch(es) would be pruned (%s)\n",
+				repoName(r), len(res.Prunable), mode)
+			continue
+		}
+		po := pruneOpts{
+			Mode:        mode,
+			Interactive: mode == syncpkg.PruneInteractive,
+			// `auto` runs with nobody watching, so consent to discard a
+			// worktree's .gitignore'd residue has to have been given in advance
+			// — the same --lose-ignored a relayout asks for (DESIGN §4.1).
+			// Under `interactive` the walk-through shows what a removal
+			// discards and the y is the consent.
+			Yes:         mode == syncpkg.PruneAuto,
+			LoseIgnored: mode == syncpkg.PruneInteractive || opts.LoseIgnored,
+		}
+		approved, quit := approve(w, walk, repoName(r), res.Prunable, po)
+		if len(approved) == 0 {
+			if quit {
+				break
+			}
+			continue
+		}
+		if log == nil {
+			var err error
+			if log, err = journal.Open(); err != nil {
+				fmt.Fprintf(w, "  cannot open the prune journal, so nothing was pruned: %v\n", err)
+				return
+			}
+		}
+		pruned += pruneRepo(w, r, r.Container(), approved, log, po)
+		if quit {
+			break
+		}
+	}
+	if pruned > 0 && log != nil {
+		fmt.Fprintf(w, "%d branch(es) pruned — recorded in %s\n", pruned, log.Path())
+	}
 }

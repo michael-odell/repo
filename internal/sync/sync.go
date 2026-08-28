@@ -61,11 +61,14 @@ type Result struct {
 	// and without this the only way to find that repo is to watch the sweep
 	// happen.
 	Elapsed time.Duration
-	// Prunable is how many of this repo's task branches prune would offer to
-	// remove. Counted so the sweep's footer can say they exist: before it, prune
-	// candidates were visible only under show_branches = "all", which made the
-	// feature invisible on default settings (DESIGN §5.3).
-	Prunable int
+	// Prunable is this repo's task branches that prune would remove, carried out
+	// of the sweep rather than recounted afterwards. The footer names how many
+	// there are — before it, prune candidates were visible only under
+	// show_branches = "all", which made the feature invisible on default
+	// settings — and `interactive`/`auto` act on these exact verdicts, so the
+	// line you read and the deletion that follows come from one classification
+	// (DESIGN §5.3).
+	Prunable []Verdict
 	Actions  []Action
 	Err      error
 

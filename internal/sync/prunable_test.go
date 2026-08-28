@@ -350,8 +350,8 @@ func TestPruneManualStopsTheSweepCounting(t *testing.T) {
 	writeCommit(t, clone, "f", "work\n", "the work")
 	merge(t, clone, "landed", false)
 
-	if res := run(); res.Prunable != 0 {
-		t.Errorf("Prunable = %d under prune = \"manual\", want 0", res.Prunable)
+	if res := run(); len(res.Prunable) != 0 {
+		t.Errorf("Prunable = %d under prune = \"manual\", want 0", len(res.Prunable))
 	}
 }
 
@@ -365,8 +365,8 @@ func TestTheSweepCountsWhatPruneWouldOffer(t *testing.T) {
 	merge(t, clone, "landed", false)
 
 	res := run()
-	if res.Prunable != 1 {
-		t.Fatalf("Prunable = %d, want 1 (show_branches must not decide what prune counts)", res.Prunable)
+	if len(res.Prunable) != 1 {
+		t.Fatalf("Prunable = %d, want 1 (show_branches must not decide what prune counts)", len(res.Prunable))
 	}
 }
 
@@ -379,8 +379,8 @@ func TestPruneKeepIsRespectedBySweepCount(t *testing.T) {
 	writeCommit(t, clone, "f", "work\n", "the work")
 	merge(t, clone, "landed", false)
 
-	if res := run(); res.Prunable != 0 {
-		t.Errorf("Prunable = %d with the branch named in prune_keep, want 0", res.Prunable)
+	if res := run(); len(res.Prunable) != 0 {
+		t.Errorf("Prunable = %d with the branch named in prune_keep, want 0", len(res.Prunable))
 	}
 }
 
