@@ -60,9 +60,6 @@ type Settings struct {
 	// like force_push and not a flag.
 	PruneKeep   []string `toml:"prune_keep"`
 	PruneMinAge *string  `toml:"prune_min_age"`
-	// CorroborateBudget bounds the -D cross-check during a sweep. nil is unset
-	// (the ambient default applies); "0" is off, which is why this is a pointer.
-	CorroborateBudget *string      `toml:"corroborate_budget"`
 	Host              *string      `toml:"host"`
 	Workflow          *string      `toml:"workflow"`
 	ForkOwner         *string      `toml:"fork_owner"`
@@ -437,7 +434,6 @@ type Inherited struct {
 	Prune               string         // "" when unset
 	PruneKeep           []string       // nil when unset
 	PruneMinAge         time.Duration  // 0 when unset: no age gate
-	CorroborateBudget   *time.Duration // nil when unset; 0 means off
 	Pin                 string         // "" when unset
 	Hooks               []model.Hook
 }
@@ -491,25 +487,9 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		// discovered repo falls back to "no age gate" rather than failing a
 		// sweep over a setting that was reported at load time.
 		PruneMinAge:       mustAge(s.PruneMinAge),
-		CorroborateBudget: mustBudget(s.CorroborateBudget),
 		Pin:               strOr(s.Pin, ""),
 		Hooks:             s.Hooks,
 	}
-}
-
-// mustBudget parses a validated corroborate_budget. Unset stays nil so the
-// ambient default applies; an unreadable value has already been reported by
-// Validate, and falling back to nil means "use the default" rather than
-// silently switching the check off.
-func mustBudget(s *string) *time.Duration {
-	if s == nil {
-		return nil
-	}
-	d, err := ParseBudget(*s)
-	if err != nil {
-		return nil
-	}
-	return &d
 }
 
 // mustAge parses a validated prune_min_age, treating unset and unreadable
@@ -585,13 +565,6 @@ func (reg *Registry) effective(m member) (model.Repo, error) {
 		}
 		r.PruneMinAge = age
 	}
-	if s.CorroborateBudget != nil {
-		d, err := ParseBudget(*s.CorroborateBudget)
-		if err != nil {
-			return model.Repo{}, fmt.Errorf("%s: corroborate_budget: %w", id, err)
-		}
-		r.CorroborateBudget = &d
-	}
 
 	// Fork is resolved only after the workflow is known, and only when the
 	// workflow needs one: explicit `fork` → derive from `fork_owner` → error.
@@ -664,7 +637,6 @@ var settingsFields = []settingsField{
 	{"prune", func(s Settings) bool { return s.Prune != nil }},
 	{"prune_keep", func(s Settings) bool { return s.PruneKeep != nil }},
 	{"prune_min_age", func(s Settings) bool { return s.PruneMinAge != nil }},
-	{"corroborate_budget", func(s Settings) bool { return s.CorroborateBudget != nil }},
 	{"pin", func(s Settings) bool { return s.Pin != nil }},
 	{"hooks", func(s Settings) bool { return s.Hooks != nil }},
 }
@@ -806,9 +778,6 @@ func overlay(base, over Settings) Settings {
 	}
 	if over.PruneMinAge != nil {
 		base.PruneMinAge = over.PruneMinAge
-	}
-	if over.CorroborateBudget != nil {
-		base.CorroborateBudget = over.CorroborateBudget
 	}
 	if over.Host != nil {
 		base.Host = over.Host

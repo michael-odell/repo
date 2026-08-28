@@ -3,13 +3,13 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
-	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
 
 // cloneWithLandedBranch builds a clone whose `landed` branch is an ancestor of
@@ -44,6 +44,17 @@ func cloneWithLandedBranch(t *testing.T, wd, name string) string {
 func selectedRepo(t *testing.T, wd, dir string) []model.Repo {
 	t.Helper()
 	return []model.Repo{resolved(t, testRegistry(t, wd), dir)}
+}
+
+// show reads an object's contents back out of the repo — used to prove that
+// what a deleted branch carried is still reachable without it.
+func show(t *testing.T, dir, rev string) string {
+	t.Helper()
+	out, err := exec.Command("git", "-C", dir, "show", rev).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git show %s: %v\n%s", rev, err, out)
+	}
+	return string(out)
 }
 
 func hasBranch(t *testing.T, dir, branch string) bool {
@@ -354,13 +365,27 @@ func squashMergedRepo(t *testing.T, wd, name string) string {
 	return dir
 }
 
-// TestForceDeleteIsCrossChecked: -D is where git's own check stops standing
-// behind the decision, so something else has to. The report says so out loud,
-// with what it cost — the check's price is the open question about it.
-func TestForceDeleteIsCrossChecked(t *testing.T) {
+// TestARevertedSquashMergeIsStillPrunable is the case the removed cross-check
+// existed to withhold, and the reason removing it is safe.
+//
+// A branch is squash-merged and the squash is then reverted. The patch tiers
+// still say merged — correctly, because they searched main's *history* and the
+// squash commit is sitting in it. The old gate read main's current *tree*,
+// found the change absent, and refused, on the reasoning that the branch held
+// the last copy. It never did: the content is reachable from main whatever
+// happens afterwards, which this asserts by reading it back once the branch is
+// gone (DESIGN §5.3).
+func TestARevertedSquashMergeIsStillPrunable(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	wd := t.TempDir()
 	dir := squashMergedRepo(t, wd, "proj")
+
+	// main moves on: the squashed content is backed out again.
+	landed, _ := gitx.RevParse(dir, "main")
+	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "commit", "-qam", "back that out")
 
 	var out bytes.Buffer
 	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
@@ -370,126 +395,16 @@ func TestForceDeleteIsCrossChecked(t *testing.T) {
 	body := out.String()
 
 	if hasBranch(t, dir, "feature") {
-		t.Fatalf("a corroborated squash merge was not deleted:\n%s", body)
+		t.Fatalf("a landed branch was withheld because its work was later reverted:\n%s", body)
 	}
-	if !strings.Contains(body, "cross-checked") {
-		t.Errorf("no cross-check reported for a -D deletion:\n%s", body)
+	// Nothing in the output may imply the tool checked, or failed to check,
+	// anything beyond the tiers.
+	if strings.Contains(body, "corroborat") {
+		t.Errorf("the report still speaks of corroboration:\n%s", body)
 	}
-	if !strings.Contains(body, "cross-checked 1 branch(es) in ") {
-		t.Errorf("the run did not say what corroboration cost:\n%s", body)
-	}
-	// The ancestry-tier branch goes without one: git's -d already agrees there,
-	// so a second opinion would be a third.
-	if strings.Count(body, "corroborated by") != 1 {
-		t.Errorf("the cross-check ran for a branch that did not need it:\n%s", body)
-	}
-}
-
-// TestClassificationWithholdsWhatItCannotCorroborate: the label is the promise.
-// A branch whose work is not in main's tree must not be *called* prunable, not
-// merely refused later — the sweep advertising a branch the delete path would
-// decline is the disagreement this moved into classification to end.
-func TestClassificationWithholdsWhatItCannotCorroborate(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	wd := t.TempDir()
-	dir := squashMergedRepo(t, wd, "proj")
-
-	// main moves on: the squashed content is reverted, so the branch is now the
-	// last copy of it even though the patch tiers still call it merged.
-	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
-		t.Fatal(err)
-	}
-	git(t, dir, "commit", "-qam", "back that out")
-
-	var out bytes.Buffer
-	if err := runPrune(&out, strings.NewReader(""), selectedRepo(t, wd, dir),
-		pruneOpts{Delete: true, Yes: true}); err != nil {
-		t.Fatal(err)
-	}
-	body := out.String()
-	if !hasBranch(t, dir, "feature") {
-		t.Errorf("a branch that could not be corroborated was deleted anyway:\n%s", body)
-	}
-	// The reason is named as corroboration failing, never as the branch being
-	// unmerged — a cause the check cannot establish (DESIGN §5.3).
-	if !strings.Contains(body, "could not corroborate") {
-		t.Errorf("the withheld branch did not say corroboration failed:\n%s", body)
-	}
-	if strings.Contains(body, "✂    feature") {
-		t.Errorf("feature was still offered as prunable:\n%s", body)
-	}
-}
-
-// TestExplainNamesTheCorroborationRoutes: the report line stays terse, so the
-// mechanism belongs where it was asked for. "could not corroborate" is only
-// checkable if you can see which routes were tried and what each said.
-func TestExplainNamesTheCorroborationRoutes(t *testing.T) {
-	// Its own cache: these repos are built deterministically enough that another
-	// test's sha pair collides with this one's, and a hit would answer from a
-	// different test's run.
-	t.Setenv("XDG_CACHE_HOME", t.TempDir())
-	wd := t.TempDir()
-	dir := squashMergedRepo(t, wd, "proj")
-	if err := os.Remove(filepath.Join(dir, "h")); err != nil {
-		t.Fatal(err)
-	}
-	git(t, dir, "commit", "-qam", "back that out")
-
-	var out bytes.Buffer
-	if err := explainBranch(&out, selectedRepo(t, wd, dir), "feature"); err != nil {
-		t.Fatal(err)
-	}
-	body := out.String()
-	for _, want := range []string{"reverse-apply:", "merge-tree:", "could not corroborate"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the explanation does not mention %q:\n%s", want, body)
-		}
-	}
-}
-
-// TestTheDeleteGateStillRefusesUncorroborated: classification is now the first
-// line of defence, not the only one. The gate re-asks immediately before the
-// -D, because between the two sits an approval that can take as long as
-// somebody takes to read it — so a verdict handed straight to pruneRepo, as a
-// stale one would be, still has to be refused.
-func TestTheDeleteGateStillRefusesUncorroborated(t *testing.T) {
-	wd := t.TempDir()
-	dir := cloneWithLandedBranch(t, wd, "proj")
-	git(t, dir, "checkout", "-q", "-b", "feature")
-	if err := os.WriteFile(filepath.Join(dir, "never-landed"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	git(t, dir, "add", "never-landed")
-	git(t, dir, "commit", "-q", "-m", "work main never got")
-	git(t, dir, "checkout", "-q", "main")
-
-	sha, _ := gitx.RevParse(dir, "feature")
-	r := resolved(t, testRegistry(t, wd), dir)
-	// Prunable at a rewritten tier is what a stale verdict would claim, and it
-	// is exactly the claim the gate exists to disbelieve.
-	stale := []syncpkg.Verdict{{
-		Name: "feature", SHA: sha, State: gitx.MergedPatch, Prunable: true,
-	}}
-
-	cor := syncpkg.OpenCorroborations().Unbounded()
-	defer func() { _ = cor.Close() }()
-	cc := &crossCheckTally{}
-	var out bytes.Buffer
-	n := pruneRepo(&out, r, dir, stale, nil, pruneOpts{DryRun: true}, cc, cor)
-
-	if n != 0 {
-		t.Errorf("the gate let through %d uncorroborated deletion(s):\n%s", n, out.String())
-	}
-	if !hasBranch(t, dir, "feature") {
-		t.Error("the branch was deleted despite the gate refusing")
-	}
-	if cc.withheld != 1 {
-		t.Errorf("withheld = %d, want 1", cc.withheld)
-	}
-	var footer bytes.Buffer
-	cc.report(&footer)
-	if !strings.Contains(footer.String(), "1 held back") {
-		t.Errorf("the footer did not say a branch was held back: %q", footer.String())
+	// The whole justification: the work outlives the branch, because the commit
+	// carrying it is reachable from main.
+	if got := show(t, dir, landed+":h"); got == "" {
+		t.Error("the squashed work is not readable from main after the branch went")
 	}
 }

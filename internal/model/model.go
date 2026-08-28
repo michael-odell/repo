@@ -93,13 +93,6 @@ type Repo struct {
 	PruneKeep   []string
 	PruneMinAge time.Duration
 
-	// CorroborateBudget bounds the -D cross-check when it runs during
-	// classification (DESIGN §5.3). nil is unset — the ambient default applies;
-	// a zero value switches corroboration off for this repo, which is a
-	// different thing and why this needs a pointer, exactly as MergeScanLimit
-	// does.
-	CorroborateBudget *time.Duration
-
 	Pin   string // vendor only
 	Hooks []Hook
 

@@ -166,7 +166,6 @@ cannot set.
 | `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
 | `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
 | `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
-| `corroborate_budget` | a duration (`2s`, `500ms`, `0`)           | how long the `-D` cross-check may take per branch **during a sweep** before it gives up and reports the branch un-corroborated; `0` switches the sweep's check off, unset = 2s. An explicit `repo prune` ignores this setting entirely and runs to completion, so its label and its deletions never disagree (§5.3) |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
 | `pin`        | branch \| tag \| `latest-tag`                   | vendor only: what to track |
@@ -264,18 +263,20 @@ without setting `show_branches = "all"`:
 
 A landed branch is removed with `git branch -d` wherever git's own ancestry
 check agrees, so two independent judgements stand behind the deletion. The
-rewritten tiers need `-D`, where that second judgement isn't available — so
-before any force-delete, `repo` corroborates by a different route entirely:
-it reverse-applies the branch's whole diff to a scratch index built from the
-important branch (`git apply --cached --check -R`, sharing no code with the
-patch-id tiers). If that fails, the branch stays. Nothing in your repo takes
-part — not the index, not any working tree.
+rewritten tiers need `-D`, since git's check is an ancestry test and cannot see
+those merges — that is a choice of flag, not a different standard of proof.
+
+Nothing checks the tiers' work, and nothing needs to: a tier confirming means
+the patch is carried by a commit *reachable from the important branch*, which is
+what `git cherry` searched. Deleting the branch cannot take the last copy of
+anything, even where the work landed and was later reverted — the revert added a
+commit, it did not remove one.
 
 Every deletion is written to `$XDG_STATE_HOME/repo/prune.log` (default
 `~/.local/state/repo/prune.log`) — tab-separated, one line per branch:
 
 ```
-2026-08-12T09:14:03Z  acme/noodle  refactor-auth  9f3a1c2…  merged (rewritten)  --delete  git branch refactor-auth 9f3a1c2…
+2026-08-12T09:14:03Z  acme/noodle  refactor-auth  9f3a1c2…  merged (rewritten)  auto  git branch refactor-auth 9f3a1c2…
 ```
 
 The restore command is in the record because the moment you need it is the
@@ -301,7 +302,6 @@ decides what it **tells you**.
 | `REPO_GIT_TIMEOUT`   | deadline for local git invocations            | `2m`                |
 | `REPO_GIT_NETWORK_TIMEOUT` | deadline for git invocations that reach a remote | `10m`     |
 | `REPO_MERGE_SCAN_LIMIT` | default `merge_scan_limit` for repos config doesn't set one on | `10000` |
-| `REPO_CORROBORATE_BUDGET` | default `corroborate_budget` for repos config doesn't set one on | `2s` |
 
 `REPO_REGISTRY_PATH` and `REPO_ROOTS` are colon-separated path-style lists;
 `REPO_OUT` is a single directory. The timeouts take Go durations (`90s`, `5m`).

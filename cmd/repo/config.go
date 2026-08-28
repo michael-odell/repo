@@ -113,12 +113,6 @@ var configFields = []struct {
 		}
 		return r.PruneMinAge.String()
 	}},
-	{"corroborate_budget", func(r model.Repo) string {
-		if r.CorroborateBudget == nil {
-			return ""
-		}
-		return r.CorroborateBudget.String()
-	}},
 	{"pin", func(r model.Repo) string { return r.Pin }},
 	{"hooks", func(r model.Repo) string {
 		parts := make([]string, len(r.Hooks))
@@ -187,7 +181,6 @@ type configOut struct {
 	Prune               string         `toml:"prune"`
 	PruneKeep           []string       `toml:"prune_keep,omitempty"`
 	PruneMinAge         time.Duration  `toml:"prune_min_age,omitzero"`
-	CorroborateBudget   *time.Duration `toml:"corroborate_budget,omitempty"`
 	Pin                 string         `toml:"pin,omitempty"`
 	Hooks               []model.Hook   `toml:"hooks,omitempty"`
 }
@@ -212,7 +205,6 @@ func renderConfig(w io.Writer, r model.Repo) error {
 		Prune:               r.Prune,
 		PruneKeep:           r.PruneKeep,
 		PruneMinAge:         r.PruneMinAge,
-		CorroborateBudget:   r.CorroborateBudget,
 		Pin:                 r.Pin,
 		Hooks:               r.Hooks,
 	}

@@ -56,10 +56,11 @@ func runCmdCode(dir string, env []string, args ...string) (stdout string, code i
 }
 
 // runCmdCodeWithin is runCmdCode under a deadline the caller chose rather than
-// the ambient per-subcommand one. It exists for work that is optional and
-// therefore boundable — corroboration during a sweep (DESIGN §5.3) — where the
-// right answer to "this is taking too long" is to stop asking, not to raise a
-// global timeout. raiseHint names the environment variable worth raising when
+// the ambient per-subcommand one, for work that is optional and therefore
+// boundable — where the right answer to "this is taking too long" is to stop
+// asking, not to raise a global timeout. Nothing takes that route today; it
+// stays because runCmdCode is expressed in terms of it. raiseHint names the
+// environment variable worth raising when
 // the deadline is the ambient one, and is empty when it is not: telling someone
 // to raise REPO_GIT_TIMEOUT would be wrong advice for a budget that did not
 // come from there.

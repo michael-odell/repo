@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/journal"
@@ -85,13 +84,6 @@ func (o pruneOpts) deleting() bool { return o.Delete || o.DryRun }
 // removes the prunable ones when asked.
 func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) error {
 	walk := &walkthrough{in: bufio.NewReader(in)}
-	cc := &crossCheckTally{}
-	// Unbounded: a sweep has to stay fast, but this is a command someone typed
-	// on purpose, usually at one repo. Reporting a branch as un-corroborated
-	// because a 2s budget ran out would be the same broken promise the budget
-	// exists to avoid (DESIGN §5.3).
-	cor := syncpkg.OpenCorroborations().Unbounded()
-	defer func() { _ = cor.Close() }()
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', tabwriter.StripEscape)
 	var log *journal.Log
 	defer func() {
@@ -106,7 +98,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 		if !gitx.IsRepo(container) {
 			continue
 		}
-		verdicts, err := syncpkg.Classify(container, r, cor)
+		verdicts, err := syncpkg.Classify(container, r)
 		if err != nil {
 			// A repo prune cannot answer for is reported, not skipped: silence
 			// here is indistinguishable from a repo with nothing to prune, and
@@ -155,7 +147,7 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 			}
 		}
 		if len(approved) > 0 {
-			pruned += pruneRepo(w, r, container, approved, log, opts, cc, cor)
+			pruned += pruneRepo(w, r, container, approved, log, opts)
 		}
 		if quit {
 			fmt.Fprintf(w, "    stopped — %s and everything after it left alone\n", repoName(r))
@@ -180,82 +172,14 @@ func runPrune(w io.Writer, in io.Reader, selected []model.Repo, opts pruneOpts) 
 			fmt.Fprintf(w, "recorded in %s\n", log.Path())
 		}
 	}
-	cc.report(w)
 	return nil
-}
-
-// crossCheckTally accumulates what the -D corroboration cost across a run. The
-// check's price is the open question about it (DESIGN §5.3), so it is measured
-// and stated rather than assumed to be small — and stated even when it was
-// cheap, since a number nobody sees is not a measurement.
-type crossCheckTally struct {
-	branches int
-	withheld int
-	spent    time.Duration
-}
-
-func (c *crossCheckTally) report(w io.Writer) {
-	if c == nil || c.branches == 0 {
-		return
-	}
-	fmt.Fprintf(w, "cross-checked %d branch(es) in %s\n",
-		c.branches, c.spent.Round(time.Millisecond))
-	// A withheld branch is the one outcome the deleted-count cannot show: the
-	// run reads as "0 branch(es) deleted" whether nothing was prunable or
-	// everything was held back, and those are not the same news.
-	if c.withheld > 0 {
-		fmt.Fprintf(w, "%d held back — the work was not found in the base branch's current tree\n",
-			c.withheld)
-	}
-}
-
-// crossCheck corroborates a rewritten-tier verdict by routes that share no code
-// with the patch-id tiers that produced it, and reports whether the deletion may
-// go ahead (DESIGN §5.3).
-//
-// Only the -D path needs it: where git's own `-d` would agree, two independent
-// judgements already stand behind the deletion. Failure withholds the branch —
-// "could not corroborate" is never evidence that the work is missing, only a
-// reason not to act unilaterally on the tiers' word.
-func crossCheck(w io.Writer, cor *syncpkg.Corroborations, container string, v syncpkg.Verdict, base string, cc *crossCheckTally) bool {
-	baseSHA, _ := gitx.RevParse(container, base)
-	// Classification already asked, through this same cache, so this is
-	// ordinarily a lookup. It is asked again anyway because the gate's promise
-	// is that nothing is force-deleted without corroboration *immediately
-	// before* — and between classification and here sits an interactive
-	// approval that can take as long as someone takes to read it.
-	c := cor.Corroborate(container, v.Name, base, v.SHA, baseSHA, 0)
-	took := c.Took
-	if cc != nil {
-		cc.branches++
-		cc.spent += took
-	}
-	switch {
-	case !c.OK:
-		if cc != nil {
-			cc.withheld++
-		}
-		// "could not corroborate", never "does not reverse-apply": the latter
-		// named a cause the check cannot establish, dressing the routes' silence
-		// as a finding about the branch. What each route actually reported goes
-		// underneath, so the refusal can be checked rather than taken on faith.
-		fmt.Fprintf(w, "    ✗ %s: could not corroborate — not deleted (%s)\n",
-			v.Name, took.Round(time.Millisecond))
-		for _, note := range c.Tried {
-			fmt.Fprintf(w, "        %s\n", note)
-		}
-		return false
-	}
-	fmt.Fprintf(w, "    ✓ %s: corroborated by %s (%s)\n",
-		v.Name, c.Via, took.Round(time.Millisecond))
-	return true
 }
 
 // pruneRepo removes (or, under --dry-run, reports) one repo's prunable
 // branches, returning how many went. Every deletion is recorded before it is
 // announced, and the SHA is read *before* the branch goes: it is the whole
 // value of the record, and reading it back afterwards is not an option.
-func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.Verdict, log *journal.Log, opts pruneOpts, cc *crossCheckTally, cor *syncpkg.Corroborations) int {
+func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.Verdict, log *journal.Log, opts pruneOpts) int {
 	n := 0
 	for _, v := range prunable {
 		// The SHA came out of classification, which read it before anything was
@@ -267,12 +191,6 @@ func pruneRepo(w io.Writer, r model.Repo, container string, prunable []syncpkg.V
 			// one this command makes. Reaching here means classification could
 			// not read the ref at all, which is itself worth seeing.
 			fmt.Fprintf(w, "    ✗ %s: no object recorded for this ref — not deleted\n", v.Name)
-			continue
-		}
-		// The corroboration runs before the deletion, and before the dry run's
-		// claim that a deletion would happen: a preview that skipped it would
-		// promise removals the real run then refuses.
-		if syncpkg.NeedsForceDelete(v) && !crossCheck(w, cor, container, v, primaryBranch(r), cc) {
 			continue
 		}
 		if opts.DryRun {
@@ -406,15 +324,13 @@ func (a *walkthrough) ask(w io.Writer, v syncpkg.Verdict, base string) decision 
 // requiring the repo be named too: a branch name is usually enough to be
 // unambiguous, and when it isn't, showing both is more useful than an error.
 func explainBranch(w io.Writer, selected []model.Repo, branch string) error {
-	cor := syncpkg.OpenCorroborations().Unbounded()
-	defer func() { _ = cor.Close() }()
 	found := 0
 	for _, r := range selected {
 		container := r.Container()
 		if !gitx.IsRepo(container) {
 			continue
 		}
-		verdicts, err := syncpkg.Classify(container, r, cor)
+		verdicts, err := syncpkg.Classify(container, r)
 		if err != nil {
 			continue
 		}

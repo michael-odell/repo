@@ -31,14 +31,6 @@ func explainVerdict(w io.Writer, v syncpkg.Verdict, base string, indent string) 
 		fmt.Fprintf(w, "%s    (no tier ran: %s)\n", indent, firstNonEmpty(v.Blocker, "no evidence recorded"))
 	}
 
-	// Corroboration belongs in the evidence now that it decides prunability
-	// rather than only gating the deletion. Naming the route that answered —
-	// or the ones that declined — is what makes "could not corroborate"
-	// checkable instead of something to take on faith (DESIGN §5.3).
-	for _, note := range v.Corroboration.Tried {
-		fmt.Fprintf(w, "%s    corroborate %s\n", indent, note)
-	}
-
 	// The conclusions share the tiers' label column: what was tried and what it
 	// came to are one list, and ragging them apart makes the reader find the
 	// alignment before they can read either.

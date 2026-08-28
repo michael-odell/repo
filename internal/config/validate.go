@@ -175,11 +175,6 @@ func checkScanLimit(add func(string, ...any), where string, s Settings) {
 // and a typo that waits for its first repo to surface is a typo that surfaces
 // during someone else's task.
 func checkAge(add func(string, ...any), where string, s Settings) {
-	if s.CorroborateBudget != nil {
-		if _, err := ParseBudget(*s.CorroborateBudget); err != nil {
-			add("%s: corroborate_budget: %v", where, err)
-		}
-	}
 	if s.PruneMinAge == nil {
 		return
 	}

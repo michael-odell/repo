@@ -46,27 +46,6 @@ func ParseAge(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// ParseBudget reads a corroboration budget (DESIGN §5.3).
-//
-// Unlike an age, this is a machine timescale — seconds and milliseconds — so
-// Go's own duration syntax is exactly right and nothing is added on top of it.
-// "0" is a real value rather than "unset": it switches corroboration off for
-// the repo, leaving the label the tiers' word alone.
-func ParseBudget(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, fmt.Errorf("%q: want a duration like \"2s\" or \"500ms\", or \"0\" to switch it off", s)
-	}
-	if d < 0 {
-		return 0, fmt.Errorf("%q: a negative budget has nothing to mean here", s)
-	}
-	return d, nil
-}
-
 // splitAge peels a whole-number count off a "14d"/"2w" form. Fractions are left
 // to time.ParseDuration to reject: "1.5d" is a way of saying something this
 // setting has no use for.

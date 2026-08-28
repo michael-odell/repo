@@ -135,11 +135,6 @@ type Options struct {
 	Frequency   time.Duration
 	StateDir    string
 
-	// cor corroborates rewritten-tier verdicts during classification (DESIGN
-	// §5.3). Run sets it for the whole sweep and closes it at the end, so its
-	// lifecycle belongs to this package rather than to every caller.
-	cor Corroborator
-
 	// Progress, when set, is called as each repo enters and leaves the sweep, so
 	// a caller can show that work is moving without this package knowing
 	// anything about terminals. Calls are serialised, and every Started is
@@ -159,14 +154,6 @@ type Progress struct {
 // network work is done, so their prompts are orderly and never interleave with
 // concurrent output (DESIGN §4.1).
 func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
-	// One cache for the whole sweep, written back once at the end. What a repo
-	// learns is keyed on two shas, so it stays true for the *next* sweep too —
-	// which is the point, since the expensive branches are the ones that would
-	// otherwise pay again every time (DESIGN §5.3).
-	cor := OpenCorroborations()
-	defer func() { _ = cor.Close() }()
-	opts.cor = cor
-
 	results := make([]Result, len(repos))
 	// Serialised here rather than in every caller: the sweep is concurrent, and a
 	// progress display is the last place that should have to think about it.
