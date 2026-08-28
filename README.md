@@ -33,6 +33,15 @@ directory is included). By default `repo` reads `~/.config/repo/`. The loader
 values, identity/fork parsing, host resolvability), so a broken or stale config
 fails loudly instead of misbehaving.
 
+It also rejects a value that is spelled correctly and that **no code acts on**
+— the failure that reads exactly like a working setting and behaves exactly
+like an absent one. Each enum records which of its values are implemented, and
+the error says which of the two problems you have:
+
+```
+root.src: prune = "auto" is not implemented yet (want one of: manual, report)
+```
+
 ### Shape of a registry
 
 ```toml

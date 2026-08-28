@@ -1,12 +1,14 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/michael-odell/repo/internal/config"
 	"github.com/michael-odell/repo/internal/gitx"
 	"github.com/michael-odell/repo/internal/model"
 )
@@ -573,4 +575,26 @@ func TestIgnoredResidueIsCountedNotBlocked(t *testing.T) {
 		return
 	}
 	t.Fatal("landed was not classified")
+}
+
+// TestEveryPruneModeClassifiesExceptManual is the other half of the
+// distinguishability check config's enum table leans on (DESIGN §3.4).
+// cmd/repo's TestEveryPruneModeIsImplemented separates the modes by what they
+// *do* with the candidates, which leaves `manual` and `report` looking alike;
+// they differ here, in whether the sweep asks the question at all.
+func TestEveryPruneModeClassifiesExceptManual(t *testing.T) {
+	for _, mode := range config.PruneModes() {
+		t.Run(mode, func(t *testing.T) {
+			_, clone, run := setupUpstreamRepo(t,
+				fmt.Sprintf("prune = %q\n", mode)+`show_branches = "none"`)
+			git(t, clone, "checkout", "-q", "-b", "landed")
+			writeCommit(t, clone, "f", "work\n", "the work")
+			merge(t, clone, "landed", false)
+
+			classified := len(run().Prunable) > 0
+			if want := mode != PruneManual; classified != want {
+				t.Errorf("prune = %q classified = %v, want %v", mode, classified, want)
+			}
+		})
+	}
 }

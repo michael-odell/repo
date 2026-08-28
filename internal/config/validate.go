@@ -11,15 +11,60 @@ import (
 	"github.com/michael-odell/repo/internal/model"
 )
 
+// enumValue is one permitted value of a setting, and whether any code acts on
+// it (DESIGN §3.4).
+//
+// The zero value is *not* implemented, which is the whole point: a value added
+// to one of the sets below without someone claiming it is rejected at load
+// rather than accepted and ignored. `prune = "auto"` sat in a live registry for
+// months that way — valid key, valid value, no consumer, no warning — and the
+// only reason anyone found out was going looking.
+type enumValue struct {
+	name        string
+	implemented bool
+}
+
+// done marks a value some consumer honours. It is a claim about the code, so
+// each consumer package holds it to the code by test: see
+// TestEveryPruneModeIsImplemented, which asserts not merely that every mode is
+// handled but that no two of them behave the same.
+func done(name string) enumValue { return enumValue{name: name, implemented: true} }
+
+// planned marks a value the design has settled and the code has not caught up
+// with. It parses, and is then refused with a message saying so — which is the
+// difference between "you typed this wrong" and "this doesn't work yet", and
+// the one a reader of a rejected config actually needs.
+//
+func planned(name string) enumValue { return enumValue{name: name} }
+
 // enum sets for validated fields.
 var (
-	validLayouts      = []string{model.LayoutFlat, model.LayoutOwner}
-	validWorkflows    = []string{model.UpstreamPush, model.ForkPR, model.SupplyChainMirror, model.Vendor}
-	validPush         = []string{"auto", "manual", "never"}
-	validTaskBranches = []string{"auto", "report", "pull-only"}
-	validShowBranches = []string{"none", "notable", "unmerged", "all"}
-	validPrune        = []string{"auto", "report", "interactive", "manual"}
+	validLayouts      = []enumValue{done(model.LayoutFlat), done(model.LayoutOwner)}
+	validWorkflows    = []enumValue{done(model.UpstreamPush), done(model.ForkPR), done(model.SupplyChainMirror), done(model.Vendor)}
+	validPush         = []enumValue{done("auto"), done("manual"), done("never")}
+	validTaskBranches = []enumValue{done("auto"), done("report"), done("pull-only")}
+	validShowBranches = []enumValue{done("none"), done("notable"), done("unmerged"), done("all")}
+	validPrune        = []enumValue{done("manual"), done("report"), done("interactive"), done("auto")}
 )
+
+// PruneModes lists the prune modes the sweep actually implements, in the order
+// DESIGN §5.3 ranks them. Exported for the consumer's own test to check itself
+// against — the declaration above is a claim, and this is how it is held to
+// account rather than trusted.
+func PruneModes() []string { return usable(validPrune) }
+
+// usable is the implemented values of an enum, which is also what an error
+// message should offer: naming a value that parses but does nothing as an
+// option would be advice to hit the same wall again.
+func usable(values []enumValue) []string {
+	var out []string
+	for _, v := range values {
+		if v.implemented {
+			out = append(out, v.name)
+		}
+	}
+	return out
+}
 
 // Validate checks the loaded registry semantically and returns a single error
 // aggregating every problem found, so a broken config surfaces all its faults at
@@ -183,12 +228,34 @@ func checkAge(add func(string, ...any), where string, s Settings) {
 	}
 }
 
-func checkEnums(add func(string, ...any), where string, s Settings) {
-	check := func(field string, v *string, allowed []string) {
-		if v != nil && !contains(allowed, *v) {
-			add("%s: %s = %q (want one of %s)", where, field, *v, strings.Join(allowed, ", "))
+// enumChecker returns the per-field check, split out from checkEnums so the
+// three outcomes it has to keep apart — honoured, not implemented, misspelled —
+// can be tested without a whole registry around them.
+func enumChecker(add func(string, ...any), where string) func(string, *string, []enumValue) {
+	return func(field string, v *string, allowed []enumValue) {
+		if v == nil {
+			return
 		}
+		for _, a := range allowed {
+			if a.name != *v {
+				continue
+			}
+			// Spelled right, and nothing reads it. Rejected rather than
+			// ignored: a setting that would do nothing reads exactly like a
+			// working one and behaves exactly like an absent one, and the
+			// parser cannot tell them apart on its own (DESIGN §3.4).
+			if !a.implemented {
+				add("%s: %s = %q is not implemented yet (want one of %s)",
+					where, field, *v, strings.Join(usable(allowed), ", "))
+			}
+			return
+		}
+		add("%s: %s = %q (want one of %s)", where, field, *v, strings.Join(usable(allowed), ", "))
 	}
+}
+
+func checkEnums(add func(string, ...any), where string, s Settings) {
+	check := enumChecker(add, where)
 	check("layout", s.Layout, validLayouts)
 	check("workflow", s.Workflow, validWorkflows)
 	check("push", s.Push, validPush)
@@ -316,13 +383,4 @@ func distinct(ss []string) []string {
 		}
 	}
 	return out
-}
-
-func contains(ss []string, want string) bool {
-	for _, s := range ss {
-		if s == want {
-			return true
-		}
-	}
-	return false
 }

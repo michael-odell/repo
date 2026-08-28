@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/michael-odell/repo/internal/config"
 	"github.com/michael-odell/repo/internal/gitx"
+	"github.com/michael-odell/repo/internal/journal"
 	"github.com/michael-odell/repo/internal/model"
 	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
@@ -670,5 +672,69 @@ func TestSweepInteractiveDoesNotAskWithNoTerminal(t *testing.T) {
 
 	if !hasBranch(t, dir, "landed") {
 		t.Errorf("interactive pruned with no terminal to ask at:\n%s", out.String())
+	}
+}
+
+// TestEveryPruneModeIsImplemented is the check config's enum table cannot make
+// for itself (DESIGN §3.4). The table claims all four modes are honoured; only
+// this can say whether they are, and — the part that matters — whether any two
+// of them are the same thing under different names.
+//
+// The axis here is what a mode *does* with the candidates. The other axis,
+// whether it classifies at all, separates `manual` from `report` and is
+// asserted in internal/sync (TestPruneManualStopsTheSweepCounting). Every
+// pair of modes differs on one axis or the other.
+func TestEveryPruneModeIsImplemented(t *testing.T) {
+	type signature struct{ deletes, asks bool }
+	want := map[string]signature{
+		syncpkg.PruneManual:      {},
+		syncpkg.PruneReport:      {},
+		syncpkg.PruneInteractive: {deletes: true, asks: true},
+		syncpkg.PruneAuto:        {deletes: true},
+	}
+
+	modes := config.PruneModes()
+	if len(modes) != len(want) {
+		t.Fatalf("config allows %d prune modes, this knows %d: %v", len(modes), len(want), modes)
+	}
+	for _, mode := range modes {
+		sig, known := want[mode]
+		if !known {
+			t.Fatalf("config allows prune = %q and nothing here implements it", mode)
+		}
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			wd := t.TempDir()
+			r, results, dir := sweptRepo(t, wd, mode)
+
+			var out bytes.Buffer
+			// The walk-through's input is answered "y", so a mode that asks is
+			// visible by its prompt rather than by its silence.
+			po := pruneOpts{
+				Mode:        mode,
+				Interactive: sig.asks,
+				Yes:         sig.deletes && !sig.asks,
+				LoseIgnored: true,
+			}
+			if sig.deletes {
+				approved, _ := approve(&out, &walkthrough{in: bufio.NewReader(strings.NewReader("y\n"))},
+					repoName(r), results[0].Prunable, po)
+				log, err := journal.Open()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer log.Close()
+				pruneRepo(&out, r, dir, approved, log, po)
+			} else {
+				sweepPrune(&out, strings.NewReader("y\n"), []model.Repo{r}, results, syncpkg.Options{})
+			}
+
+			if gone := !hasBranch(t, dir, "landed"); gone != sig.deletes {
+				t.Errorf("prune = %q deleted = %v, want %v:\n%s", mode, gone, sig.deletes, out.String())
+			}
+			if asked := strings.Contains(out.String(), "[y/N/a/q]"); asked != sig.asks {
+				t.Errorf("prune = %q asked = %v, want %v:\n%s", mode, asked, sig.asks, out.String())
+			}
+		})
 	}
 }
