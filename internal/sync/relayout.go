@@ -44,10 +44,11 @@ func (x *run) relayoutToWorktree() {
 		return
 	}
 	prevBranch, _ := gitx.CurrentBranch(container) // branch the single clone was on
-	origin, upstream, ok := x.resolveRemotes()
+	origin, second, ok := x.resolveRemotes()
 	if !ok {
 		return
 	}
+	secondName := x.remoteName()
 
 	// 1. Move the intact clone aside; it is the recoverable fallback until the
 	//    new layout validates.
@@ -81,14 +82,19 @@ func (x *run) relayoutToWorktree() {
 	}
 
 	// 3. Remotes + best-effort fetch so remote-tracking refs exist for any
-	//    important branch that was not yet local.
+	//    important branch that was not yet local. The second remote goes back
+	//    under the *workflow's* name for it — `untrusted` on a mirror, never
+	//    `upstream` (DESIGN §3.6): resolveRemotes answers where it points,
+	//    remoteName what it is called, and rebuilding it under the fork-pr name
+	//    would hand a mirror the one remote its contract forbids and leave
+	//    discovery re-inferring it as fork-pr.
 	_, _ = gitx.EnsureRemote(container, "origin", origin)
-	if upstream != "" {
-		_, _ = gitx.EnsureRemote(container, "upstream", upstream)
+	if second != "" {
+		_, _ = gitx.EnsureRemote(container, secondName, second)
 	}
 	_, _ = gitx.Fetch(container, "origin", x.tagPolicy())
-	if upstream != "" {
-		_, _ = gitx.Fetch(container, "upstream", x.tagPolicy())
+	if second != "" {
+		_, _ = gitx.Fetch(container, secondName, x.tagPolicy())
 	}
 
 	// 4. A worktree per important branch, plus the previously-checked-out branch
@@ -221,14 +227,14 @@ func (x *run) relayoutToSingle() {
 			}
 		}
 	}
-	origin, upstream, ok := x.resolveRemotes()
+	origin, second, ok := x.resolveRemotes()
 	if !ok {
 		fail(fmt.Errorf("cannot resolve remotes for %s", x.res.Name))
 		return
 	}
 	_, _ = gitx.EnsureRemote(container, "origin", origin)
-	if upstream != "" {
-		_, _ = gitx.EnsureRemote(container, "upstream", upstream)
+	if second != "" {
+		_, _ = gitx.EnsureRemote(container, x.remoteName(), second)
 	}
 	if err := gitx.Checkout(container, primary); err != nil {
 		fail(err)
