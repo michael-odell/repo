@@ -73,6 +73,8 @@ func cmdSync(_ context.Context, args []string) error {
 	if !*noPrune {
 		sweepPrune(os.Stdout, os.Stdin, selected, results, opts)
 	}
+	// From the full union, not `selected` — see refreshArtifacts.
+	refreshArtifacts(os.Stderr, reg, repos, opts.DryRun, opts.Verbose)
 	for _, r := range results {
 		if r.Err != nil {
 			return fmt.Errorf("%d repo(s) failed", countFailed(results))

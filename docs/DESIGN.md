@@ -1650,6 +1650,14 @@ uncommitted artifacts). Each artifact carries a header hash over all contributin
 registry fragments + the disk scan; a `precmd`/`plugins-update` may compare it and
 print a one-line "run `repo apply`" hint, but only `repo` ever writes.
 
+Every artifact is **replaced by rename, never rewritten in place.** `repo sync`
+regenerates them (§5.5) and is itself launched from shell startup, backgrounded,
+so the moment they are rewritten is the moment another shell is most likely to
+be sourcing them: a reader has to see one whole generation or the other, never
+half of either. A truncated `prjpath=(` is a syntax error in a shell's own
+startup, and a half-written `homes.zsh` is a `cs` that has forgotten every repo
+— both of them failures of the one invariant §2 principle 2 exists to protect.
+
 **`prjpath.zsh`** — actual working trees (each maintained worktree + each single
 clone); sourced by `.zshenv` in place of the glob at `.zshenv:22`, with the glob as
 the cold-bootstrap fallback:

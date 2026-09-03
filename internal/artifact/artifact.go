@@ -46,13 +46,45 @@ func Generate(outDir string, reg *config.Registry, repos []model.Repo) ([]string
 	var written []string
 	for name, body := range files {
 		p := filepath.Join(outDir, name)
-		if err := os.WriteFile(p, []byte(header(body)+body), 0o644); err != nil {
+		if err := writeAtomic(p, []byte(header(body)+body)); err != nil {
 			return nil, err
 		}
 		written = append(written, p)
 	}
 	sort.Strings(written)
 	return written, nil
+}
+
+// writeAtomic replaces path in one step: a temp file in the same directory,
+// then a rename over the target.
+//
+// These files are sourced by every new shell, and `repo sync` (which now
+// regenerates them, DESIGN §5.5) is itself invoked *from* shell startup, in the
+// background — so the moment they are rewritten is exactly the moment another
+// shell is most likely to be reading them. A plain write truncates first, which
+// gives that reader a real chance at half a file: a `prjpath=(` with no closing
+// paren is a syntax error in the shell's own startup, and an empty homes.zsh is
+// a `cs` that silently forgets every repo. A rename is atomic and leaves an
+// already-open reader on the intact old file, so the worst case becomes "one
+// shell started with the previous generation", which is what the staleness
+// header exists to handle anyway.
+func writeAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil { // CreateTemp makes it 0600
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // build converts the union into emission entries. repos is already deduped by
