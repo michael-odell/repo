@@ -6,7 +6,7 @@ const (
 	showNone     = "none"     // no branch lines at all; the repo row is the report
 	showNotable  = "notable"  // only branches with a finding this run
 	showUnmerged = "unmerged" // …plus task branches carrying unlanded work
-	showAll      = "all"      // …plus every other branch, important ones included
+	showAll      = "all"      // …plus the task branches whose work has landed
 )
 
 // observe adds the informational branch lines the repo's `show_branches` asks
@@ -18,7 +18,11 @@ const (
 // each branch's own remote — "work you haven't landed" is a statement about the
 // mainline, and it is what makes the important branches the natural exclusion
 // list rather than a special case: a branch cannot be unmerged relative to
-// itself.
+// itself. So only task branches are ever observed, `all` included: a quiet
+// important branch has nothing to say that the repo's own row — its glyph, and
+// the "N branches up to date" count that includes it — hasn't already said,
+// and on a single-branch repo the line was the row repeated verbatim. A
+// *finding* on an important branch is unaffected; findings aren't configurable.
 //
 // Runs after taskBranches so a branch that already produced a finding keeps it;
 // an observation never overwrites something that needed attention.
@@ -60,13 +64,6 @@ func (x *run) observe() {
 		// remembers to go looking for it.
 		if !v.State.Merged() || x.r.ShowBranches == showAll {
 			x.branchMark(v.Name, Info, v.Summary())
-		}
-	}
-	if x.r.ShowBranches == showAll {
-		for _, b := range x.r.Branches {
-			if !x.hasNote(b) {
-				x.branchMark(b, Info, "up to date")
-			}
 		}
 	}
 }

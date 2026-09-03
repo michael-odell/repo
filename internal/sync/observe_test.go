@@ -87,9 +87,9 @@ func TestNotableSuppressesObservations(t *testing.T) {
 	}
 }
 
-// TestAllListsEveryBranch: the top of the dial names important branches and
-// merged task branches too.
-func TestAllListsEveryBranch(t *testing.T) {
+// TestAllListsEveryTaskBranch: the top of the dial adds the landed task
+// branches, with the verdict prune would act on, to the unmerged ones.
+func TestAllListsEveryTaskBranch(t *testing.T) {
 	_, clone, run := setupUpstreamRepo(t, `show_branches = "all"`)
 	parkedWork(t, clone, "spike")
 	git(t, clone, "checkout", "-q", "-b", "landed")
@@ -101,7 +101,6 @@ func TestAllListsEveryBranch(t *testing.T) {
 		t.Fatalf("outcome = %v, want UpToDate; actions=%v", res.Outcome, res.Actions)
 	}
 	for name, want := range map[string]string{
-		"main":   "up to date",
 		"spike":  "1 ahead of main",
 		"landed": "merged — prunable",
 	} {
@@ -113,6 +112,53 @@ func TestAllListsEveryBranch(t *testing.T) {
 		if b.Summary != want {
 			t.Errorf("%s summary = %q, want %q", name, b.Summary, want)
 		}
+	}
+	// An important branch with nothing to say earns no line at any tier
+	// (§5.6): the row's glyph and its count already carry it.
+	if b, ok := note(res, "main"); ok {
+		t.Errorf("main got a line (%q) — a quiet important branch is not an observation", b.Summary)
+	}
+	if want := "3 branches up to date"; res.Detail != want {
+		t.Errorf("detail = %q, want %q (the count is what says main was checked)", res.Detail, want)
+	}
+}
+
+// TestAllKeepsQuietSingleBranchReposToOneLine is the shape that motivated the
+// rule: nothing but an important branch, everything up to date, and the report
+// is the repo row alone — not the row plus a bullet saying the same thing.
+func TestAllKeepsQuietSingleBranchReposToOneLine(t *testing.T) {
+	_, _, run := setupUpstreamRepo(t, `show_branches = "all"`)
+
+	res := run()
+	if res.Outcome != UpToDate {
+		t.Fatalf("outcome = %v, want UpToDate; actions=%v", res.Outcome, res.Actions)
+	}
+	if len(res.Branches) != 0 {
+		t.Errorf("branches = %+v, want none", res.Branches)
+	}
+	if want := "up to date"; res.Detail != want {
+		t.Errorf("detail = %q, want %q", res.Detail, want)
+	}
+}
+
+// TestAllStillListsAFindingOnAnImportantBranch: visibility is configurable,
+// findings are not — dropping the roll-call must not drop main when it has
+// something to report.
+func TestAllStillListsAFindingOnAnImportantBranch(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `show_branches = "all"`)
+	parkedWork(t, clone, "spike")
+	writeCommit(t, clone, "local.txt", "mine\n", "unpushed work on main")
+
+	res := run()
+	if res.Outcome != Attention {
+		t.Fatalf("outcome = %v, want Attention; actions=%v", res.Outcome, res.Actions)
+	}
+	b, ok := note(res, "main")
+	if !ok {
+		t.Fatalf("main's finding lost its line; branches=%+v", res.Branches)
+	}
+	if b.Outcome == Info {
+		t.Errorf("main outcome = Info, want a finding")
 	}
 }
 
