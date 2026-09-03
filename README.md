@@ -175,10 +175,11 @@ cannot set.
 | `prune`      | `report` \| `interactive` \| `auto` \| `manual`   | what a sweep does about landed local branches: name them, walk them with you, remove the ones that clear the unattended bar, or don't look (§5.3) |
 | `prune_keep` | list of branch-name globs                       | branches prune never removes whatever the tiers concluded — a name-based veto over inference (default `[]`) (§5.3) |
 | `prune_min_age` | a duration (`14d`, `2w`, `48h`)              | how long a ref must have sat still before prune will remove it; measured from the later of the tip's date and the ref's last movement (default unset, i.e. no age gate) (§5.3) |
+| `sync_frequency` | a duration (`7d`, `12h`, `2w`)              | how long `sync --if-due` leaves this repo alone; `"0"` means always due, unset = 7d (§5.5) |
 | `host`       | a `[hosts.*]` key                               | default host for bare-name clones |
 | `fork_owner` | `host:owner`                                    | derive a fork as `<fork_owner>/<name>` when the workflow needs one |
 | `pin`        | branch \| tag \| `latest-tag`                   | vendor only: what to track |
-| `hooks`      | list of `{ after = "...", run = "..." }`        | commands run after a lifecycle event (e.g. `after = "fetch"`) |
+| `hooks`      | list of `{ after = "...", run = "..." }`        | commands run after a lifecycle event; `after` must name one the engine runs (`fetch` today) and both keys are required — a hook nothing runs is refused at load (§3.4) |
 
 ### Workflows and forks
 

@@ -267,7 +267,7 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 	}
 	if opts.IfDue && !opts.Force && !x.due() {
 		res.Outcome, res.Detail = UpToDate, "not due"
-		x.add("skipped: not due (last sync within %s)", opts.Frequency)
+		x.add("skipped: not due (last sync within %s)", x.frequency())
 		return *res
 	}
 
@@ -1438,12 +1438,24 @@ func (x *run) timestampPath() string {
 	name := strings.NewReplacer("/", "_", ":", "_").Replace(x.r.ID.String())
 	return filepath.Join(x.opts.StateDir, name)
 }
+
+// frequency is how long this repo is left alone between --if-due syncs: its own
+// sync_frequency where the chain set one, else the caller's built-in interval
+// (DESIGN §5.5). Nil and zero are different answers — zero means always due —
+// which is why the setting arrives as a pointer.
+func (x *run) frequency() time.Duration {
+	if x.r.SyncFrequency != nil {
+		return *x.r.SyncFrequency
+	}
+	return x.opts.Frequency
+}
+
 func (x *run) due() bool {
 	info, err := os.Stat(x.timestampPath())
 	if err != nil {
 		return true
 	}
-	return time.Since(info.ModTime()) >= x.opts.Frequency
+	return time.Since(info.ModTime()) >= x.frequency()
 }
 func (x *run) writeTimestamp() {
 	_ = os.MkdirAll(x.opts.StateDir, 0o755)

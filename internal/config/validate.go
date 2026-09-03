@@ -98,7 +98,7 @@ func (reg *Registry) Validate() error {
 		checkEnums(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkGlobs(add, fmt.Sprintf("root %q", n), globsOfSettings(r.Settings))
 		checkScanLimit(add, fmt.Sprintf("root %q", n), r.Settings)
-		checkAge(add, fmt.Sprintf("root %q", n), r.Settings)
+		checkAges(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkHooks(add, fmt.Sprintf("root %q", n), r.Settings.Hooks)
 	}
 	dirNames := make([]string, 0, len(reg.dirs))
@@ -123,14 +123,14 @@ func (reg *Registry) Validate() error {
 		checkEnums(add, where, d.Settings)
 		checkGlobs(add, where, globsOfSettings(d.Settings))
 		checkScanLimit(add, where, d.Settings)
-		checkAge(add, where, d.Settings)
+		checkAges(add, where, d.Settings)
 		checkHooks(add, where, d.Settings.Hooks)
 	}
 
 	checkEnums(add, "defaults", reg.defaults)
 	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
 	checkScanLimit(add, "defaults", reg.defaults)
-	checkAge(add, "defaults", reg.defaults)
+	checkAges(add, "defaults", reg.defaults)
 	checkHooks(add, "defaults", reg.defaults.Hooks)
 
 	// effective() surfaces id/fork parse errors and undervable forks; resolving
@@ -228,17 +228,29 @@ func checkScanLimit(add func(string, ...any), where string, s Settings) {
 	}
 }
 
-// checkAge rejects a prune_min_age nothing can read. It is checked at every
-// tier rather than only where a repo resolves, because a root that currently
-// declares no repos still holds the setting for whatever lands under it later,
-// and a typo that waits for its first repo to surface is a typo that surfaces
-// during someone else's task.
-func checkAge(add func(string, ...any), where string, s Settings) {
-	if s.PruneMinAge == nil {
-		return
-	}
-	if _, err := ParseAge(*s.PruneMinAge); err != nil {
-		add("%s: prune_min_age: %v", where, err)
+// checkAges rejects a duration nothing can read. Both settings spelled in the
+// age syntax are checked here, at every tier rather than only where a repo
+// resolves, because a root that currently declares no repos still holds the
+// setting for whatever lands under it later, and a typo that waits for its
+// first repo to surface is a typo that surfaces during someone else's task.
+//
+// A bad sync_frequency is the quieter of the two: it only shows up under
+// --if-due, which is the run nobody watches — the backgrounded one from shell
+// startup.
+func checkAges(add func(string, ...any), where string, s Settings) {
+	for _, f := range []struct {
+		field string
+		value *string
+	}{
+		{"prune_min_age", s.PruneMinAge},
+		{"sync_frequency", s.SyncFrequency},
+	} {
+		if f.value == nil {
+			continue
+		}
+		if _, err := ParseAge(*f.value); err != nil {
+			add("%s: %s: %v", where, f.field, err)
+		}
 	}
 }
 

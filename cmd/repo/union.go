@@ -117,6 +117,7 @@ func discoveredRepo(reg *config.Registry, f discover.Found) model.Repo {
 		Prune:               strOrDefault(inh.Prune, builtinPrune),
 		PruneKeep:           inh.PruneKeep,
 		PruneMinAge:         inh.PruneMinAge,
+		SyncFrequency:       inh.SyncFrequency,
 		Pin:                 inh.Pin,
 		Hooks:               inh.Hooks,
 	}

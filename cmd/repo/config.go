@@ -113,6 +113,12 @@ var configFields = []struct {
 		}
 		return r.PruneMinAge.String()
 	}},
+	{"sync_frequency", func(r model.Repo) string {
+		if r.SyncFrequency == nil {
+			return ""
+		}
+		return r.SyncFrequency.String()
+	}},
 	{"pin", func(r model.Repo) string { return r.Pin }},
 	{"hooks", func(r model.Repo) string {
 		parts := make([]string, len(r.Hooks))
@@ -162,27 +168,28 @@ func renderExplain(w io.Writer, provenance map[string]string, r model.Repo) erro
 // the common case short — the verbosity repo config --explain deliberately
 // doesn't try to avoid.
 type configOut struct {
-	ID                  string        `toml:"id,omitempty"`
-	Fork                string        `toml:"fork,omitempty"`
-	Workflow            string        `toml:"workflow"`
-	Layout              string        `toml:"layout"`
-	Worktrees           bool          `toml:"worktrees"`
-	Branches            []string      `toml:"branches"`
-	Push                string        `toml:"push"`
-	TaskBranches        string        `toml:"task_branches"`
-	ShowBranches        string        `toml:"show_branches"`
-	ForcePush           []string      `toml:"force_push,omitempty"`
-	ForcePull           []string      `toml:"force_pull,omitempty"`
-	Tags                []string      `toml:"tags"`
-	ForceTags           []string      `toml:"force_tags,omitempty"`
-	ExpectedUntracked   []string      `toml:"expected_untracked,omitempty"`
-	ExpectedUncommitted []string      `toml:"expected_uncommitted,omitempty"`
-	MergeScanLimit      *int          `toml:"merge_scan_limit,omitempty"`
-	Prune               string        `toml:"prune"`
-	PruneKeep           []string      `toml:"prune_keep,omitempty"`
-	PruneMinAge         time.Duration `toml:"prune_min_age,omitzero"`
-	Pin                 string        `toml:"pin,omitempty"`
-	Hooks               []model.Hook  `toml:"hooks,omitempty"`
+	ID                  string         `toml:"id,omitempty"`
+	Fork                string         `toml:"fork,omitempty"`
+	Workflow            string         `toml:"workflow"`
+	Layout              string         `toml:"layout"`
+	Worktrees           bool           `toml:"worktrees"`
+	Branches            []string       `toml:"branches"`
+	Push                string         `toml:"push"`
+	TaskBranches        string         `toml:"task_branches"`
+	ShowBranches        string         `toml:"show_branches"`
+	ForcePush           []string       `toml:"force_push,omitempty"`
+	ForcePull           []string       `toml:"force_pull,omitempty"`
+	Tags                []string       `toml:"tags"`
+	ForceTags           []string       `toml:"force_tags,omitempty"`
+	ExpectedUntracked   []string       `toml:"expected_untracked,omitempty"`
+	ExpectedUncommitted []string       `toml:"expected_uncommitted,omitempty"`
+	MergeScanLimit      *int           `toml:"merge_scan_limit,omitempty"`
+	Prune               string         `toml:"prune"`
+	PruneKeep           []string       `toml:"prune_keep,omitempty"`
+	PruneMinAge         time.Duration  `toml:"prune_min_age,omitzero"`
+	SyncFrequency       *time.Duration `toml:"sync_frequency,omitempty"`
+	Pin                 string         `toml:"pin,omitempty"`
+	Hooks               []model.Hook   `toml:"hooks,omitempty"`
 }
 
 func renderConfig(w io.Writer, r model.Repo) error {
@@ -205,6 +212,7 @@ func renderConfig(w io.Writer, r model.Repo) error {
 		Prune:               r.Prune,
 		PruneKeep:           r.PruneKeep,
 		PruneMinAge:         r.PruneMinAge,
+		SyncFrequency:       r.SyncFrequency,
 		Pin:                 r.Pin,
 		Hooks:               r.Hooks,
 	}

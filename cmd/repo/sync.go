@@ -17,6 +17,11 @@ import (
 	syncpkg "github.com/michael-odell/repo/internal/sync"
 )
 
+// defaultSyncFrequency is the interval --if-due uses for a repo whose chain
+// sets no sync_frequency (DESIGN §5.5). It is the floor of the setting, not a
+// competitor to it: anything the registry says wins, including "0".
+const defaultSyncFrequency = 7 * 24 * time.Hour
+
 func cmdSync(_ context.Context, args []string) error {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	ifDue := fs.Bool("if-due", false, "only sync repos whose cadence is due")
@@ -58,7 +63,7 @@ func cmdSync(_ context.Context, args []string) error {
 		IfDue:       *ifDue,
 		FixLayout:   *fix,
 		LoseIgnored: *loseIgnored,
-		Frequency:   7 * 24 * time.Hour,
+		Frequency:   defaultSyncFrequency,
 		StateDir:    filepath.Join(outDir(), "last-sync"),
 	}
 	results := syncpkg.Run(reg, selected, opts)

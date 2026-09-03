@@ -93,6 +93,13 @@ type Repo struct {
 	PruneKeep   []string
 	PruneMinAge time.Duration
 
+	// SyncFrequency is how long `sync --if-due` leaves this repo alone (DESIGN
+	// §5.5). Nil is "nobody said", and the caller applies the built-in
+	// interval; a pointer because "0" is a value someone can mean — always
+	// due, every run — and the two must not collapse the way they harmlessly
+	// do for PruneMinAge above.
+	SyncFrequency *time.Duration
+
 	Pin   string // vendor only
 	Hooks []Hook
 

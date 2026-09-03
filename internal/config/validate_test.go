@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestAnUnimplementedValueIsRejected is the rule from DESIGN §3.4: the loader
@@ -156,5 +157,102 @@ hooks = [ { after = "clone", run = "make deps" } ]
 func TestHookEventsAreAllImplemented(t *testing.T) {
 	if got, want := len(HookEvents()), len(validHookEvents); got != want {
 		t.Fatalf("HookEvents() has %d of %d hook events; the engine implements them all", got, want)
+	}
+}
+
+// TestSyncFrequencyIsValidatedLikeAnAge: a cadence nothing can parse is only
+// ever consulted by `sync --if-due`, which is the run launched from shell
+// startup in the background — the one nobody is watching. It has to fail at
+// load, where someone is.
+func TestSyncFrequencyIsValidatedLikeAnAge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "days", value: `"3d"`},
+		{name: "weeks", value: `"2w"`},
+		{name: "zero is always due", value: `"0"`},
+		{name: "nonsense", value: `"soon"`, want: "sync_frequency"},
+		{name: "negative", value: `"-1d"`, want: "sync_frequency"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.wd]
+dir            = "~/wd"
+sync_frequency = `+tc.value+`
+repos          = ["github:acme/thing"]
+`)
+			reg, err := Load([]string{dir})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			err = reg.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("valid interval %s rejected: %v", tc.value, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("interval %s should be rejected mentioning %q; got %v", tc.value, tc.want, err)
+			}
+		})
+	}
+}
+
+// TestSyncFrequencyInheritsAndDistinguishesZero: the setting cascades like
+// every other, and a repo that asks for zero must not resolve the same way as
+// a repo that asked for nothing — one means "every run", the other "use the
+// built-in" (DESIGN §5.5).
+func TestSyncFrequencyInheritsAndDistinguishesZero(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[defaults]
+sync_frequency = "3d"
+
+[root.wd]
+dir   = "~/wd"
+repos = ["github:acme/inherits"]
+
+[[root.wd.repo]]
+id             = "github:acme/always"
+sync_frequency = "0"
+
+[root.other]
+dir   = "~/other"
+repos = ["github:acme/silent"]
+`)
+	// [defaults] reaches both roots; the repo entry overrides its own.
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		short string
+		want  time.Duration
+	}{
+		{"inherits", 3 * 24 * time.Hour},
+		{"always", 0},
+		{"silent", 3 * 24 * time.Hour},
+	} {
+		r := repoByShort(t, reg, tc.short)
+		if r.SyncFrequency == nil {
+			t.Errorf("%s: sync_frequency did not resolve; [defaults] should reach every root", tc.short)
+			continue
+		}
+		if *r.SyncFrequency != tc.want {
+			t.Errorf("%s: sync_frequency = %s, want %s", tc.short, *r.SyncFrequency, tc.want)
+		}
 	}
 }
