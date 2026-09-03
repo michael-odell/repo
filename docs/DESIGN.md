@@ -1421,7 +1421,7 @@ inventory it enumerates — `none ⊂ notable ⊂ unmerged ⊂ all`:
 | `none` | nothing; the repo row is the whole report | — |
 | `notable` | branches with a finding this run | `vendor`, `supply-chain-mirror` |
 | `unmerged` | …plus task branches holding commits the important branch lacks | `upstream-push`, `fork-pr` |
-| `all` | …plus every remaining branch, important ones included, each with the verdict `repo prune` would act on | — |
+| `all` | …plus the task branches whose work has already landed, each with the verdict `repo prune` would act on | — |
 
 `none` never suppresses a *finding*, only its line: the repo row still carries
 the worst outcome and its count, and `--verbose` still has the full trace. And
@@ -1437,6 +1437,18 @@ comparison is §5.3's full tier ladder, so a squash- or rebase-merged branch is
 recognised as landed rather than nagged about forever, and `all` shows the same
 prune verdict the command would act on — a decision you can watch being right
 during ordinary sweeps instead of having to remember to go looking for it.
+
+An observation is therefore only ever made *about a task branch*. A quiet
+important branch is enumerated at no tier, `all` included: there is nothing to
+say about it that the repo's own row hasn't already said. `✓ up to date` is a
+statement about the whole repo — it is only reachable when every branch is
+clean (a finding on `main` sets the glyph like any other) — so a `◦ main up to
+date` beneath it is the same fact indented, and on the overwhelmingly common
+single-branch repo it is the row repeated verbatim. Where the count is worth
+having, the row carries it: `17 branches up to date` counts the important
+branches alongside the task ones, so "was main checked" is answered without a
+line per branch. What `all` adds over `unmerged` is the landed task branches
+and their prune verdicts — not a roll-call.
 
 Given those, the layout follows one rule: **a finding folds onto the repo's row
 only when it is the only thing being shown.**
