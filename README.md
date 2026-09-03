@@ -163,7 +163,7 @@ cannot set.
 | `workflow`   | `upstream-push` \| `fork-pr` \| `supply-chain-mirror` \| `vendor` | remote contract (below) |
 | `push`       | `auto` \| `manual` \| `never`                   | important branch's ahead-only commits: push automatically, leave for you, or flag as unexpected — default varies per workflow (§3.6) |
 | `task_branches` | `auto` \| `report` \| `pull-only`             | every other local branch: push automatically, defer to PR time, or keep it passively pulled and flag only local commits — default varies per workflow (§3.6) |
-| `show_branches` | `none` \| `notable` \| `unmerged` \| `all`    | how much of the branch inventory `sync` lists (below) — default varies per workflow (§5.6) |
+| `show_branches` | `none` \| `notable` \| `unmerged` \| `landed` \| `all` | how much of the branch inventory `sync` lists (below) — default varies per workflow (§5.6) |
 | `force_push` | list of branch-name globs                       | branches `sync` may force-push when local history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `force_pull` | list of branch-name globs                       | branches `sync` may force-pull/reset when the remote's history was rewritten (default `[]`, i.e. never) (§5.2) |
 | `fetch_skip` | list of remote-name globs                       | remotes `sync` should never fetch — everything else is fetched by default, including remotes no workflow manages (default `[]`); never applies to a workflow's managed remotes (§3.6) |
@@ -229,9 +229,10 @@ controls the *observations* around them:
 | `none` | nothing — the repo row is the whole report |
 | `notable` | branches with a finding this run |
 | `unmerged` | …plus task branches holding work the important branch lacks |
-| `all` | …plus every remaining branch, important ones included, each with the verdict `prune` would act on |
+| `landed` | …plus the task branches whose work has landed, each with the verdict `prune` would act on |
+| `all` | …plus the important branches, quiet ones included |
 
-`all` is the one to reach for when you want dispositions — including which
+`landed` is the one to reach for when you want dispositions — including which
 branches have landed and could go:
 
 ```
@@ -240,8 +241,12 @@ branches have landed and could go:
     ◦    PRECXP-74-dev-cluster                 1 ahead of main
     ◦    refactor-auth                         merged (rewritten) — prunable
     ◦    tidy-logging                          merged — prunable
-    ◦    main                                  up to date
 ```
+
+`all` adds one thing to that: a line for every important branch, whether or not
+it has anything to say (`◦ main  up to date`). It is the literal top of the
+dial, not the setting you want for prune — a quiet important branch is already
+reported by the repo's own row and counted in its `N branches up to date`.
 
 `merged (rewritten)` is the point of the tiered detection (§5.3): `git branch
 --merged` only answers the ancestry question, so a squash- or rebase-merged
@@ -261,7 +266,7 @@ anything more specific would be a guess.
 These verdicts are the same call `repo prune` acts on, not a lookalike that might
 disagree — so the decision can be watched during ordinary sweeps. Every sweep
 also ends with a count of what prune could remove, so candidates are visible
-without setting `show_branches = "all"`:
+without setting `show_branches = "landed"`:
 
 ```
 0 failed · 3 flagged · 0 review pending · 0 deferred · 1 updated · 20 up to date

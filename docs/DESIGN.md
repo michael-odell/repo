@@ -1268,9 +1268,9 @@ between a tool that is trusted because it is usually right and one that can be
 checked. `repo prune -v --dry-run <selector>` is therefore the "explain this to
 me" invocation, and no separate `--explain` exists for it to disagree with.
 
-The same verdicts appear during ordinary sweeps under `show_branches = "all"`
-(§5.6) — the same call, so the line watched during a sweep is the decision prune
-would act on, not a lookalike that might disagree.
+The same verdicts appear during ordinary sweeps under `show_branches =
+"landed"` and above (§5.6) — the same call, so the line watched during a sweep
+is the decision prune would act on, not a lookalike that might disagree.
 
 Merge state is also what keeps `sync` from **resurrecting a merged branch**.
 After a branch is merged and deleted upstream, `fetch --prune` removes its
@@ -1283,8 +1283,9 @@ is not knowable, so nothing claims to know it.
 
 **The sweep names what it found.** Under `report`, `interactive` and `auto`,
 `sync`'s footer carries a line — `12 branches prunable across 4 repos — repo
-prune` — because until now prune candidates were only visible under
-`show_branches = "all"`, which made the feature invisible on default settings.
+prune` — because until now prune candidates were only visible to a repo whose
+`show_branches` enumerated landed work, which made the feature invisible on
+default settings.
 The footer is a count, not a list: enumerating branches is `show_branches`'s job
 (§5.6), and doing it twice in one report would be the row/bullet disagreement
 that section exists to prevent.
@@ -1298,14 +1299,15 @@ running it by hand really is the only way those branches go.
 
 That footer is what makes classification cost a *decision* rather than a
 surprise. Every mode but `manual` classifies each selected repo, which is what
-`show_branches = "all"` already pays today; `manual` is the escape hatch for
+`show_branches = "landed"` already pays today; `manual` is the escape hatch for
 anyone who finds it too slow.
 
 The two settings are independent inputs to the same question, and either alone
 is reason enough to classify: `show_branches` decides what the sweep *tells*
 you, `prune` decides what it would *do* (§5.6). So `manual` withdraws prune's
-reason, not the report's — a repo set to `manual` with `show_branches = "all"`
-still enumerates its verdicts, because that was asked for separately — and the
+reason, not the report's — a repo set to `manual` with `show_branches =
+"landed"` still enumerates its verdicts, because that was asked for separately —
+and the
 footer's count ignores `show_branches` entirely, since suppressing it there
 would hide prune from exactly the configuration that lists the least.
 
@@ -1317,8 +1319,8 @@ are not paid for twice.
 **The confidence path is the feature, not a preamble to it.** The modes are
 rungs, and the order is deliberate:
 
-1. `report` with `show_branches = "all"` — watch verdicts against repos whose
-   history you already know, deleting nothing.
+1. `report` with `show_branches = "landed"` — watch verdicts against repos
+   whose history you already know, deleting nothing.
 2. `repo prune` — the same verdicts, one at a time, each explained before you
    endorse it. Read the journal afterwards.
 3. `prune = "interactive"` — the walk-through moves into the daily sweep, so
@@ -1413,15 +1415,16 @@ mistake this section exists to prevent:
 
 Findings are not configurable. An observation is: it exists only to be read.
 
-**`show_branches`** is one dial with four positions, ordered by how much of the
-inventory it enumerates — `none ⊂ notable ⊂ unmerged ⊂ all`:
+**`show_branches`** is one dial with five positions, ordered by how much of the
+inventory it enumerates — `none ⊂ notable ⊂ unmerged ⊂ landed ⊂ all`:
 
 | value | enumerates | default for |
 |---|---|---|
 | `none` | nothing; the repo row is the whole report | — |
 | `notable` | branches with a finding this run | `vendor`, `supply-chain-mirror` |
 | `unmerged` | …plus task branches holding commits the important branch lacks | `upstream-push`, `fork-pr` |
-| `all` | …plus the task branches whose work has already landed, each with the verdict `repo prune` would act on | — |
+| `landed` | …plus the task branches whose work has already landed, each with the verdict `repo prune` would act on | — |
+| `all` | …plus the important branches, quiet ones included | — |
 
 `none` never suppresses a *finding*, only its line: the repo row still carries
 the worst outcome and its count, and `--verbose` still has the full trace. And
@@ -1434,21 +1437,21 @@ branch, not against its own remote: "work that hasn't landed" is a claim about
 the mainline. That is also why important branches need no exclusion rule — they
 are the *reference*, and a branch cannot be unmerged relative to itself. The
 comparison is §5.3's full tier ladder, so a squash- or rebase-merged branch is
-recognised as landed rather than nagged about forever, and `all` shows the same
-prune verdict the command would act on — a decision you can watch being right
+recognised as landed rather than nagged about forever, and `landed` shows the
+same prune verdict the command would act on — a decision you can watch being right
 during ordinary sweeps instead of having to remember to go looking for it.
 
-An observation is therefore only ever made *about a task branch*. A quiet
-important branch is enumerated at no tier, `all` included: there is nothing to
-say about it that the repo's own row hasn't already said. `✓ up to date` is a
-statement about the whole repo — it is only reachable when every branch is
-clean (a finding on `main` sets the glyph like any other) — so a `◦ main up to
-date` beneath it is the same fact indented, and on the overwhelmingly common
-single-branch repo it is the row repeated verbatim. Where the count is worth
-having, the row carries it: `17 branches up to date` counts the important
-branches alongside the task ones, so "was main checked" is answered without a
-line per branch. What `all` adds over `unmerged` is the landed task branches
-and their prune verdicts — not a roll-call.
+The two top rungs are separate because they answer different questions, and
+`landed` is the one most people want. A quiet important branch tells you nothing
+the repo's row hasn't: `✓ up to date` is a claim about the whole repo — only
+reachable when every branch is clean, since a finding on `main` sets the glyph
+like any other — so `◦ main up to date` beneath it is the same fact indented,
+and on the overwhelmingly common single-branch repo it is the row repeated
+verbatim. The count covers it where it is worth having (`17 branches up to
+date` counts important and task branches alike), so "was `main` checked" needs
+no line per branch. Someone reaching for the prune verdicts should not have to
+accept a roll-call to get them — but `all` is still the position on the dial
+that enumerates the whole inventory, and it is named for what it does.
 
 Given those, the layout follows one rule: **a finding folds onto the repo's row
 only when it is the only thing being shown.**
