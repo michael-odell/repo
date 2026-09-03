@@ -532,7 +532,19 @@ func TestTheJournalSaysWhatDidTheDeleting(t *testing.T) {
 // deletion that follows the same decision.
 func sweptRepo(t *testing.T, wd, mode string) (model.Repo, []syncpkg.Result, string) {
 	t.Helper()
-	dir := cloneWithLandedBranch(t, wd, "proj")
+	r, res, dir := sweptRepoNamed(t, wd, "proj", "landed", mode)
+	return r, []syncpkg.Result{res}, dir
+}
+
+// sweptRepoNamed is sweptRepo with the repo's directory and its landed branch
+// named by the caller, so a sweep over more than one repo can say whose branch
+// went.
+func sweptRepoNamed(t *testing.T, wd, name, branch, mode string) (model.Repo, syncpkg.Result, string) {
+	t.Helper()
+	dir := cloneWithLandedBranch(t, wd, name)
+	if branch != "landed" {
+		git(t, dir, "branch", "-m", "landed", branch)
+	}
 	r := resolved(t, testRegistry(t, wd), dir)
 	r.Prune = mode
 	verdicts, err := syncpkg.Classify(dir, r)
@@ -548,7 +560,7 @@ func sweptRepo(t *testing.T, wd, mode string) (model.Repo, []syncpkg.Result, str
 	if len(prunable) != 1 {
 		t.Fatalf("expected one prunable branch, got %d", len(prunable))
 	}
-	return r, []syncpkg.Result{{Name: repoName(r), Prunable: prunable}}, dir
+	return r, syncpkg.Result{Name: repoName(r), Prunable: prunable}, dir
 }
 
 // TestSweepAutoDeletes: `auto` is the walk with the asking removed. What holds
@@ -672,6 +684,57 @@ func TestSweepInteractiveDoesNotAskWithNoTerminal(t *testing.T) {
 
 	if !hasBranch(t, dir, "landed") {
 		t.Errorf("interactive pruned with no terminal to ask at:\n%s", out.String())
+	}
+}
+
+// TestSweepPrunesTheRepoTheVerdictsCameFrom: the repos and the sweep's results
+// are parallel slices paired by position, and the report sits between the
+// sweep that produced them and the walk that acts on them. Sorting the report's
+// results in place broke that pairing, so every repo but the first was pruned
+// against another repo's verdicts: in v0.11.0 that was a screen of answered
+// questions followed by "branch not found", and where a name had happened to
+// exist in both repos it would have deleted the branch nobody was asked about.
+func TestSweepPrunesTheRepoTheVerdictsCameFrom(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	// Selected in an order the report's own sort by name will not preserve.
+	zr, zres, zdir := sweptRepoNamed(t, wd, "zeta", "zeta-landed", syncpkg.PruneAuto)
+	ar, ares, adir := sweptRepoNamed(t, wd, "alpha", "alpha-landed", syncpkg.PruneAuto)
+	selected := []model.Repo{zr, ar}
+	results := []syncpkg.Result{zres, ares}
+
+	var out bytes.Buffer
+	renderSync(&out, results, syncpkg.Options{}, true)
+	sweepPrune(&out, strings.NewReader(""), selected, results, syncpkg.Options{})
+
+	if hasBranch(t, zdir, "zeta-landed") {
+		t.Errorf("zeta's landed branch survived the sweep:\n%s", out.String())
+	}
+	if hasBranch(t, adir, "alpha-landed") {
+		t.Errorf("alpha's landed branch survived the sweep:\n%s", out.String())
+	}
+}
+
+// TestSweepRefusesUnalignedResults is the backstop under that pairing. Nothing
+// in the types says the two slices still line up by the time the walk runs, and
+// a mismatch cannot be repaired here — names repeat across roots, so rematching
+// on them is another guess. Pruning nothing and saying why is the only answer
+// that doesn't risk deleting a branch nobody was asked about.
+func TestSweepRefusesUnalignedResults(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	wd := t.TempDir()
+	zr, zres, zdir := sweptRepoNamed(t, wd, "zeta", "zeta-landed", syncpkg.PruneAuto)
+	ar, ares, adir := sweptRepoNamed(t, wd, "alpha", "alpha-landed", syncpkg.PruneAuto)
+
+	var out bytes.Buffer
+	sweepPrune(&out, strings.NewReader(""), []model.Repo{zr, ar},
+		[]syncpkg.Result{ares, zres}, syncpkg.Options{})
+
+	if !hasBranch(t, zdir, "zeta-landed") || !hasBranch(t, adir, "alpha-landed") {
+		t.Errorf("a branch went on another repo's verdicts:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "nothing pruned") {
+		t.Errorf("the sweep pruned nothing and did not say why:\n%s", out.String())
 	}
 }
 

@@ -229,6 +229,28 @@ valid value, no effect, no warning. Enums now declare which of their values are
 declaration to the code by asserting each implemented value produces a
 distinguishable outcome.
 
+**Fixed, 2026-09-02: the sweep pruned each repo against another repo's
+verdicts.** `sync` holds the selected repos and `Run`'s results as parallel
+slices paired by position, and `renderSync` — sitting between the pairing and
+the walk that acts on it — sorted the results by name *in place*. Every repo
+whose sorted position differed from its selected one then reached `sweepPrune`
+carrying someone else's candidates: on a live v0.11.0 run under
+`prune = "interactive"` that was a screen of branches walked and answered under
+the wrong repo heading, followed by `git branch -D` in a container where none of
+those names existed — `error: branch 'precxp147' not found`, sixteen times over.
+Nothing was lost only because the names didn't collide; where two repos had
+shared a branch name it would have deleted the one nobody was asked about. `repo prune` was
+never affected — it classifies inside the loop that deletes, so it has no second
+slice to keep aligned, which is why running it by hand worked.
+
+The report now sorts a copy, since a display function reordering its caller's
+data is the whole bug. The pairing is also checked now (`prunePairs`): a pair
+whose names disagree yields no pairs at all, and the sweep prunes nothing and
+says which result sat where. A mismatch isn't recoverable — repo names repeat
+across roots, so rematching on them is just a different guess — and a deletion
+is what hangs off the answer. The tests couldn't have caught it: every sweep
+test used a single repo, where no ordering exists to disagree about.
+
 ### Stage 7 — distribution hardening
 The POSIX shim in `dotfiles/bin/repo` (download+verify from Releases -> `go build`
 fallback -> no-op offline); release automation; the small cold-bootstrap seed + a

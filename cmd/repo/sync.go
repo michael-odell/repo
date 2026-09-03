@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -156,6 +157,12 @@ func expandPath(p string) string {
 // telling someone to run `repo prune` immediately before doing it for them is
 // the kind of disagreement §5.6 exists to prevent.
 func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options, willPrune bool) {
+	// Sorted on a copy. The caller's slice is paired with its repos by position
+	// (see prunePairs), and the walk that runs after this report deletes
+	// branches on the strength of that pairing — a report that reorders what it
+	// was handed is how a question answered about one repo came to be carried
+	// out against another (v0.11.0).
+	results = slices.Clone(results)
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 
 	// A branch row's glyph is itself indented past the repo row's (not just
@@ -251,11 +258,15 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options, wil
 // acting either — and the footer should say `repo prune` in exactly that case,
 // since running it by hand is then the only way these branches go.
 func anyRepoPrunes(repos []model.Repo, results []syncpkg.Result) bool {
-	for i, r := range repos {
-		if i >= len(results) || results[i].Err != nil || len(results[i].Prunable) == 0 {
+	pairs, mismatch := prunePairs(repos, results)
+	if mismatch != "" {
+		return false // the walk will decline too, and say why
+	}
+	for _, p := range pairs {
+		if p.res.Err != nil || len(p.res.Prunable) == 0 {
 			continue
 		}
-		switch r.Prune {
+		switch p.repo.Prune {
 		case syncpkg.PruneAuto:
 			return true
 		case syncpkg.PruneInteractive:

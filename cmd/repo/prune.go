@@ -419,6 +419,34 @@ func shortSHA(s string) string {
 	return s
 }
 
+// prunePair is one repo alongside the verdicts its own sync produced.
+type prunePair struct {
+	repo model.Repo
+	res  syncpkg.Result
+}
+
+// prunePairs zips the selected repos with the sweep's results, which Run
+// returns in the order it was handed them.
+//
+// The zip is by position and it is checked, because what hangs off it is a
+// deletion: pruning one repo against another's verdicts either names branches
+// that aren't there or — where the two repos happen to share a branch name —
+// removes one nobody was asked about. A disagreement is not recoverable here
+// either, since names repeat across roots and rematching on them would just be
+// a different guess, so it yields no pairs at all and the reason to say so.
+func prunePairs(repos []model.Repo, results []syncpkg.Result) (pairs []prunePair, mismatch string) {
+	for i, r := range repos {
+		if i >= len(results) {
+			break
+		}
+		if results[i].Name != repoName(r) {
+			return nil, fmt.Sprintf("%q's result sits where %q's should", results[i].Name, repoName(r))
+		}
+		pairs = append(pairs, prunePair{repo: r, res: results[i]})
+	}
+	return pairs, ""
+}
+
 // sweepPrune is what `prune = "interactive"` and `prune = "auto"` do after a
 // sweep (DESIGN §5.3).
 //
@@ -433,6 +461,11 @@ func shortSHA(s string) string {
 // counted these exact ones, so the line you read and the deletion that follows
 // can never disagree.
 func sweepPrune(w io.Writer, in io.Reader, repos []model.Repo, results []syncpkg.Result, opts syncpkg.Options) {
+	pairs, mismatch := prunePairs(repos, results)
+	if mismatch != "" {
+		fmt.Fprintf(w, "  nothing pruned: %s, so no verdict can be matched to the repo it came from\n", mismatch)
+		return
+	}
 	walk := &walkthrough{in: bufio.NewReader(in)}
 	var log *journal.Log
 	defer func() {
@@ -442,11 +475,8 @@ func sweepPrune(w io.Writer, in io.Reader, repos []model.Repo, results []syncpkg
 	}()
 
 	pruned := 0
-	for i, r := range repos {
-		if i >= len(results) {
-			break
-		}
-		res := results[i]
+	for _, p := range pairs {
+		r, res := p.repo, p.res
 		mode := r.Prune
 		if res.Err != nil || len(res.Prunable) == 0 {
 			continue
