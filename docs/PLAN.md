@@ -163,14 +163,41 @@ pre-existing gap in the same code while refactoring the shared fetch path:
 those surfaced as a bare "fetch failed" instead of the proper per-tag
 finding. Fixed as part of the same refactor (`fetchAny`).
 
+**Completed, 2026-09-03: `--fix`'s remaining §4.1 reconciliations**, closing
+out this stage's engine work. Remote-contract repair, where the finding was
+that origin was being *silently* repointed by every plain sync — §4.1's rule is
+report-then-fix, and a URL is the one mismatch as likely to be config's error
+as the disk's, so the clone that has been working now stands until `--fix` says
+otherwise (a trailing `.git` stopped counting as a difference at all; it was
+"reconciling" working clones onto paths that don't exist). And location, which
+had been doing worse than nothing: a declared repo whose clone sat elsewhere
+read as "not cloned", so sync cloned a second copy at the configured path and
+the union hid the original behind its own declaration. It is now recognised by
+identity, reconciled where it is, and moved by `--fix`; several clones and none
+configured is refused rather than guessed at.
+
+Also closed the same day, from an audit of what §§3–7 describe and the code
+does not: `hooks[].after` was accepted with any value and silently skipped
+unless it read `fetch` — the same "valid key, valid value, no consumer" shape
+as `prune = "auto"`, now held to §3.4's rule with the events declared and
+tested. `sync_frequency` exists, so §5.5's cadence is a setting rather than a
+7-day constant in cmd/repo. And a sweep regenerates the shell artifacts, which
+§5.5 has always specified: only `repo apply` wrote them, so a sweep that cloned
+a repo left it out of `prjpath`/`cs` until someone ran a second command nothing
+prompts for. Those writes are atomic now, because the run that makes them is
+launched from shell startup and lands while other shells are sourcing them.
+
 Still open:
-- `--fix`'s other two DESIGN §4.1 reconciliations: general remote-contract
-  repair (a wrong URL, beyond the untrusted/upstream rename) and location —
-  moving a container found at the wrong root/layout path. Only layout-shape
-  conversion (`relayout.go`) and the untrusted/upstream rename exist so far.
-- Prune is complete (see its own order below); `--fix`'s remaining §4.1
-  reconciliations are what's left of this stage.
-- `repo home`/`repo path`/`repo clone`/`repo review` are still stubs.
+- `repo home`/`repo path`/`repo clone`/`repo review` are still stubs, and
+  `repo scan --record` (§7) doesn't exist. These are features, not gaps in
+  what is built; `review`'s full UX is DESIGN §9 anyway.
+- Plugin emission still keys off the hardcoded root name `plugins`
+  (`internal/artifact/artifact.go`), which wants a real root/repo attribute —
+  and DESIGN §6 still describes the set as "the `zsh-plugin` subset", tag
+  vocabulary §10 retired.
+- The cadence timestamps live under `$REPO_OUT/last-sync` while the prune
+  journal lives under `$XDG_STATE_HOME/repo/`. Both are state, not artifacts;
+  the journal's reasoning applies to both, so one of them is in the wrong place.
 - `wd-repos-update` -> `repo sync work` (the `work` root — tags are gone
   per DESIGN §10, so this is a root-name selector now, not `--tag work`).
 
