@@ -42,7 +42,7 @@ var (
 	validWorkflows    = []enumValue{done(model.UpstreamPush), done(model.ForkPR), done(model.SupplyChainMirror), done(model.Vendor)}
 	validPush         = []enumValue{done("auto"), done("manual"), done("never")}
 	validTaskBranches = []enumValue{done("auto"), done("report"), done("pull-only")}
-	validShowBranches = []enumValue{done("none"), done("notable"), done("unmerged"), done("all")}
+	validShowBranches = []enumValue{done("none"), done("notable"), done("unmerged"), done("landed"), done("all")}
 	validPrune        = []enumValue{done("manual"), done("report"), done("interactive"), done("auto")}
 )
 

@@ -239,8 +239,8 @@ func renderSync(w io.Writer, results []syncpkg.Result, opts syncpkg.Options, wil
 
 	// Landed branches are the one finding a sweep has no other way to mention:
 	// they are observations, not findings, so they never lift a repo's glyph
-	// (§5.6) — and outside show_branches = "all" they have no line either, which
-	// left prune invisible to anyone who hadn't gone looking for it. A count,
+	// (§5.6) — and below show_branches = "landed" they have no line either,
+	// which left prune invisible to anyone who hadn't gone looking for it. A count,
 	// not a list: enumerating branches is show_branches' job, and doing it twice
 	// in one report is the row/bullet disagreement §5.6 exists to prevent.
 	if branches, repos := prunableTally(results); branches > 0 {

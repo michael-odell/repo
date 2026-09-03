@@ -63,9 +63,10 @@ type Result struct {
 	Elapsed time.Duration
 	// Prunable is this repo's task branches that prune would remove, carried out
 	// of the sweep rather than recounted afterwards. The footer names how many
-	// there are — before it, prune candidates were visible only under
-	// show_branches = "all", which made the feature invisible on default
-	// settings — and `interactive`/`auto` act on these exact verdicts, so the
+	// there are — before it, prune candidates were visible only under the
+	// show_branches tiers that enumerate landed work, which made the feature
+	// invisible on default settings — and `interactive`/`auto` act on these
+	// exact verdicts, so the
 	// line you read and the deletion that follows come from one classification
 	// (DESIGN §5.3).
 	Prunable []Verdict

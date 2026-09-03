@@ -1,12 +1,13 @@
 package sync
 
 // show_branches values (DESIGN §5.6), ordered by how much of the branch
-// inventory each enumerates: none ⊂ notable ⊂ unmerged ⊂ all.
+// inventory each enumerates: none ⊂ notable ⊂ unmerged ⊂ landed ⊂ all.
 const (
 	showNone     = "none"     // no branch lines at all; the repo row is the report
 	showNotable  = "notable"  // only branches with a finding this run
 	showUnmerged = "unmerged" // …plus task branches carrying unlanded work
-	showAll      = "all"      // …plus the task branches whose work has landed
+	showLanded   = "landed"   // …plus the task branches whose work has landed
+	showAll      = "all"      // …plus the important branches, quiet ones included
 )
 
 // observe adds the informational branch lines the repo's `show_branches` asks
@@ -18,11 +19,13 @@ const (
 // each branch's own remote — "work you haven't landed" is a statement about the
 // mainline, and it is what makes the important branches the natural exclusion
 // list rather than a special case: a branch cannot be unmerged relative to
-// itself. So only task branches are ever observed, `all` included: a quiet
-// important branch has nothing to say that the repo's own row — its glyph, and
-// the "N branches up to date" count that includes it — hasn't already said,
-// and on a single-branch repo the line was the row repeated verbatim. A
-// *finding* on an important branch is unaffected; findings aren't configurable.
+// itself. Only `all` enumerates them anyway, and only to be literally what it
+// says: a quiet important branch has nothing to report that the repo's own row
+// — its glyph, and the "N branches up to date" count that includes it — hasn't
+// already said, and on a single-branch repo the line is the row repeated
+// verbatim. `landed` exists so the prune verdicts can be watched without that
+// roll-call. A *finding* on an important branch shows at every tier; findings
+// are not configurable.
 //
 // Runs after taskBranches so a branch that already produced a finding keeps it;
 // an observation never overwrites something that needed attention.
@@ -31,7 +34,7 @@ func (x *run) observe() {
 		return
 	}
 	switch x.r.ShowBranches {
-	case showUnmerged, showAll:
+	case showUnmerged, showLanded, showAll:
 	default:
 		return
 	}
@@ -58,12 +61,22 @@ func (x *run) observe() {
 			x.branchMark(v.Name, Attention, v.Summary())
 			continue
 		}
-		// `unmerged` shows only outstanding work. `all` additionally shows the
+		// `unmerged` shows only outstanding work. `landed` and `all` add the
 		// landed branches with the verdict prune would act on, so the decision
 		// can be watched during ordinary sweeps rather than only when someone
 		// remembers to go looking for it.
-		if !v.State.Merged() || x.r.ShowBranches == showAll {
+		if !v.State.Merged() || x.r.ShowBranches == showLanded || x.r.ShowBranches == showAll {
 			x.branchMark(v.Name, Info, v.Summary())
+		}
+	}
+	// `all` is the only tier that says anything about a branch that has nothing
+	// to say — which is what distinguishes it from `landed`, and the whole of
+	// what it adds.
+	if x.r.ShowBranches == showAll {
+		for _, b := range x.r.Branches {
+			if !x.hasNote(b) {
+				x.branchMark(b, Info, "up to date")
+			}
 		}
 	}
 }

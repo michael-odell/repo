@@ -87,10 +87,11 @@ func TestNotableSuppressesObservations(t *testing.T) {
 	}
 }
 
-// TestAllListsEveryTaskBranch: the top of the dial adds the landed task
-// branches, with the verdict prune would act on, to the unmerged ones.
-func TestAllListsEveryTaskBranch(t *testing.T) {
-	_, clone, run := setupUpstreamRepo(t, `show_branches = "all"`)
+// TestLandedListsEveryTaskBranch: the tier below the top adds the landed task
+// branches, with the verdict prune would act on, to the unmerged ones — and
+// stops there, because the prune verdicts are what it exists for.
+func TestLandedListsEveryTaskBranch(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `show_branches = "landed"`)
 	parkedWork(t, clone, "spike")
 	git(t, clone, "checkout", "-q", "-b", "landed")
 	git(t, clone, "push", "-q", "origin", "landed")
@@ -113,21 +114,22 @@ func TestAllListsEveryTaskBranch(t *testing.T) {
 			t.Errorf("%s summary = %q, want %q", name, b.Summary, want)
 		}
 	}
-	// An important branch with nothing to say earns no line at any tier
-	// (§5.6): the row's glyph and its count already carry it.
+	// A quiet important branch is `all`'s business, not this tier's (§5.6):
+	// here the row's glyph and its count already carry it.
 	if b, ok := note(res, "main"); ok {
-		t.Errorf("main got a line (%q) — a quiet important branch is not an observation", b.Summary)
+		t.Errorf("main got a line (%q) — landed enumerates task branches, not the roll-call", b.Summary)
 	}
 	if want := "3 branches up to date"; res.Detail != want {
 		t.Errorf("detail = %q, want %q (the count is what says main was checked)", res.Detail, want)
 	}
 }
 
-// TestAllKeepsQuietSingleBranchReposToOneLine is the shape that motivated the
-// rule: nothing but an important branch, everything up to date, and the report
-// is the repo row alone — not the row plus a bullet saying the same thing.
-func TestAllKeepsQuietSingleBranchReposToOneLine(t *testing.T) {
-	_, _, run := setupUpstreamRepo(t, `show_branches = "all"`)
+// TestLandedKeepsQuietSingleBranchReposToOneLine is the shape that motivated
+// splitting the tier: nothing but an important branch, everything up to date,
+// and the report is the repo row alone — not the row plus a bullet saying the
+// same thing.
+func TestLandedKeepsQuietSingleBranchReposToOneLine(t *testing.T) {
+	_, _, run := setupUpstreamRepo(t, `show_branches = "landed"`)
 
 	res := run()
 	if res.Outcome != UpToDate {
@@ -141,11 +143,11 @@ func TestAllKeepsQuietSingleBranchReposToOneLine(t *testing.T) {
 	}
 }
 
-// TestAllStillListsAFindingOnAnImportantBranch: visibility is configurable,
-// findings are not — dropping the roll-call must not drop main when it has
-// something to report.
-func TestAllStillListsAFindingOnAnImportantBranch(t *testing.T) {
-	_, clone, run := setupUpstreamRepo(t, `show_branches = "all"`)
+// TestLandedStillListsAFindingOnAnImportantBranch: visibility is configurable,
+// findings are not — leaving the roll-call to `all` must not drop main when it
+// has something to report.
+func TestLandedStillListsAFindingOnAnImportantBranch(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `show_branches = "landed"`)
 	parkedWork(t, clone, "spike")
 	writeCommit(t, clone, "local.txt", "mine\n", "unpushed work on main")
 
@@ -159,6 +161,36 @@ func TestAllStillListsAFindingOnAnImportantBranch(t *testing.T) {
 	}
 	if b.Outcome == Info {
 		t.Errorf("main outcome = Info, want a finding")
+	}
+}
+
+// TestAllAddsTheImportantBranches is what separates the top rung from
+// `landed`: the same task-branch lines, plus a line for a quiet important
+// branch. `all` is named for enumerating the whole inventory, and does.
+func TestAllAddsTheImportantBranches(t *testing.T) {
+	_, clone, run := setupUpstreamRepo(t, `show_branches = "all"`)
+	parkedWork(t, clone, "spike")
+	git(t, clone, "checkout", "-q", "-b", "landed")
+	git(t, clone, "push", "-q", "origin", "landed")
+	git(t, clone, "checkout", "-q", "main")
+
+	res := run()
+	if res.Outcome != UpToDate {
+		t.Fatalf("outcome = %v, want UpToDate; actions=%v", res.Outcome, res.Actions)
+	}
+	for name, want := range map[string]string{
+		"main":   "up to date",
+		"spike":  "1 ahead of main",
+		"landed": "merged — prunable",
+	} {
+		b, ok := note(res, name)
+		if !ok {
+			t.Errorf("no line for %s; branches=%+v", name, res.Branches)
+			continue
+		}
+		if b.Summary != want {
+			t.Errorf("%s summary = %q, want %q", name, b.Summary, want)
+		}
 	}
 }
 
