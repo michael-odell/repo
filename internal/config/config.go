@@ -58,13 +58,13 @@ type Settings struct {
 	// tier concluded, and how long a ref must have sat still to be removable.
 	// A name-based veto outranks inference, which is why prune_keep is a list
 	// like force_push and not a flag.
-	PruneKeep   []string `toml:"prune_keep"`
-	PruneMinAge *string  `toml:"prune_min_age"`
-	Host              *string      `toml:"host"`
-	Workflow          *string      `toml:"workflow"`
-	ForkOwner         *string      `toml:"fork_owner"`
-	Pin               *string      `toml:"pin"`
-	Hooks             []model.Hook `toml:"hooks"`
+	PruneKeep   []string     `toml:"prune_keep"`
+	PruneMinAge *string      `toml:"prune_min_age"`
+	Host        *string      `toml:"host"`
+	Workflow    *string      `toml:"workflow"`
+	ForkOwner   *string      `toml:"fork_owner"`
+	Pin         *string      `toml:"pin"`
+	Hooks       []model.Hook `toml:"hooks"`
 }
 
 // Host is a [hosts.*] entry.
@@ -417,24 +417,24 @@ func (reg *Registry) chain(name string) []string {
 // config leaves unset are returned zero/"" so the caller falls back to what it
 // reads from disk and remotes.
 type Inherited struct {
-	Workflow            string         // "" when unset by config → caller keeps its inference
-	Layout              string         // "" when unset
-	Worktrees           *bool          // nil when unset
-	Push                string         // "" when unset by config → caller applies WorkflowDefaults
-	TaskBranches        string         // "" when unset by config → caller applies WorkflowDefaults
-	ShowBranches        string         // "" when unset by config → caller applies WorkflowDefaults
-	ForcePush           []string       // nil when unset
-	ForcePull           []string       // nil when unset
-	FetchSkip           []string       // nil when unset
-	Tags                []string       // nil when unset; empty means "fetch no tags"
-	ForceTags           []string       // nil when unset
-	ExpectedUntracked   []string       // nil when unset
-	ExpectedUncommitted []string       // nil when unset
-	MergeScanLimit      *int           // nil when unset
-	Prune               string         // "" when unset
-	PruneKeep           []string       // nil when unset
-	PruneMinAge         time.Duration  // 0 when unset: no age gate
-	Pin                 string         // "" when unset
+	Workflow            string        // "" when unset by config → caller keeps its inference
+	Layout              string        // "" when unset
+	Worktrees           *bool         // nil when unset
+	Push                string        // "" when unset by config → caller applies WorkflowDefaults
+	TaskBranches        string        // "" when unset by config → caller applies WorkflowDefaults
+	ShowBranches        string        // "" when unset by config → caller applies WorkflowDefaults
+	ForcePush           []string      // nil when unset
+	ForcePull           []string      // nil when unset
+	FetchSkip           []string      // nil when unset
+	Tags                []string      // nil when unset; empty means "fetch no tags"
+	ForceTags           []string      // nil when unset
+	ExpectedUntracked   []string      // nil when unset
+	ExpectedUncommitted []string      // nil when unset
+	MergeScanLimit      *int          // nil when unset
+	Prune               string        // "" when unset
+	PruneKeep           []string      // nil when unset
+	PruneMinAge         time.Duration // 0 when unset: no age gate
+	Pin                 string        // "" when unset
 	Hooks               []model.Hook
 }
 
@@ -486,9 +486,9 @@ func (reg *Registry) InheritedFor(chain []string) Inherited {
 		// error here is unreachable for any registry that got this far; a
 		// discovered repo falls back to "no age gate" rather than failing a
 		// sweep over a setting that was reported at load time.
-		PruneMinAge:       mustAge(s.PruneMinAge),
-		Pin:               strOr(s.Pin, ""),
-		Hooks:             s.Hooks,
+		PruneMinAge: mustAge(s.PruneMinAge),
+		Pin:         strOr(s.Pin, ""),
+		Hooks:       s.Hooks,
 	}
 }
 

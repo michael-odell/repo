@@ -34,7 +34,6 @@ func done(name string) enumValue { return enumValue{name: name, implemented: tru
 // with. It parses, and is then refused with a message saying so — which is the
 // difference between "you typed this wrong" and "this doesn't work yet", and
 // the one a reader of a rejected config actually needs.
-//
 func planned(name string) enumValue { return enumValue{name: name} }
 
 // enum sets for validated fields.
