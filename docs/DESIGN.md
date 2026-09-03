@@ -733,6 +733,38 @@ already surfaced** — nothing is found only under `--fix`.
   nodes (§3.9) can't set `layout`, so a misplaced repo's target path never depends
   on an override reachable only after it's already there.
 
+  **Only a declared repo can be misplaced.** A discovered one is trusted where it
+  is, by §3.2's own rule — its location is an input, not a claim to check — so
+  the tool never proposes moving a clone nobody wrote a line of config about,
+  and someone's deliberate `~/contrib/group/sub/thing` is left alone rather than
+  flattened toward a root's `layout`.
+
+  The clone is matched to its declaration by **identity**: the definitive id, or
+  the fork's, since `fork-pr` and `supply-chain-mirror` clone from the fork and
+  that is what their `origin` reports. Where the scan finds *several* clones of
+  one identity and none at the configured path, sync reports the ambiguity and
+  does nothing else — not the move, and not a fresh clone at the configured
+  path. Numbered clones (`charts`, `charts2`) are a real habit; picking one by
+  guess when a directory move hangs off the answer is not a choice a sweep gets
+  to make.
+
+  Until the move happens, sync works on the clone **where it actually is** —
+  data still flows, per this section's rule — and says where that is. What it
+  must never do is treat the configured path's emptiness as "not cloned yet":
+  that clones a second copy, and the union then hides the original behind the
+  declaration, leaving local work in a directory no command lists.
+
+  The move itself is a rename, in the same serial phase as a layout conversion
+  and after all network work. It never overwrites: a configured path that
+  already holds a clone is reported as the two-clones problem it is. A rename
+  that fails (another filesystem, most likely) leaves everything in place and
+  says so. A `worktrees = true` container is repaired after the move (`git
+  worktree repair`), since a worktree's link to its bare parent — and the
+  parent's back to it — are absolute paths, and a moved container that skips
+  the repair is a set of worktrees pointing at a directory that no longer
+  exists. A repo that is both misplaced and the wrong shape moves first, then
+  converts, in the one pass.
+
 On a mismatch, plain `sync` reconciles *as far as the on-disk shape allows* — so
 data still flows — but **never reorganizes on its own**: it surfaces `run: sync
 --fix`. `sync --fix` performs the changes, but only **after** the normal sync has
