@@ -1400,7 +1400,22 @@ already holds pull creds) — but the review gate holds regardless of trigger.
 ### 5.5 Cadence and trigger
 
 Reuses the existing `PLUGIN_UPDATE_FREQUENCY` + `older-than` + timestamp-file
-pattern. Global `sync.frequency`, per-root/per-repo override, `--force` to ignore.
+pattern, with the interval as a setting: **`sync_frequency`**, cascading like
+every other (§3.4) — `[defaults]` is the global, a root or a `[dir.*]` overlay
+narrows it, a repo entry overrides it. There is no `[sync]` table: a second
+top-level mechanism would sit outside the chain that already decides every other
+setting, and "global" here is just that chain's shallowest link.
+
+It is spelled in `prune_min_age`'s syntax (`"7d"`, `"12h"`, `"2w"`) — one
+duration dialect in the registry, not two — and where nothing sets it the
+built-in is **7d**. `sync_frequency = "0"` means *always* due: the plugin or
+work repo a startup sync should visit every time. That value is why the
+resolved setting is a pointer rather than a bare duration, unlike
+`prune_min_age`: there, "no age gate" and "a zero-length age gate" are the same
+behaviour, so zero can stand for unset; here they are opposite instructions, and
+a repo asking to be synced every run must not read as a repo that said nothing.
+`--force` ignores the interval outright, and without `--if-due` nothing consults
+it at all.
 Per principle 2, the shell *invokes* `repo sync --if-due` when the binary is present
 (a cheap timestamp no-op most days; may run backgrounded after the prompt); this is
 maintenance, distinct from config loading, which only ever reads artifacts. After
