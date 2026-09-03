@@ -222,6 +222,16 @@ modes that differ only in name fail the build. The declaration can then only
 drift by breaking a test, which is the point: the cost of being wrong here is
 silence, and silence is what nobody notices.
 
+The rule is about **values, not enums**: it holds wherever a consumer matches on
+a string the registry supplies. `hooks[].after` is the case that is not a
+settings enum at all — the engine compares it against the lifecycle point it
+runs hooks at (`fetch`; §5's per-repo order) and skips anything it doesn't
+recognise — so it carries the same implemented-value table, and an event nothing
+runs is refused at load. A hook missing either half of the pair (`after`, `run`)
+is refused on the same grounds: it is the same silence by a shorter route. And
+hooks hide better than settings do — a hook is usually written on the single
+repo that needs it, so a hook that never runs makes nobody else's sweep look odd.
+
 ### 3.5 Layout: two orthogonal axes
 
 - **`layout`** = `flat` (`<dir>/<repo>`) | `owner` (`<dir>/<owner>/<repo>`).

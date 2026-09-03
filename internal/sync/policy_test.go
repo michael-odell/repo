@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -369,5 +370,23 @@ func TestForcePullDoesNotClobberUncommittedChanges(t *testing.T) {
 	}
 	if res.Outcome != Attention {
 		t.Errorf("outcome = %v, want Attention (a blocked update must be surfaced); actions=%v", res.Outcome, res.Actions)
+	}
+}
+
+// TestEveryHookEventRuns is the consumer half of config's hook-event table
+// (DESIGN §3.4). The table is a claim about this package; without a test that
+// runs each accepted event, "valid value, no consumer" is exactly as invisible
+// for hooks as it was for prune = "auto" — the sweep skips what it doesn't
+// recognise and says nothing.
+func TestEveryHookEventRuns(t *testing.T) {
+	for _, event := range config.HookEvents() {
+		t.Run(event, func(t *testing.T) {
+			_, clone, run := setupUpstreamRepo(t,
+				fmt.Sprintf("hooks = [ { after = %q, run = %q } ]", event, "touch ran-hook"))
+			res := run()
+			if _, err := os.Stat(filepath.Join(clone, "ran-hook")); err != nil {
+				t.Errorf("a hook after %q never ran: %v; actions=%v", event, err, res.Actions)
+			}
+		})
 	}
 }

@@ -68,3 +68,93 @@ func contains(ss []string, want string) bool {
 	}
 	return false
 }
+
+// TestHookEventMustBeOneSomethingRuns applies DESIGN §3.4's rule to hooks. The
+// sync engine matches `after` exactly and skips everything else, so before this
+// check a hook naming any other event — or omitting `after`, or omitting `run` —
+// parsed cleanly, was inherited and reported by `repo config` like any other
+// setting, and never ran, on any sweep, with nothing said.
+func TestHookEventMustBeOneSomethingRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		hooks string
+		want  string // substring of the expected error; empty means valid
+	}{
+		{name: "fetch runs", hooks: `[ { after = "fetch", run = "make deps" } ]`},
+		{name: "unknown event", hooks: `[ { after = "pull", run = "make deps" } ]`,
+			want: `hooks[0].after = "pull" (want one of fetch)`},
+		{name: "typo", hooks: `[ { after = "fetchh", run = "make deps" } ]`,
+			want: `hooks[0].after = "fetchh"`},
+		{name: "no event", hooks: `[ { run = "make deps" } ]`,
+			want: "hooks[0]: missing `after`"},
+		{name: "no command", hooks: `[ { after = "fetch" } ]`,
+			want: "hooks[0]: missing `run`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.wd]
+dir   = "~/wd"
+hooks = `+tc.hooks+`
+repos = ["github:acme/thing"]
+`)
+			reg, err := Load([]string{dir})
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			err = reg.Validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("valid hook rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want an error mentioning %q, got nil", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error should mention %q; got:\n%v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestHookOnARepoEntryIsChecked: a hook is usually written on the one repo that
+// needs it, which is the least-watched place in the registry — the tier checks
+// alone would miss it.
+func TestHookOnARepoEntryIsChecked(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, `
+[hosts.github]
+base = "git@github.com:"
+
+[root.wd]
+dir = "~/wd"
+
+[[root.wd.repo]]
+id    = "github:acme/thing"
+hooks = [ { after = "clone", run = "make deps" } ]
+`)
+	reg, err := Load([]string{dir})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	err = reg.Validate()
+	if err == nil {
+		t.Fatal("want an error for a repo-level hook event nothing runs, got nil")
+	}
+	if !strings.Contains(err.Error(), `hooks[0].after = "clone"`) {
+		t.Errorf("error should name the repo's hook; got:\n%v", err)
+	}
+}
+
+// TestHookEventsAreAllImplemented mirrors TestPruneModesAreAllImplemented:
+// HookEvents is what the engine's own test checks itself against.
+func TestHookEventsAreAllImplemented(t *testing.T) {
+	if got, want := len(HookEvents()), len(validHookEvents); got != want {
+		t.Fatalf("HookEvents() has %d of %d hook events; the engine implements them all", got, want)
+	}
+}

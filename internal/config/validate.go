@@ -44,6 +44,12 @@ var (
 	validTaskBranches = []enumValue{done("auto"), done("report"), done("pull-only")}
 	validShowBranches = []enumValue{done("none"), done("notable"), done("unmerged"), done("landed"), done("all")}
 	validPrune        = []enumValue{done("manual"), done("report"), done("interactive"), done("auto")}
+
+	// validHookEvents is what a hook's `after` may name. Only "fetch" runs
+	// today (DESIGN §5's per-repo order: provision → fetch → update branches →
+	// hooks → drift); the same machinery guards it so a second event cannot
+	// reach a registry before something runs it.
+	validHookEvents = []enumValue{done("fetch")}
 )
 
 // PruneModes lists the prune modes the sweep actually implements, in the order
@@ -51,6 +57,11 @@ var (
 // against — the declaration above is a claim, and this is how it is held to
 // account rather than trusted.
 func PruneModes() []string { return usable(validPrune) }
+
+// HookEvents lists the hook lifecycle points the sync engine implements, on the
+// same terms as PruneModes: the declaration above is a claim, and the consumer's
+// own test (TestEveryHookEventRuns) is what holds it to the code.
+func HookEvents() []string { return usable(validHookEvents) }
 
 // usable is the implemented values of an enum, which is also what an error
 // message should offer: naming a value that parses but does nothing as an
@@ -88,6 +99,7 @@ func (reg *Registry) Validate() error {
 		checkGlobs(add, fmt.Sprintf("root %q", n), globsOfSettings(r.Settings))
 		checkScanLimit(add, fmt.Sprintf("root %q", n), r.Settings)
 		checkAge(add, fmt.Sprintf("root %q", n), r.Settings)
+		checkHooks(add, fmt.Sprintf("root %q", n), r.Settings.Hooks)
 	}
 	dirNames := make([]string, 0, len(reg.dirs))
 	for n := range reg.dirs {
@@ -112,12 +124,14 @@ func (reg *Registry) Validate() error {
 		checkGlobs(add, where, globsOfSettings(d.Settings))
 		checkScanLimit(add, where, d.Settings)
 		checkAge(add, where, d.Settings)
+		checkHooks(add, where, d.Settings.Hooks)
 	}
 
 	checkEnums(add, "defaults", reg.defaults)
 	checkGlobs(add, "defaults", globsOfSettings(reg.defaults))
 	checkScanLimit(add, "defaults", reg.defaults)
 	checkAge(add, "defaults", reg.defaults)
+	checkHooks(add, "defaults", reg.defaults.Hooks)
 
 	// effective() surfaces id/fork parse errors and undervable forks; resolving
 	// Physical additionally catches unknown hosts. Report the first structural
@@ -129,6 +143,7 @@ func (reg *Registry) Validate() error {
 		for _, r := range repos {
 			checkEnums(add, r.ID.String(), settingsOf(r))
 			checkGlobs(add, r.ID.String(), globsOfRepo(r))
+			checkHooks(add, r.ID.String(), r.Hooks)
 			checkPinReachesItsTag(add, r)
 			if _, err := reg.Physical(r); err != nil {
 				add("%v", err)
@@ -261,6 +276,31 @@ func checkEnums(add func(string, ...any), where string, s Settings) {
 	check("task_branches", s.TaskBranches, validTaskBranches)
 	check("show_branches", s.ShowBranches, validShowBranches)
 	check("prune", s.Prune, validPrune)
+}
+
+// checkHooks holds hooks to the rule every other setting already obeys (DESIGN
+// §3.4): a value nothing acts on is refused at load, not accepted and ignored.
+// The engine matches `after` exactly and skips whatever it doesn't recognise,
+// so `after = "pull"` — or a typo'd "fetchh", or an entry that omits `after`
+// altogether — is a maintenance command that never runs, in a registry that
+// reads like it does, with nothing said on any sweep. That is the same shape as
+// the `prune = "auto"` gap, and it hides better: a hook is usually written for
+// one repo, so nobody else's run is odd enough to prompt a second look.
+func checkHooks(add func(string, ...any), where string, hooks []model.Hook) {
+	check := enumChecker(add, where)
+	for i, h := range hooks {
+		switch {
+		case strings.TrimSpace(h.After) == "":
+			add("%s: hooks[%d]: missing `after` (want one of %s)",
+				where, i, strings.Join(usable(validHookEvents), ", "))
+		default:
+			after := h.After
+			check(fmt.Sprintf("hooks[%d].after", i), &after, validHookEvents)
+		}
+		if strings.TrimSpace(h.Run) == "" {
+			add("%s: hooks[%d]: missing `run`", where, i)
+		}
+	}
 }
 
 // checkGlobs validates force_push/force_pull entries compile as glob patterns
