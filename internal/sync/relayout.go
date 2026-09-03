@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/michael-odell/repo/internal/gitx"
@@ -49,6 +50,9 @@ func (x *run) relayoutToWorktree() {
 		return
 	}
 	secondName := x.remoteName()
+	// Read the remotes while the container is still here: the rebuild below
+	// clones refs, not remote config (see restoreCarried).
+	carried, _ := gitx.Remotes(container)
 
 	// 1. Move the intact clone aside; it is the recoverable fallback until the
 	//    new layout validates.
@@ -92,6 +96,7 @@ func (x *run) relayoutToWorktree() {
 	if second != "" {
 		_, _ = gitx.EnsureRemote(container, secondName, second)
 	}
+	restoreCarried(container, carried, secondName, second != "")
 	_, _ = gitx.Fetch(container, "origin", x.tagPolicy())
 	if second != "" {
 		_, _ = gitx.Fetch(container, secondName, x.tagPolicy())
@@ -198,6 +203,9 @@ func (x *run) relayoutToSingle() {
 
 	// 2. Rebuild a single clone from the local bare (preserving every ref),
 	//    keeping the original recoverable until the new layout validates.
+	//    The remotes are read first, while the container is still here: the
+	//    rebuild clones refs, not remote config (see restoreCarried).
+	carried, _ := gitx.Remotes(container)
 	aside := container + ".pre-single"
 	if _, err := os.Stat(aside); err == nil {
 		x.fail(fmt.Errorf("relayout staging path already exists: %s", shorten(aside)))
@@ -232,10 +240,12 @@ func (x *run) relayoutToSingle() {
 		fail(fmt.Errorf("cannot resolve remotes for %s", x.res.Name))
 		return
 	}
+	secondName := x.remoteName()
 	_, _ = gitx.EnsureRemote(container, "origin", origin)
 	if second != "" {
-		_, _ = gitx.EnsureRemote(container, x.remoteName(), second)
+		_, _ = gitx.EnsureRemote(container, secondName, second)
 	}
+	restoreCarried(container, carried, secondName, second != "")
 	if err := gitx.Checkout(container, primary); err != nil {
 		fail(err)
 		return
@@ -259,6 +269,41 @@ func (x *run) relayoutToSingle() {
 	}
 	x.add("relayout: worktree → single (kept %s)", primary)
 	x.updated("relayout: worktree → single")
+}
+
+// restoreCarried puts back the remotes a relayout would otherwise drop. Both
+// conversions rebuild the container with a clone of the local repository, which
+// carries refs but not remote config, so every remote the caller has not just
+// restored from the registry has to be copied across by name — otherwise a
+// `backup`, or a colleague's fork added for a one-off look, disappears at the
+// exact moment sync is meant to be reorganising the container rather than
+// editing it. DESIGN §3.6 is explicit that an unmanaged remote is never renamed
+// or removed; losing one to a layout change is exactly that, and sync would go
+// on fetching every remote (fetchExtraRemotes) with no sign one had gone.
+//
+// The workflow's *other* spelling of the second-remote slot is the one thing
+// deliberately not carried: a stale `upstream` on a mirror is what --fix exists
+// to shed, and this only runs under --fix.
+//
+// Remote-tracking refs are not re-fetched here — the next sweep's
+// fetchExtraRemotes restores those, and a conversion is not the place to add
+// network calls that nothing in it depends on.
+func restoreCarried(dir string, carried map[string]string, secondName string, hasSecond bool) {
+	restored := map[string]bool{"origin": true}
+	if hasSecond {
+		restored[secondName] = true
+		restored[siblingRemoteName(secondName)] = true
+	}
+	var names []string
+	for name := range carried {
+		if !restored[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names) // deterministic order, as elsewhere
+	for _, name := range names {
+		_, _ = gitx.EnsureRemote(dir, name, carried[name])
+	}
 }
 
 // confirmLoseIgnored asks whether to discard ignored files in worktrees being

@@ -139,3 +139,56 @@ func assertMirrorRemotes(t *testing.T, container, up string, res Result) {
 		t.Errorf("conversion created an upstream remote (%q) on a supply-chain-mirror", url)
 	}
 }
+
+// TestRelayoutCarriesUnmanagedRemotes: a conversion rebuilds the container from
+// a clone of the local repository, which carries refs but not remote config —
+// so a remote nobody declared (`backup`, a colleague's fork) used to vanish,
+// though DESIGN §3.6 says sync never renames or removes one. Nothing would have
+// reported it either: the next sweep just fetches whatever remotes are left.
+func TestRelayoutCarriesUnmanagedRemotes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		startWT    bool // layout the container is provisioned at
+		convertsTo bool // layout config then asks for
+	}{
+		{name: "single to worktree", startWT: false, convertsTo: true},
+		{name: "worktree to single", startWT: true, convertsTo: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			T := t.TempDir()
+			remotes, up := seedMirrorRemotes(t, T)
+			container := filepath.Join(T, "clones", "proj")
+
+			if res := mirrorRun(t, T, remotes, tc.startWT, false); res.Err != nil {
+				t.Fatalf("provisioning the fixture failed: %v; actions=%v", res.Err, res.Actions)
+			}
+			// A remote added by hand, outside any workflow's contract.
+			backup := filepath.Join(remotes, "backup", "proj")
+			must(t, os.MkdirAll(filepath.Dir(backup), 0o755))
+			git(t, T, "init", "-q", "-b", "main", "--bare", backup)
+			git(t, container, "remote", "add", "backup", backup)
+
+			res := mirrorRun(t, T, remotes, tc.convertsTo, true)
+			if res.Err != nil {
+				t.Fatalf("err=%v; actions=%v", res.Err, res.Actions)
+			}
+			want := gitx.LayoutSingle
+			if tc.convertsTo {
+				want = gitx.LayoutWorktree
+			}
+			if got := gitx.ClassifyLayout(container); got != want {
+				t.Fatalf("layout = %v, want %v; actions=%v", got, want, res.Actions)
+			}
+			got, ok := remoteURL(t, container, "backup")
+			if !ok {
+				t.Fatalf("the conversion dropped the backup remote; actions=%v", res.Actions)
+			}
+			if got != backup {
+				t.Errorf("backup = %q, want %q", got, backup)
+			}
+			// The managed pair is still right, and the fork-pr spelling is
+			// still not carried onto a mirror.
+			assertMirrorRemotes(t, container, up, res)
+		})
+	}
+}
