@@ -720,6 +720,13 @@ already surfaced** — nothing is found only under `--fix`.
   `fork-pr` clone missing `upstream`, a `supply-chain-mirror` still on `upstream`
   instead of `untrusted`, an `origin` pointing at the wrong place. `--fix`
   reconciles *only* the managed names and never deletes an unmanaged remote.
+  A *missing* managed remote is added by a plain sync — that is provisioning,
+  with nothing to lose — but a remote already pointing elsewhere is only ever
+  reported until `--fix`: of the three mismatches this is the one as likely to
+  be config's error as the disk's, and the clone that has been working is
+  evidence. A trailing `.git` (or `/`) is not a difference — git treats it as
+  decoration, so the two spellings name the same remote and neither is
+  reconciled toward the other.
 - **Location** — the container sits at the wrong path for its root's `dir` +
   `layout` + identity (flat where `owner` is configured, or under the wrong root).
   `--fix` moves it. This is always computable from the root chain alone: `[dir.*]`

@@ -465,10 +465,10 @@ func (x *run) provisionWorktree() bool {
 		x.fail(err)
 		return false
 	}
-	_, _ = gitx.EnsureRemote(x.container, "origin", origin)
+	x.ensureManagedRemote(x.container, "origin", origin)
 	var secondName string
 	if second != "" {
-		secondName, _ = x.ensureSecondRemote(x.container, second)
+		secondName = x.ensureSecondRemote(x.container, second)
 	}
 	if !x.fetchRemote("origin") {
 		return false
@@ -612,9 +612,7 @@ func (x *run) fetchWorktreeRemotes() bool {
 		return false
 	}
 	if !x.opts.DryRun {
-		if changed, _ := gitx.EnsureRemote(x.container, "origin", origin); changed {
-			x.add("set origin = %s", origin)
-		}
+		x.ensureManagedRemote(x.container, "origin", origin)
 	}
 	if !x.fetchRemote("origin") {
 		return false
@@ -629,10 +627,7 @@ func (x *run) fetchWorktreeRemotes() bool {
 			managed[name] = true
 		}
 	default:
-		name, changed := x.ensureSecondRemote(x.container, second)
-		if changed {
-			x.add("set %s = %s", name, second)
-		}
+		name := x.ensureSecondRemote(x.container, second)
 		x.fetchSecondRemote(x.container, name)
 		managed[name] = true
 	}
@@ -728,6 +723,62 @@ func (x *run) dryRunSecondRemoteName(dir string) string {
 	return name
 }
 
+// ensureManagedRemote reconciles one of the workflow's own remotes (§3.6's
+// contract) against config, on DESIGN §4.1's terms: a remote that isn't there
+// is added — that is provisioning, with nothing to lose — while one already
+// pointing somewhere else is *reported* and left alone until --fix.
+//
+// The asymmetry is what §4.1's "sync always detects and reports; --fix only
+// applies what sync already surfaced" is for, and a URL is the mismatch where
+// it matters most: unlike a layout or a name, a wrong URL is as easily config's
+// error as the disk's — a mistyped `via`, a `fork_owner` set on the wrong root,
+// a repo declared under an id it doesn't have. Silently repointing origin at
+// the registry's guess would send the next fetch and push somewhere else and
+// mention it in one trace line among dozens, on the backgrounded --if-due run
+// nobody reads. The clone that has been working is evidence, and discarding it
+// is not this run's call to make. (It did exactly that until now.)
+//
+// Detecting it stays a trace line rather than Attention, for ensureSecondRemote's
+// reason: it blocks nothing — the remote still resolves, and a genuinely wrong
+// one fails loudly at fetch — and an Attention here would outrank, and so bury,
+// whatever the repo's branches actually found.
+func (x *run) ensureManagedRemote(dir, name, url string) (changed bool) {
+	cur, ok := gitx.RemoteURL(dir, name)
+	switch {
+	case !ok:
+		if changed, _ = gitx.EnsureRemote(dir, name, url); changed {
+			x.add("set %s = %s", name, url)
+		}
+		return changed
+	case sameRemoteURL(cur, url):
+		// The same place, possibly spelled with a .git: leave the spelling
+		// alone, but still normalise the refspec EnsureRemote writes.
+		changed, _ = gitx.EnsureRemote(dir, name, cur)
+		return changed
+	case x.opts.FixLayout:
+		if changed, _ = gitx.EnsureRemote(dir, name, url); changed {
+			x.add("set %s = %s (was %s)", name, url, cur)
+		}
+		return changed
+	default:
+		x.add("remote %s is %s but config says %s — run: sync --fix", name, cur, url)
+		changed, _ = gitx.EnsureRemote(dir, name, cur) // stays where it points
+		return changed
+	}
+}
+
+// sameRemoteURL reports whether two remote URLs name the same place. Git treats
+// a trailing ".git" (and a trailing slash) as decoration — `git clone X` and
+// `git clone X.git` leave the same clone behind — so a container spelled one
+// way and a registry the other is not a mismatch, and reporting it every run
+// would be a nuisance nobody could silence except by editing config to match a
+// suffix that means nothing.
+func sameRemoteURL(a, b string) bool { return trimRemoteURL(a) == trimRemoteURL(b) }
+
+func trimRemoteURL(u string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(u), "/"), ".git")
+}
+
 // ensureSecondRemote sets the workflow-correct second remote (upstream for
 // fork-pr, untrusted for supply-chain-mirror) to url and returns its name. When
 // the clone instead carries the *other* workflow's name for this same slot —
@@ -748,7 +799,7 @@ func (x *run) dryRunSecondRemoteName(dir string) string {
 // branches beneath it actually found (rank(Attention) > rank(ReviewPending),
 // per mark/rank) would bury the more urgent, more specific finding under a
 // tidiness note every single run until someone thinks to pass --fix.
-func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
+func (x *run) ensureSecondRemote(dir, url string) (name string) {
 	name = x.remoteName()
 	stale := siblingRemoteName(name)
 	if _, ok := gitx.RemoteURL(dir, stale); ok {
@@ -764,8 +815,8 @@ func (x *run) ensureSecondRemote(dir, url string) (name string, changed bool) {
 			x.add("remote %s should be %s for %s — run: sync --fix", stale, name, x.r.Workflow)
 		}
 	}
-	changed, _ = gitx.EnsureRemote(dir, name, url)
-	return name, changed
+	x.ensureManagedRemote(dir, name, url)
+	return name
 }
 
 // fetchSecondRemote fetches the workflow's second remote and reports failure
@@ -904,14 +955,10 @@ func (x *run) provision() bool {
 
 	// Ensure remotes: origin, plus the workflow's second remote when a fork exists.
 	if !x.opts.DryRun {
-		if changed, _ := gitx.EnsureRemote(x.container, "origin", originURL); changed {
-			x.add("set origin = %s", originURL)
-		}
+		x.ensureManagedRemote(x.container, "origin", originURL)
 		if x.r.Fork != nil {
 			if up, err := x.reg.PhysicalID(x.r.ID, x.r.Roots); err == nil {
-				if name, changed := x.ensureSecondRemote(x.container, up); changed {
-					x.add("set %s = %s", name, up)
-				}
+				x.ensureSecondRemote(x.container, up)
 			}
 		}
 	}
