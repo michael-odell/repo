@@ -109,6 +109,33 @@ type Repo struct {
 	// re-resolving through [hosts.*], which need not know a discovered host).
 	Dir       string
 	OriginURL string
+
+	// FoundAt is where a *declared* repo's clone actually is, when the disk scan
+	// found it somewhere other than ConfiguredContainer() (DESIGN §4.1's
+	// location mismatch). Separate from Dir because that field also means
+	// "discovered", which decides how remotes are resolved — a declared repo
+	// that has merely been moved still resolves its remotes through the
+	// registry.
+	//
+	// More than one entry is the ambiguity §4.1 refuses to resolve: several
+	// clones of this identity, none at the configured path. Container() then
+	// keeps answering the configured path, and sync stops at the report rather
+	// than moving one of them or cloning yet another.
+	FoundAt []string
+}
+
+// ConfiguredContainer is where the registry says this repo's container belongs,
+// ignoring where it actually is. Container() answers "where is it"; this
+// answers "where should it be", and they differ exactly when a declared repo
+// has been moved, or was cloned by hand into the wrong root or layout (DESIGN
+// §4.1). Meaningless for a discovered repo, which has no configured location to
+// disagree with — by §3.2 it is trusted where it is.
+func (r Repo) ConfiguredContainer() string {
+	root := expandHome(r.HomeRoot)
+	if r.Layout == LayoutOwner {
+		return filepath.Join(root, r.ID.Owner, r.ID.Name)
+	}
+	return filepath.Join(root, r.ID.Name)
 }
 
 // Container is the on-disk directory that holds the repo (a single working tree
@@ -118,11 +145,13 @@ func (r Repo) Container() string {
 	if r.Dir != "" {
 		return r.Dir
 	}
-	root := expandHome(r.HomeRoot)
-	if r.Layout == LayoutOwner {
-		return filepath.Join(root, r.ID.Owner, r.ID.Name)
+	// A declared repo found elsewhere is reconciled where it is, not where it
+	// belongs (DESIGN §4.1) — an ambiguous scan excepted, which resolves to the
+	// configured path and is refused before anything acts on it.
+	if len(r.FoundAt) == 1 {
+		return r.FoundAt[0]
 	}
-	return filepath.Join(root, r.ID.Name)
+	return r.ConfiguredContainer()
 }
 
 // PrimaryTree is where cs/`repo home` lands with no branch specified: the

@@ -126,6 +126,12 @@ func (b BranchNote) Label() string {
 
 type pendingMigration struct {
 	kind gitx.LayoutKind // the container's current on-disk layout
+	// relayout is whether the shape has to change; moveTo, when set, is where
+	// the container belongs (DESIGN §4.1). A repo can need both, and then the
+	// move happens first: the conversion rebuilds the container in place, so
+	// doing it at the old address just means doing it again at the new one.
+	relayout bool
+	moveTo   string
 }
 
 // Options controls a sync run.
@@ -196,7 +202,13 @@ func Run(reg *config.Registry, repos []model.Repo, opts Options) []Result {
 		results[i].Outcome, results[i].Detail = UpToDate, ""
 		x := &run{reg: reg, r: r, opts: opts, container: r.Container(), branch: branch0(r),
 			started: time.Now(), res: &results[i]}
-		x.relayout(results[i].migrate.kind)
+		m := results[i].migrate
+		if m.moveTo != "" && !x.relocate(m.moveTo) {
+			continue // reported; a conversion at the old address would only move the problem
+		}
+		if m.relayout {
+			x.relayout(m.kind)
+		}
 	}
 	return results
 }
@@ -260,6 +272,13 @@ func syncRepo(reg *config.Registry, r model.Repo, opts Options) (out Result) {
 		return *res
 	}
 
+	if len(r.FoundAt) > 1 {
+		res.Outcome, res.Detail = Attention, "several clones, none where config says"
+		x.add("found at %s, and config says %s — sync won't choose between them (DESIGN §4.1)",
+			strings.Join(shortenAll(r.FoundAt), ", "), shorten(r.ConfiguredContainer()))
+		return *res
+	}
+
 	if reason := deferredReason(r); reason != "" {
 		res.Outcome, res.Detail = Deferred, reason
 		x.add("deferred: %s", reason)
@@ -304,18 +323,112 @@ func (x *run) provisionAndUpdate() {
 		x.syncSingle()
 	}
 
-	if mismatch {
+	moveTo := x.misplaced()
+	if mismatch || moveTo != "" {
 		if x.opts.FixLayout {
-			// Defer the conversion to Run's serial phase, after all network work.
-			x.res.migrate = &pendingMigration{kind: kind}
-			x.add("layout mismatch — will convert to %s layout after sync",
-				layoutName(opp(kind)))
+			// Defer both to Run's serial phase, after all network work.
+			x.res.migrate = &pendingMigration{kind: kind, relayout: mismatch, moveTo: moveTo}
+			if moveTo != "" {
+				x.add("wrong location — will move to %s after sync", shorten(moveTo))
+			}
+			if mismatch {
+				x.add("layout mismatch — will convert to %s layout after sync",
+					layoutName(opp(kind)))
+			}
 		} else {
-			x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
-				layoutName(kind), x.r.Worktrees)
-			x.attention("layout mismatch — run: sync --fix-layout")
+			if moveTo != "" {
+				x.add("container is at %s but config says %s — run: sync --fix",
+					shorten(x.container), shorten(moveTo))
+			}
+			if mismatch {
+				x.add("on-disk layout is %s but config wants worktrees=%v — run: sync --fix-layout",
+					layoutName(kind), x.r.Worktrees)
+				x.attention("layout mismatch — run: sync --fix-layout")
+			}
 		}
 	}
+}
+
+// misplaced returns where this container belongs when that isn't where it is,
+// and "" otherwise (DESIGN §4.1). Only a declared repo can answer anything but
+// "": a discovered one is trusted where it sits (§3.2), and one whose scan was
+// ambiguous never reaches here — syncRepo refuses it before any of this.
+//
+// Unlike a layout mismatch this does not raise Attention, for the reason a
+// stale remote name doesn't either: it blocks nothing. The clone is reconciled
+// where it is, `cs` and prjpath are generated from where it is, and a finding
+// that outranks the repo's real ones would bury them (see ensureSecondRemote).
+func (x *run) misplaced() string {
+	if x.r.Dir != "" || len(x.r.FoundAt) != 1 || x.r.ID.Zero() {
+		return ""
+	}
+	want := x.r.ConfiguredContainer()
+	if sameDir(x.container, want) {
+		return ""
+	}
+	return want
+}
+
+// sameDir compares two container paths, resolving symlinks where it can: a root
+// reached through /var and the same root through /private/var are one place, and
+// concluding otherwise would propose moving a repo on top of itself.
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	return err1 == nil && err2 == nil && ra == rb
+}
+
+func shortenAll(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = shorten(p)
+	}
+	return out
+}
+
+// relocate moves the container to where config says it belongs, the third of
+// DESIGN §4.1's reconciliations, in the same serial phase as a conversion and
+// on the same terms: it runs only under --fix, only after the network work, and
+// never destroys anything to do it.
+//
+// A rename, not a copy: it moves the repository and every uncommitted, ignored,
+// untracked thing beside it in one operation that either happens or doesn't. It
+// refuses a destination that already exists rather than merging into it — that
+// is the two-clones problem, and it is not this run's to resolve — and a rename
+// that fails (another filesystem, most often) leaves everything exactly where
+// it was.
+func (x *run) relocate(to string) bool {
+	from := x.container
+	if _, err := os.Stat(to); err == nil {
+		x.attention("cannot move: destination exists")
+		x.add("%s already exists — two clones of this repo; move or remove one, then re-run", shorten(to))
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(to), 0o755); err != nil {
+		x.fail(err)
+		return false
+	}
+	if err := os.Rename(from, to); err != nil {
+		x.attention("move failed")
+		x.add("could not move %s → %s: %v (nothing was changed)", shorten(from), shorten(to), err)
+		return false
+	}
+	x.container = to
+	// A worktree's link to its bare parent, and the parent's back to it, are
+	// absolute: after a move they point at a directory that is no longer there.
+	if gitx.ClassifyLayout(to) == gitx.LayoutWorktree {
+		if err := gitx.WorktreeRepair(to); err != nil {
+			x.attention("moved, but worktree links need repair")
+			x.add("moved, but `git worktree repair` failed: %v", err)
+			return false
+		}
+	}
+	x.add("moved %s → %s", shorten(from), shorten(to))
+	x.updated("moved to its configured location")
+	return true
 }
 
 // adoptClonedBranch re-reads the important branch from a clone that did not

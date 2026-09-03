@@ -2,6 +2,8 @@ package gitx
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -417,5 +419,34 @@ func TagAtHead(dir string) string {
 // and git has no way to express "only if they said yes".
 func WorktreeRemove(container, path string) error {
 	_, err := run(container, "worktree", "remove", path)
+	return err
+}
+
+// WorktreeRepair re-links a bare+worktree container's worktrees after the whole
+// container has moved (DESIGN §4.1). Each worktree's `.git` file names its
+// parent by absolute path, and the parent records each worktree the same way, so
+// moving the container breaks both directions at once.
+//
+// The worktree paths have to be passed explicitly: `git worktree repair` with no
+// arguments only reestablishes the parent's *own* location in worktrees that
+// still point somewhere. Here every side moved at once, so the parent is told
+// where each worktree now is — anything holding a `.git` file directly under the
+// container, which is exactly the shape §4 provisions.
+func WorktreeRepair(container string) error {
+	ents, err := os.ReadDir(container)
+	if err != nil {
+		return err
+	}
+	args := []string{"worktree", "repair"}
+	for _, e := range ents {
+		if !e.IsDir() || e.Name() == ".bare" {
+			continue
+		}
+		p := filepath.Join(container, e.Name())
+		if _, err := os.Stat(filepath.Join(p, ".git")); err == nil {
+			args = append(args, p)
+		}
+	}
+	_, err = run(container, args...)
 	return err
 }

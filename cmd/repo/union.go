@@ -30,12 +30,33 @@ func unionRepos(reg *config.Registry) ([]model.Repo, error) {
 		seenID[r.ID.String()] = true
 		seenDir[filepath.Clean(r.Container())] = true
 	}
+	// Which declared repo a stray clone would belong to, by the identity its
+	// origin can carry: the definitive one, or the fork — fork-pr and
+	// supply-chain-mirror clone from the fork, so that is what discovery reads
+	// (DESIGN §3.6).
+	declaredBy := map[string]int{}
+	for i, r := range repos {
+		declaredBy[r.ID.String()] = i
+		if r.Fork != nil {
+			declaredBy[r.Fork.String()] = i
+		}
+	}
 	found, err := discover.Discover(resolveRoots(reg), reg)
 	if err != nil {
 		return nil, err
 	}
 	for _, f := range found {
 		if seenDir[filepath.Clean(f.Dir)] {
+			continue
+		}
+		if i, ok := declaredBy[f.ID.String()]; ok && !f.ID.Zero() {
+			// A declared repo's clone, somewhere other than where config puts
+			// it. Record the location so sync reconciles the clone that exists
+			// rather than cloning a second one (DESIGN §4.1); a second location
+			// makes it an ambiguity sync refuses instead.
+			if !gitx.IsRepo(repos[i].ConfiguredContainer()) {
+				repos[i].FoundAt = append(repos[i].FoundAt, f.Dir)
+			}
 			continue
 		}
 		if !f.ID.Zero() && seenID[f.ID.String()] {
